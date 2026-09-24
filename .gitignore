@@ -1,0 +1,29 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Tauri / frontend
+node_modules/
+dist/
+dist-ssr/
+.tauri/
+src-tauri/target/
+*.local
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs / env / secrets
+*.log
+.env
+.env.*
+!.env.example
+
+# Personal soul copies with private data
+/.softwake/
