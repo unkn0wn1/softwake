@@ -1,0 +1,29 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/softwake-daemon",
+    "crates/softwake-state",
+    "crates/softwake-audio",
+    "crates/softwake-wake",
+    "crates/softwake-session",
+    "crates/softwake-tools",
+    "crates/softwake-soul",
+    "crates/softwake-ipc",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+rust-version = "1.85"
+
+[workspace.dependencies]
+thiserror = "2"
+tracing = "0.1"
+softwake-state = { path = "crates/softwake-state" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }

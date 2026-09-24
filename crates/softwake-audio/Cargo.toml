@@ -1,0 +1,10 @@
+[package]
+name = "softwake-audio"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Audio capture boundary. No backend yet."
+
+[lints]
+workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "softwake-ipc"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Daemon and UI protocol vocabulary. No transport yet."
+
+[lints]
+workspace = true
