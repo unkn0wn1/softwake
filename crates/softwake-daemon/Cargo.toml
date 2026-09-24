@@ -22,6 +22,7 @@ softwake-soul.workspace = true
 softwake-state.workspace = true
 softwake-tools.workspace = true
 softwake-wake.workspace = true
+softwake-voice.workspace = true
 thiserror.workspace = true
 
 [lints]

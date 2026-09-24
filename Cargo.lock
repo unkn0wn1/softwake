@@ -2756,6 +2756,7 @@ dependencies = [
  "softwake-soul",
  "softwake-state",
  "softwake-tools",
+ "softwake-voice",
  "softwake-wake",
  "thiserror 2.0.19",
 ]
@@ -2805,6 +2806,13 @@ dependencies = [
  "softwake-ipc",
  "tauri",
  "tauri-build",
+]
+
+[[package]]
+name = "softwake-voice"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.19",
 ]
 
 [[package]]

@@ -99,4 +99,4 @@ The typed demo pushes 10 ms of silence through mock capture and then through `Nu
 - `PhraseHit` and the voice-state mapping do not change when `NullDetector` is replaced by a loaded `SherpaKwsDetector`.
 - The phrase table remains configuration. It will be rendered into sherpa-onnx's keyword list. It is not thrown away.
 - Default `cargo test --workspace` does not open a microphone, does not start `PipeWire`, does not download weights, and does not enable `sherpa-kws` or `pipewire-native`.
-- Packaging is unchanged. Streaming speech-to-text and text-to-speech are not started here.
+- Packaging is unchanged. Streaming speech-to-text and text-to-speech are [ADR 0007](ADR-0007-awake-stt-tts.md).

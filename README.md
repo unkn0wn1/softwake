@@ -6,7 +6,7 @@ Rust end-to-end (daemon + Tauri UI). Phase 1 nails reliable **wake / sleep / hib
 
 ## Status
 
-Cargo workspace on stable Rust (edition 2024). `softwake-state` implements sleep / awake / hibernate, including rejected transitions and phrase cooldowns. `softwake-audio` has a mock capture backend (`stop` ends frame delivery) and a trait-shaped PipeWire stub (default `pipewire` feature, no native library). `softwake-wake` scores configured phrases with a local text matcher ([ADR 0002](docs/ADR-0002-wake-engine-spike.md)). The production on-device wake engine is sherpa-onnx keyword spotting ([ADR 0006](docs/ADR-0006-on-device-wake.md)). Weights are not in the repo, and the demo stays typed. `softwake-soul` loads `soul.md` and `user.md`, checks them, and renders system instructions. `softwaked serve` speaks newline-delimited JSON on a Unix socket ([ADR 0003](docs/ADR-0003-ipc-transport.md)). `softwaked ctl` and the Tauri window `softwake-ui` are clients of that socket. Entering awake opens a text session with the rendered soul instructions. `echo` runs immediately while awake ([ADR 0004](docs/ADR-0004-first-safe-tool.md)). `notify` waits for confirmation and then appends a line to an in-memory sink. `shell` is denied ([ADR 0005](docs/ADR-0005-tool-confirmation.md)). A model client and further tools are later work. A missing soul pack refuses awake; `reload-soul` re-reads the files and applies on the next awake.
+Cargo workspace on stable Rust (edition 2024). `softwake-state` implements sleep / awake / hibernate, including rejected transitions and phrase cooldowns. `softwake-audio` has a mock capture backend (`stop` ends frame delivery) and a trait-shaped PipeWire stub (default `pipewire` feature, no native library). `softwake-wake` scores configured phrases with a local text matcher ([ADR 0002](docs/ADR-0002-wake-engine-spike.md)). The production on-device wake engine is sherpa-onnx keyword spotting ([ADR 0006](docs/ADR-0006-on-device-wake.md)). While awake, STT/TTS use a local streaming boundary ([ADR 0007](docs/ADR-0007-awake-stt-tts.md)): mock inject/record by default, sherpa stubs behind features. Weights are not in the repo, and the demo stays typed. `softwake-soul` loads `soul.md` and `user.md`, checks them, and renders system instructions. `softwaked serve` speaks newline-delimited JSON on a Unix socket ([ADR 0003](docs/ADR-0003-ipc-transport.md)). `softwaked ctl` and the Tauri window `softwake-ui` are clients of that socket. Entering awake opens a text session with the rendered soul instructions. `echo` runs immediately while awake ([ADR 0004](docs/ADR-0004-first-safe-tool.md)). `notify` waits for confirmation and then appends a line to an in-memory sink. `shell` is denied ([ADR 0005](docs/ADR-0005-tool-confirmation.md)). A model client and further tools are later work. A missing soul pack refuses awake; `reload-soul` re-reads the files and applies on the next awake.
 
 ## Build and test
 
@@ -26,12 +26,15 @@ See [Cargo features](#cargo-features) for `pipewire`, `pipewire-native`, and `sh
 | `softwake-audio` | `pipewire` | yes | Capture stub. Does not link `libpipewire`. |
 | `softwake-audio` | `pipewire-native` | no | Same stub. The stream stays unwired. Not enabled in CI. |
 | `softwake-wake` | `sherpa-kws` | no | PCM detector stub. No weights and no ONNX download. Not enabled in CI. |
+| `softwake-voice` | `sherpa-asr` | no | Streaming ASR stub. No weights and no ONNX download. Not enabled in CI. |
+| `softwake-voice` | `sherpa-tts` | no | TTS stub. No weights and no synthesizer download. Not enabled in CI. |
 
 `--no-default-features` on `softwake-audio` omits the `pipewire` stub. The sherpa-onnx keyword-spotting choice is [ADR 0006](docs/ADR-0006-on-device-wake.md).
 
 ```bash
 cargo test -p softwake-audio --features pipewire-native
 cargo test -p softwake-wake --features sherpa-kws
+cargo test -p softwake-voice --features sherpa-asr,sherpa-tts
 ```
 
 A later native PipeWire stream will also need `libpipewire-0.3-dev`. This build does not link that library.
@@ -86,7 +89,7 @@ typed commands only — mock capture; native PipeWire is feature-gated
 state: sleep
 capture: running
 soul: ok
-commands: wake, sleep, hibernate, resume, status, reload-soul, tool, confirm, cancel, quit
+commands: wake, sleep, hibernate, resume, status, reload-soul, tool, confirm, cancel, hear, say, quit
 >
 ```
 
@@ -132,6 +135,25 @@ last tool: echo safe ran
 ```
 
 `sleep` in the 800 ms after `wake` stays awake, so a fast paste of `wake` then `sleep` will not leave awake. `hibernate` from awake does not use that cooldown. It closes the session and stops capture. `tool volume` is rejected. `tool shell` is denied. `tool` while asleep or hibernating is rejected.
+
+While awake, inject a mock STT transcript or record mock TTS (no microphone, no model download — [ADR 0007](docs/ADR-0007-awake-stt-tts.md)):
+
+```text
+> hear hello there
+partial transcript: "hello there"
+final transcript: "hello there"
+state: awake
+capture: running
+soul: ok
+> say hello
+said: "hello"
+state: awake
+capture: running
+soul: ok
+last said: hello
+```
+
+`hear` and `say` are refused while asleep or hibernating. Sleep and hibernate drop any queued mock STT and do not speak.
 
 Confirm a notification, or cancel one:
 
