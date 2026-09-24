@@ -8,7 +8,7 @@ use std::path::Path;
 use softwake_ipc::{CallError, Client, Command, Status};
 
 /// Subcommand of `softwaked ctl`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CtlAction {
     /// `ctl status`
     Status,
@@ -20,6 +20,13 @@ pub(crate) enum CtlAction {
     Sleep,
     /// `ctl reload-soul`
     ReloadSoul,
+    /// `ctl tool <name> [args...]`
+    Tool {
+        /// Tool name. The phase-1 allowlist accepts `echo`.
+        name: String,
+        /// Arguments forwarded to the tool.
+        args: Vec<String>,
+    },
 }
 
 impl CtlAction {
@@ -35,18 +42,6 @@ impl CtlAction {
             _ => None,
         }
     }
-
-    /// Protocol command for this subcommand.
-    #[must_use]
-    pub(crate) const fn command(self) -> Command {
-        match self {
-            Self::Status => Command::GetStatus,
-            Self::Hibernate => Command::Hibernate,
-            Self::Resume => Command::WakeFromUi,
-            Self::Sleep => Command::Sleep,
-            Self::ReloadSoul => Command::ReloadSoul,
-        }
-    }
 }
 
 /// Connect, apply `action`, and return the text `ctl` prints.
@@ -54,8 +49,16 @@ impl CtlAction {
 /// # Errors
 ///
 /// Returns [`CallError`] when the daemon cannot be reached or rejects the command.
-pub(crate) fn run(path: &Path, action: CtlAction) -> Result<String, CallError> {
-    Ok(format_status(&call(path, action.command())?))
+pub(crate) fn run(path: &Path, action: &CtlAction) -> Result<String, CallError> {
+    let status = match action {
+        CtlAction::Status => call(path, Command::GetStatus)?,
+        CtlAction::Hibernate => call(path, Command::Hibernate)?,
+        CtlAction::Resume => call(path, Command::WakeFromUi)?,
+        CtlAction::Sleep => call(path, Command::Sleep)?,
+        CtlAction::ReloadSoul => call(path, Command::ReloadSoul)?,
+        CtlAction::Tool { name, args } => call_tool(path, name, args)?,
+    };
+    Ok(format_status(&status))
 }
 
 /// Connect and apply one protocol command.
@@ -66,6 +69,16 @@ pub(crate) fn run(path: &Path, action: CtlAction) -> Result<String, CallError> {
 pub(crate) fn call(path: &Path, command: Command) -> Result<Status, CallError> {
     let mut client = Client::connect(path)?;
     client.call(command)
+}
+
+/// Connect and run one tool.
+///
+/// # Errors
+///
+/// Returns [`CallError`] when the daemon cannot be reached or refuses the tool.
+pub(crate) fn call_tool(path: &Path, name: &str, args: &[String]) -> Result<Status, CallError> {
+    let mut client = Client::connect(path)?;
+    client.call_tool(name, args)
 }
 
 /// Human-readable status. The string ends with a newline.

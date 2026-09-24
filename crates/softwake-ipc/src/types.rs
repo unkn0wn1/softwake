@@ -199,6 +199,26 @@ pub enum IpcError {
         /// What the receiver objected to.
         message: String,
     },
+
+    /// A tool call arrived while the daemon was not awake.
+    ///
+    /// Produced only in reply to [`ClientMessage::ToolRequest`].
+    #[error("cannot run {name} while {state}")]
+    ToolForbidden {
+        /// Tool the client named.
+        name: String,
+        /// Voice state that refused the call.
+        state: VoiceState,
+    },
+
+    /// The tool name is not on the phase-1 allowlist.
+    ///
+    /// Produced only in reply to [`ClientMessage::ToolRequest`].
+    #[error("unknown tool: {name}")]
+    UnknownTool {
+        /// Name that was rejected.
+        name: String,
+    },
 }
 
 impl IpcError {
@@ -347,6 +367,20 @@ pub enum ClientMessage {
         id: u64,
         /// Command to apply.
         command: Command,
+    },
+    /// Run one allowlisted tool. `id` is copied onto the response.
+    ///
+    /// The daemon runs the tool only while awake. `args` may be omitted; it
+    /// is then an empty list. This variant is additive: a client that never
+    /// sends it still speaks protocol generation 1.
+    ToolRequest {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+        /// Tool name. Phase 1 allows `echo` only.
+        name: String,
+        /// Arguments passed through to the tool. They are not interpreted.
+        #[serde(default)]
+        args: Vec<String>,
     },
 }
 
@@ -505,6 +539,52 @@ mod tests {
             error: IpcError::io("read failed"),
         });
         assert_round_trip(&IpcError::protocol("expected hello"));
+        assert_round_trip(&IpcError::ToolForbidden {
+            name: "echo".to_owned(),
+            state: VoiceState::Sleep,
+        });
+        assert_round_trip(&IpcError::UnknownTool {
+            name: "volume".to_owned(),
+        });
+        assert_eq!(
+            IpcError::ToolForbidden {
+                name: "echo".to_owned(),
+                state: VoiceState::Hibernate,
+            }
+            .to_string(),
+            "cannot run echo while hibernate"
+        );
+        assert_eq!(
+            IpcError::UnknownTool {
+                name: "volume".to_owned(),
+            }
+            .to_string(),
+            "unknown tool: volume"
+        );
+    }
+
+    #[test]
+    fn tool_request_round_trips_and_defaults_omitted_args() {
+        let with_args = ClientMessage::ToolRequest {
+            id: 9,
+            name: "echo".to_owned(),
+            args: vec!["hello".to_owned(), "world".to_owned()],
+        };
+        assert_round_trip(&with_args);
+        let json = serde_json::to_string(&with_args).expect("encode");
+        assert!(json.contains("\"type\":\"tool_request\""));
+
+        let omitted: ClientMessage =
+            serde_json::from_str(r#"{"type":"tool_request","id":4,"name":"echo"}"#)
+                .expect("omitted args");
+        assert_eq!(
+            omitted,
+            ClientMessage::ToolRequest {
+                id: 4,
+                name: "echo".to_owned(),
+                args: Vec::new(),
+            }
+        );
     }
 
     #[test]

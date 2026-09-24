@@ -460,7 +460,7 @@ impl ServerConnection {
                     message,
                 })
             }
-            ClientMessage::Request { .. } => {
+            ClientMessage::Request { .. } | ClientMessage::ToolRequest { .. } => {
                 let message = "expected a hello message".to_owned();
                 endpoint.write(&ServerMessage::HelloRejected {
                     protocol_version: PROTOCOL_VERSION,
@@ -624,9 +624,38 @@ impl Client {
     /// Returns [`CallError`] on transport failure, a mismatched response id,
     /// or a rejected command.
     pub fn call(&mut self, command: Command) -> Result<Status, CallError> {
+        let id = self.allocate_id();
+        self.round_trip(&ClientMessage::Request { id, command }, id)
+    }
+
+    /// Send one tool request and return its status.
+    ///
+    /// Events that arrive before the matching response are skipped. A refusal
+    /// is [`CallError::Rejected`]. The daemon runs the tool only while awake.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] on transport failure, a mismatched response id,
+    /// or a rejected tool call.
+    pub fn call_tool(&mut self, name: &str, args: &[String]) -> Result<Status, CallError> {
+        let id = self.allocate_id();
+        self.round_trip(
+            &ClientMessage::ToolRequest {
+                id,
+                name: name.to_owned(),
+                args: args.to_vec(),
+            },
+            id,
+        )
+    }
+
+    fn allocate_id(&mut self) -> u64 {
         self.next_id = self.next_id.wrapping_add(1);
-        let id = self.next_id;
-        write_message(&mut self.writer, &ClientMessage::Request { id, command })?;
+        self.next_id
+    }
+
+    fn round_trip(&mut self, message: &ClientMessage, id: u64) -> Result<Status, CallError> {
+        write_message(&mut self.writer, message)?;
         for _ in 0..MAX_MESSAGES_PER_CALL {
             match read_message::<ServerMessage, _>(&mut self.reader)? {
                 ServerMessage::Response {

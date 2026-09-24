@@ -12,9 +12,10 @@ use crate::{SoulError, SoulFile, SoulPaths};
 /// paste before it is decoded.
 pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
 
+// The allowlist name matches the phase-1 tool (`echo`). See ADR 0004.
 const POLICY: &str = "\
 State: awake.
-Tool allowlist: placeholder (no tools are wired yet).
+Tool allowlist: echo.
 Confirm rules: placeholder (confirmation is not wired yet).
 ";
 
@@ -44,8 +45,8 @@ impl SoulPack {
     ///
     /// - Identity (`soul.md`)
     /// - User profile (`user.md`)
-    /// - Runtime policy stub: state is awake, with placeholders for the tool
-    ///   allowlist and confirm rules
+    /// - Runtime policy stub: state is awake, the tool allowlist is `echo`,
+    ///   and confirm rules are still a placeholder
     #[must_use]
     pub fn render_instructions(&self) -> String {
         format!(
@@ -217,7 +218,7 @@ mod tests {
         assert_eq!(pack.user_profile(), "Name: Ada.\n");
         assert_eq!(
             pack.render_instructions(),
-            "# Identity\n\nI am Softwake.\n\n# User profile\n\nName: Ada.\n\n# Runtime policy\n\nState: awake.\nTool allowlist: placeholder (no tools are wired yet).\nConfirm rules: placeholder (confirmation is not wired yet).\n"
+            "# Identity\n\nI am Softwake.\n\n# User profile\n\nName: Ada.\n\n# Runtime policy\n\nState: awake.\nTool allowlist: echo.\nConfirm rules: placeholder (confirmation is not wired yet).\n"
         );
         let status = SoulStatus::from_result(&Ok(pack));
         assert!(status.is_valid());

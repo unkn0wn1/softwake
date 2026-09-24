@@ -24,6 +24,8 @@ A client read waits at most 5 seconds for a frame. Serve accepts more than one c
 
 Status gained an optional `soul` object (`ok`, and `reason` when the pack is not valid) with `serde` default. Omitted on older peers, ignored by older clients. That did not change the meaning of existing fields, so the protocol generation stays `1`. The hello handshake is unchanged. This replaces the earlier note that `reload_soul` only recorded a request and did not parse the pack.
 
+Clients may also send `tool_request` (`id`, `name`, and `args`). `args` defaults to an empty list when it is omitted. The daemon runs the tool only while awake and only when the name is allowlisted, then broadcasts `tool_started` and `tool_finished` before the response. A refusal is a `response` with `status: err` and either `kind: tool_forbidden` or `kind: unknown_tool`. Those error kinds are produced only for `tool_request`. Existing messages are unchanged, so the protocol generation stays `1`. See [ADR 0004](ADR-0004-first-safe-tool.md).
+
 Lines longer than 1 MiB, including the newline, are rejected.
 
 ## Context

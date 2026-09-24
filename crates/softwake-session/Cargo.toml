@@ -4,7 +4,10 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 rust-version.workspace = true
-description = "Acting-session boundary. No model client yet."
+description = "Text-only acting session. No model client."
+
+[dependencies]
+thiserror.workspace = true
 
 [lints]
 workspace = true

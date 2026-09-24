@@ -4,7 +4,10 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 rust-version.workspace = true
-description = "Tool allowlist boundary. No runners yet."
+description = "Phase-1 tool allowlist. The only runner is echo."
+
+[dependencies]
+thiserror.workspace = true
 
 [lints]
 workspace = true
