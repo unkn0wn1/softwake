@@ -22,6 +22,8 @@ use softwake_ipc::{
     resolve_socket_path,
 };
 
+use softwake_soul::SoulDir;
+
 use crate::runtime::{Outcome, Runtime};
 
 const OUTBOUND_CAPACITY: usize = 32;
@@ -48,9 +50,9 @@ pub(crate) enum ServeError {
 ///
 /// Returns [`ServeError`] when the socket is unavailable or the accept thread
 /// panics. A peer that still holds the socket produces [`SocketError::InUse`].
-pub(crate) fn run(socket: Option<&Path>) -> Result<(), ServeError> {
+pub(crate) fn run(socket: Option<&Path>, soul_dir: SoulDir) -> Result<(), ServeError> {
     let path = resolve_socket_path(socket)?;
-    let handle = spawn(path.clone())?;
+    let handle = spawn(path.clone(), soul_dir)?;
     println!("softwaked serve");
     println!("listening: {}", path.display());
     println!("protocol: {PROTOCOL_VERSION}");
@@ -62,7 +64,7 @@ pub(crate) fn run(socket: Option<&Path>) -> Result<(), ServeError> {
 /// # Errors
 ///
 /// Returns [`ServeError`] when the socket cannot be bound.
-pub(crate) fn spawn(path: PathBuf) -> Result<ServeHandle, ServeError> {
+pub(crate) fn spawn(path: PathBuf, soul_dir: SoulDir) -> Result<ServeHandle, ServeError> {
     let listener = Listener::bind(&path)?;
     if listener.replaced_stale() {
         eprintln!("softwaked: removed stale socket {}", path.display());
@@ -71,7 +73,7 @@ pub(crate) fn spawn(path: PathBuf) -> Result<ServeHandle, ServeError> {
     let flag = Arc::clone(&shutdown);
     let join = thread::Builder::new()
         .name("softwake-accept".to_owned())
-        .spawn(move || accept_loop(&listener, &flag))
+        .spawn(move || accept_loop(&listener, &flag, soul_dir))
         .map_err(ServeError::Spawn)?;
     Ok(ServeHandle {
         shutdown,
@@ -118,8 +120,12 @@ impl Drop for ServeHandle {
     }
 }
 
-fn accept_loop(listener: &Listener, shutdown: &AtomicBool) -> Result<(), ServeError> {
-    let shared = Arc::new(Shared::new());
+fn accept_loop(
+    listener: &Listener,
+    shutdown: &AtomicBool,
+    soul_dir: SoulDir,
+) -> Result<(), ServeError> {
+    let shared = Arc::new(Shared::new(soul_dir));
     let result = loop {
         if shutdown.load(Ordering::SeqCst) {
             break Ok(());
@@ -166,9 +172,9 @@ enum Outbound {
 }
 
 impl Shared {
-    fn new() -> Self {
+    fn new(soul_dir: SoulDir) -> Self {
         Self {
-            runtime: Mutex::new(Runtime::new()),
+            runtime: Mutex::new(Runtime::new(soul_dir)),
             subscribers: Mutex::new(Vec::new()),
             clients: Mutex::new(Vec::new()),
             next_subscriber: AtomicU64::new(1),

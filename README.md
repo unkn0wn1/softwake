@@ -6,7 +6,7 @@ Rust end-to-end (daemon + Tauri UI). Phase 1 nails reliable **wake / sleep / hib
 
 ## Status
 
-Cargo workspace on stable Rust (edition 2024). `softwake-state` implements sleep / awake / hibernate, including rejected transitions and phrase cooldowns. `softwake-audio` has a mock capture backend (`stop` ends frame delivery) and a trait-shaped PipeWire stub (default `pipewire` feature, no native library). `softwake-wake` scores configured phrases with a local text matcher ([ADR 0002](docs/ADR-0002-wake-engine-spike.md)). `softwaked serve` speaks newline-delimited JSON on a Unix socket ([ADR 0003](docs/ADR-0003-ipc-transport.md)). `softwaked ctl` and the Tauri window `softwake-ui` are clients of that socket. Session, tools, and soul loading are still boundaries: `reload-soul` records a request and does not parse the soul pack yet.
+Cargo workspace on stable Rust (edition 2024). `softwake-state` implements sleep / awake / hibernate, including rejected transitions and phrase cooldowns. `softwake-audio` has a mock capture backend (`stop` ends frame delivery) and a trait-shaped PipeWire stub (default `pipewire` feature, no native library). `softwake-wake` scores configured phrases with a local text matcher ([ADR 0002](docs/ADR-0002-wake-engine-spike.md)). `softwake-soul` loads `soul.md` and `user.md`, checks them, and renders system instructions. `softwaked serve` speaks newline-delimited JSON on a Unix socket ([ADR 0003](docs/ADR-0003-ipc-transport.md)). `softwaked ctl` and the Tauri window `softwake-ui` are clients of that socket. Session streaming and tool runners are still later work. A missing soul pack refuses awake; `reload-soul` re-reads the files and applies on the next awake.
 
 ## Build and test
 
@@ -31,9 +31,11 @@ cargo run -p softwake-daemon
 softwaked state: sleep
 ```
 
-The interactive demo is typed commands only. The microphone is not open, and PipeWire is not wired yet. It starts in sleep with mock capture running. `wake` and `sleep` submit the configured phrases to the text detector, then apply the voice-state machine, including the 800 ms phrase cooldown. `hibernate` stops capture. A voice command is rejected until `resume`, which returns to sleep and starts capture again.
+The interactive demo is typed commands only. The microphone is not open, and PipeWire is not wired yet. It starts in sleep with mock capture running. `wake` and `sleep` submit the configured phrases to the text detector, then apply the voice-state machine, including the 800 ms phrase cooldown. `hibernate` stops capture. A voice command is rejected until `resume`, which returns to sleep and starts capture again. `wake` also requires a valid soul pack. Copy the repo templates into the config directory first (or pass `--soul-dir`):
 
 ```bash
+mkdir -p ~/.config/softwake/soul
+cp soul/soul.md soul/user.md ~/.config/softwake/soul/
 cargo run -p softwake-daemon -- demo
 ```
 
@@ -42,9 +44,12 @@ softwaked demo
 typed commands only — mic / PipeWire not wired yet
 state: sleep
 capture: running
-commands: wake, sleep, hibernate, resume, status, quit
+soul: ok
+commands: wake, sleep, hibernate, resume, status, reload-soul, quit
 >
 ```
+
+Without those files the status line is `soul: missing` and `wake` stays in sleep. `hibernate`, `resume`, and `sleep` still run. `reload-soul` reads the directory again.
 
 A `> ` prompt is printed before each line is read. The same path accepts a pipe (`printf 'wake\nstatus\nquit\n' | cargo run -p softwake-daemon -- demo`). `softwaked --demo` is the same mode.
 
@@ -71,13 +76,15 @@ cargo run -p softwake-daemon -- ctl sleep     # rejected while already asleep
 cargo run -p softwake-daemon -- ctl reload-soul
 ```
 
-`ctl` prints `state`, `capture`, and `soul reload`, and exits non-zero when the daemon rejects the command or cannot be reached. `resume` is wake-from-hibernate and lands in sleep. `reload-soul` records that a reload should apply on the next awake session.
+`ctl` prints `state`, `capture`, `soul` (`ok` or `missing`), and `soul reload`, and exits non-zero when the daemon rejects the command or cannot be reached. `resume` is wake-from-hibernate and lands in sleep. `reload-soul` re-reads the soul pack from disk. The new text applies on the next awake session, not in the middle of one that is already awake.
 
 The socket path is the first match of `--socket PATH`, `SOFTWAKE_SOCKET`, `$XDG_RUNTIME_DIR/softwake/softwaked.sock`, and `/tmp/softwake-$UID/softwaked.sock` when `XDG_RUNTIME_DIR` is unset.
 
+The soul directory is the first match of `--soul-dir PATH` (on `serve` and `demo`), `SOFTWAKE_SOUL_DIR`, `$XDG_CONFIG_HOME/softwake/soul`, and `~/.config/softwake/soul` when `XDG_CONFIG_HOME` is unset. See [docs/03-soul-pack.md](docs/03-soul-pack.md).
+
 ## Window
 
-`softwake-ui` is a small Tauri window: the current state, and buttons for Hibernate, Wake (leave hibernate into sleep), Sleep, and Reload soul. It only talks to the socket. Start `softwaked serve` first.
+`softwake-ui` is a small Tauri window: the current state, whether the soul pack is `ok` or `missing`, and buttons for Hibernate, Wake (leave hibernate into sleep), Sleep, and Reload soul. It only talks to the socket. Start `softwaked serve` first.
 
 ```bash
 cargo run -p softwake-ui

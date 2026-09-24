@@ -8,8 +8,8 @@
 2. [x] `softwake-state` with tested transitions
 3. [x] `softwake-audio` mock + PipeWire capture behind the trait (native I/O is still a stub)
 4. [x] `softwake-wake` spike: local wake + sleep phrases ([ADR 0002](ADR-0002-wake-engine-spike.md))
-5. [x] Daemon IPC + minimal Tauri UI: show state, hibernate, wake-from-hibernate, sleep, reload soul (the reload records a request and does not parse the soul pack yet)
-6. [ ] `softwake-soul` loads `soul.md` + `user.md`
+5. [x] Daemon IPC + minimal Tauri UI: show state, hibernate, wake-from-hibernate, sleep, reload soul
+6. [x] `softwake-soul` loads `soul.md` + `user.md` (missing or invalid pack refuses awake; `reload_soul` re-reads disk and applies on the next awake)
 7. [ ] Awake session stub (even text-only first) + **one** safe tool
 8. [ ] Manual gate checklist in [05-quality-gates.md](05-quality-gates.md)
 

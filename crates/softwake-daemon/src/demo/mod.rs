@@ -9,16 +9,22 @@
 //! The clock is the `elapsed` argument of [`Demo::handle_line`]. Callers pass
 //! wall time; tests pass exact durations. Nothing in here sleeps. Verbose
 //! mode adds `verbose:` detail beside the same user-facing lines.
+//!
+//! A wake phrase is refused when the loaded soul pack is missing or invalid.
+//! `reload-soul` reads the directory again; the new text applies on the next awake.
 
 use std::time::Duration;
 
 use softwake_audio::{AudioCapture, MockAudioCapture};
+use softwake_soul::SoulDir;
 #[cfg(test)]
 use softwake_state::VoiceState;
 use softwake_state::{CooldownConfig, Effect, Event, Machine};
 use softwake_wake::{PhraseHit, PhraseTable, TextWakeDetector};
 
-const COMMANDS: &str = "commands: wake, sleep, hibernate, resume, status, quit";
+use crate::soul::LoadedSoul;
+
+const COMMANDS: &str = "commands: wake, sleep, hibernate, resume, status, reload-soul, quit";
 const TYPED_ONLY: &str = "typed commands only — mic / PipeWire not wired yet";
 
 /// One step of the demo loop.
@@ -46,6 +52,7 @@ enum Parsed {
     Hibernate,
     Resume,
     Status,
+    ReloadSoul,
     Quit,
     Unknown,
 }
@@ -81,6 +88,7 @@ impl Parsed {
             Self::Hibernate => "hibernate",
             Self::Resume => "resume",
             Self::Status => "status",
+            Self::ReloadSoul => "reload-soul",
             Self::Quit => "quit",
             Self::Unknown => "unknown",
         }
@@ -93,6 +101,7 @@ pub(crate) struct Demo {
     machine: Machine,
     capture: MockAudioCapture,
     detector: TextWakeDetector,
+    soul: LoadedSoul,
     verbose: bool,
 }
 
@@ -100,7 +109,7 @@ impl Demo {
     /// Start in sleep and start mock capture.
     ///
     /// User-facing lines stay short. [`Self::with_verbose`] adds processing detail.
-    pub(crate) fn new(table: PhraseTable, cooldown: CooldownConfig) -> Self {
+    pub(crate) fn new(table: PhraseTable, cooldown: CooldownConfig, soul_dir: SoulDir) -> Self {
         let mut capture = MockAudioCapture::default();
         // The mock device cannot fail to open.
         let Ok(()) = capture.start();
@@ -108,6 +117,7 @@ impl Demo {
             machine: Machine::new(cooldown),
             capture,
             detector: TextWakeDetector::new(table),
+            soul: LoadedSoul::open(soul_dir),
             verbose: false,
         }
     }
@@ -142,6 +152,7 @@ impl Demo {
             Parsed::Hibernate => self.ui(Event::UiHibernate),
             Parsed::Resume => self.ui(Event::UiResume),
             Parsed::Status => self.status_lines(),
+            Parsed::ReloadSoul => self.reload(),
             Parsed::Quit => vec!["quit".to_owned()],
             Parsed::Unknown => vec![
                 format!("unknown command: {}", line.trim()),
@@ -175,6 +186,11 @@ impl Demo {
     #[cfg(test)]
     fn permits_tools(&self) -> bool {
         self.machine.permit_tool_dispatch().is_ok()
+    }
+
+    #[cfg(test)]
+    fn applied_instructions(&self) -> Option<&str> {
+        self.soul.applied_instructions()
     }
 
     fn voice(&mut self, command: VoiceCommand) -> Vec<String> {
@@ -254,9 +270,26 @@ impl Demo {
         lines
     }
 
+    fn reload(&mut self) -> Vec<String> {
+        self.soul.reload();
+        self.with_status(vec![self.soul.reload_summary()])
+    }
+
     fn transition(&mut self, event: Event) -> Vec<String> {
+        if event == Event::WakePhrase {
+            if let Some(reason) = self.soul.refusal() {
+                let rejected = format!("rejected: {reason}");
+                let mut lines = Vec::new();
+                self.push_verbose(&mut lines, &rejected);
+                lines.push(rejected);
+                return lines;
+            }
+        }
         match self.machine.apply(event) {
             Ok(applied) => {
+                if event == Event::WakePhrase {
+                    self.soul.commit_awake();
+                }
                 let summary = format!("{} -> {} ({})", applied.from, applied.to, applied.event);
                 let mut lines = Vec::new();
                 self.push_verbose(&mut lines, format!("transition: ok {summary}"));
@@ -303,9 +336,15 @@ impl Demo {
         } else {
             "stopped"
         };
+        let soul = if self.soul.is_valid() {
+            "ok"
+        } else {
+            "missing"
+        };
         vec![
             format!("state: {}", self.machine.state()),
             format!("capture: {capture}"),
+            format!("soul: {soul}"),
         ]
     }
 
@@ -323,6 +362,7 @@ fn parse_line(line: &str) -> Parsed {
         "hibernate" => Parsed::Hibernate,
         "resume" => Parsed::Resume,
         "status" => Parsed::Status,
+        "reload-soul" => Parsed::ReloadSoul,
         "quit" => Parsed::Quit,
         _ => Parsed::Unknown,
     }

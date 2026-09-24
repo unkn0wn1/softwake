@@ -822,6 +822,7 @@ mod tests {
                         state: VoiceState::Sleep,
                         capture_running: true,
                         soul_reload_pending: false,
+                        soul: None,
                         message: None,
                         detail: None,
                     }),

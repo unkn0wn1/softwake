@@ -202,6 +202,7 @@ mod tests {
                     state: VoiceState::Hibernate,
                     capture_running: false,
                     soul_reload_pending: false,
+                    soul: None,
                     message: None,
                     detail: Some("has\na newline".to_owned()),
                 }),

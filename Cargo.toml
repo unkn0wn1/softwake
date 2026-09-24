@@ -25,6 +25,7 @@ thiserror = "2"
 tracing = "0.1"
 softwake-audio = { path = "crates/softwake-audio" }
 softwake-ipc = { path = "crates/softwake-ipc" }
+softwake-soul = { path = "crates/softwake-soul" }
 softwake-state = { path = "crates/softwake-state" }
 softwake-wake = { path = "crates/softwake-wake" }
 

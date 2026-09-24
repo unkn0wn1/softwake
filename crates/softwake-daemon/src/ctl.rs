@@ -81,8 +81,16 @@ pub(crate) fn format_status(status: &Status) -> String {
     } else {
         "not pending"
     };
+    let soul = match &status.soul {
+        Some(report) if report.ok => "ok".to_owned(),
+        Some(report) => match &report.reason {
+            Some(reason) => format!("missing — {reason}"),
+            None => "missing".to_owned(),
+        },
+        None => "unknown".to_owned(),
+    };
     let mut text = format!(
-        "state: {}\ncapture: {capture}\nsoul reload: {reload}\n",
+        "state: {}\ncapture: {capture}\nsoul: {soul}\nsoul reload: {reload}\n",
         status.state
     );
     if let Some(message) = &status.message {

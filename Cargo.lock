@@ -2752,6 +2752,7 @@ version = "0.1.0"
 dependencies = [
  "softwake-audio",
  "softwake-ipc",
+ "softwake-soul",
  "softwake-state",
  "softwake-wake",
  "thiserror 2.0.19",
@@ -2773,6 +2774,9 @@ version = "0.1.0"
 [[package]]
 name = "softwake-soul"
 version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.19",
+]
 
 [[package]]
 name = "softwake-state"
