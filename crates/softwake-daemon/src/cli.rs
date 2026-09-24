@@ -170,7 +170,11 @@ Usage:
   softwaked ctl sleep       sleep from awake
   softwaked ctl reload-soul re-read the soul pack; it applies on the next awake
   softwaked ctl tool NAME [ARG...]
-                            run one allowlisted tool (awake only)
+                            run one tool while awake, or stage a confirm-gated tool
+  softwaked ctl confirm-tool ID
+                            run the pending confirm-gated tool
+  softwaked ctl cancel-tool ID
+                            drop the pending confirmation without running it
   softwaked --help          print this help
 
 The demo reads typed commands only and prints "> " before each line.
@@ -178,11 +182,13 @@ Mic and PipeWire are not wired yet.
 SOFTWAKE_LOG=debug enables the same detail as --verbose and -v.
 
 Demo commands, one per line:
-  wake, sleep, hibernate, resume, status, reload-soul, tool, quit
+  wake, sleep, hibernate, resume, status, reload-soul, tool, confirm, cancel, quit
 
 `tool echo` returns pong. `tool echo hello` returns "echo: hello".
-Other tool names are rejected. Sleep and hibernate reject every tool.
-The tool runs only while awake.
+`tool notify hello` waits until `confirm` (or `confirm-tool ID`).
+`cancel` drops that pending call. `tool shell` is denied.
+Other tool names are rejected. Sleep and hibernate reject every tool
+and drop a pending confirmation. Safe tools run only while awake.
 
 A wake phrase enters awake only when soul.md and user.md are present,
 non-empty, and valid UTF-8. Hibernate, sleep, and resume still run when
@@ -211,9 +217,12 @@ reload-soul re-reads the soul pack from disk. The daemon keeps the pack it
 already applied until the next awake session. Status reports whether that
 read is ok or missing.
 
-`ctl tool` asks the running daemon to run one tool. Phase 1 allows `echo`
-only, and only while the daemon is awake. The result is printed after the
-status lines. A refusal names the reason."#
+`ctl tool` asks the running daemon to run one tool while it is awake.
+`echo` runs immediately. `notify` returns a pending id and does not run
+until `ctl confirm-tool ID`. `ctl cancel-tool ID` drops it. `shell` is
+denied. The result is printed after the status lines. A refusal names
+the reason. Serve does not yet enter awake from the microphone; the
+typed demo is the path that does."#
 }
 
 fn print_help() {
@@ -315,13 +324,26 @@ fn parse_ctl(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
 fn ctl_command(positional: &[String]) -> Result<CtlAction, String> {
     match positional {
         [] => Err(
-            "ctl needs a command: status, hibernate, resume, sleep, reload-soul, tool".to_owned(),
+            "ctl needs a command: status, hibernate, resume, sleep, reload-soul, tool, confirm-tool, cancel-tool"
+                .to_owned(),
         ),
         [name] if name == "tool" => Err("ctl tool needs a tool name".to_owned()),
+        [name] if name == "confirm-tool" || name == "cancel-tool" => {
+            Err(format!("ctl {name} needs a pending id"))
+        }
         [name, tool_name, tool_args @ ..] if name == "tool" => Ok(CtlAction::Tool {
             name: tool_name.to_ascii_lowercase(),
             args: tool_args.to_vec(),
         }),
+        [name, pending_id] if name == "confirm-tool" => Ok(CtlAction::ConfirmTool {
+            pending_id: pending_id.clone(),
+        }),
+        [name, pending_id] if name == "cancel-tool" => Ok(CtlAction::CancelTool {
+            pending_id: pending_id.clone(),
+        }),
+        [name, _, extra, ..] if name == "confirm-tool" || name == "cancel-tool" => {
+            Err(format!("ctl {name} takes one pending id (got extra {extra})"))
+        }
         [name] => CtlAction::parse(name).ok_or_else(|| format!("unknown ctl argument {name}")),
         [first, second, ..] => {
             if CtlAction::parse(first).is_none() {
@@ -471,6 +493,9 @@ mod tests {
         assert!(help.contains("ctl tool"));
         assert!(help.contains("tool echo"));
         assert!(help.contains("pong"));
+        assert!(help.contains("confirm-tool"));
+        assert!(help.contains("cancel-tool"));
+        assert!(help.contains("notify"));
     }
 
     #[test]
@@ -560,6 +585,32 @@ mod tests {
         assert!(parse_args(["ctl".to_owned(), "status".to_owned(), "sleep".to_owned()]).is_err());
         assert!(parse_args(["ctl".to_owned(), "wake".to_owned()]).is_err());
         assert!(parse_args(["ctl".to_owned(), "tool".to_owned()]).is_err());
+        assert!(parse_args(["ctl".to_owned(), "confirm-tool".to_owned()]).is_err());
+        assert!(parse_args(["ctl".to_owned(), "cancel-tool".to_owned()]).is_err());
+        assert_eq!(
+            parse_args([
+                "ctl".to_owned(),
+                "confirm-tool".to_owned(),
+                "1".to_owned(),
+                "--socket".to_owned(),
+                "/tmp/sw.sock".to_owned()
+            ]),
+            Ok(Mode::Ctl {
+                socket: Some(PathBuf::from("/tmp/sw.sock")),
+                command: CtlAction::ConfirmTool {
+                    pending_id: "1".to_owned(),
+                }
+            })
+        );
+        assert_eq!(
+            parse_args(["ctl".to_owned(), "cancel-tool".to_owned(), "4".to_owned()]),
+            Ok(Mode::Ctl {
+                socket: None,
+                command: CtlAction::CancelTool {
+                    pending_id: "4".to_owned(),
+                }
+            })
+        );
         assert_eq!(
             parse_args([
                 "ctl".to_owned(),

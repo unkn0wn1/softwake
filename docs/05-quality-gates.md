@@ -48,9 +48,10 @@ cargo run -p softwake-daemon -- demo
 | Hibernate | UI hibernate stops capture (no frames); voice cannot wake | Typed demo / UI / `ctl hibernate`: capture stopped; `wake` is rejected until `resume`. |
 | UI wake | Hibernate → sleep via UI | UI button or `ctl resume` / demo `resume`. Lands in sleep, not awake. |
 | Soul required | Missing `soul.md` or `user.md` blocks awake with a clear error | Remove a soul file and `wake`; status shows soul missing and state stays sleep. Hibernate / resume / sleep still work. |
-| Safe tool | One allowlisted tool succeeds end-to-end while awake | Typed demo while awake: `tool echo hello` → `echo: hello`; `tool echo` → `pong`. Unknown names (`tool volume`) are rejected. `ctl tool echo hello` works against `serve` only after the daemon is awake. |
+| Safe tool | One safe tool succeeds end-to-end while awake | Typed demo while awake: `tool echo hello` → `echo: hello`; `tool echo` → `pong`. Unknown names (`tool volume`) are rejected. `ctl tool echo hello` works against `serve` only after the daemon is awake. |
+| Confirm tool | A confirm-gated tool does not run until confirm | Typed demo while awake: `tool notify hello` prints `waiting for confirm` and does not append; `confirm` appends `hello`; `cancel` appends nothing. `tool shell` is denied. Sleep or hibernate clears a pending confirmation. |
 
-Phase-1 allowlist is exactly `echo` ([ADR 0004](ADR-0004-first-safe-tool.md)). Do not widen it without a docs update.
+Phase 1 shipped `echo` only ([ADR 0004](ADR-0004-first-safe-tool.md)). Phase 2 registers `echo` (safe), `notify` (confirm), and `shell` (deny) ([ADR 0005](ADR-0005-tool-confirmation.md)). Do not add a tool without a docs update.
 
 ## Review bar
 

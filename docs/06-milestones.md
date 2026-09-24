@@ -1,6 +1,6 @@
 # Milestones
 
-## Phase 1 — Nail the ear (current)
+## Phase 1 — Nail the ear
 
 **Goal:** Reliable sleep / awake / hibernate with soul pack and one safe tool.
 
@@ -17,10 +17,10 @@
 
 ## Phase 2 — Better voice and safer hands
 
-- Realtime or higher-quality STT/TTS path
-- Confirmation UX for risky tools
-- Richer tool registry + logging
-- Packaging polish
+1. [ ] Realtime or higher-quality STT/TTS path
+2. [x] Confirmation UX for risky tools ([ADR 0005](ADR-0005-tool-confirmation.md))
+3. [x] Richer tool registry + logging
+4. [ ] Packaging polish
 
 ## Phase 3 — World connectors + memory
 

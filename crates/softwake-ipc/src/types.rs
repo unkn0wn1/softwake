@@ -202,7 +202,8 @@ pub enum IpcError {
 
     /// A tool call arrived while the daemon was not awake.
     ///
-    /// Produced only in reply to [`ClientMessage::ToolRequest`].
+    /// Produced only in reply to [`ClientMessage::ToolRequest`]. Sleep and
+    /// hibernate refuse every name, including confirm-gated and denied tools.
     #[error("cannot run {name} while {state}")]
     ToolForbidden {
         /// Tool the client named.
@@ -211,13 +212,66 @@ pub enum IpcError {
         state: VoiceState,
     },
 
-    /// The tool name is not on the phase-1 allowlist.
+    /// The tool name is not registered.
     ///
-    /// Produced only in reply to [`ClientMessage::ToolRequest`].
+    /// Produced only in reply to [`ClientMessage::ToolRequest`] while awake.
     #[error("unknown tool: {name}")]
     UnknownTool {
         /// Name that was rejected.
         name: String,
+    },
+
+    /// The tool is registered as deny and never runs.
+    ///
+    /// Produced only in reply to [`ClientMessage::ToolRequest`] while awake.
+    #[error("tool denied: {name}")]
+    ToolDenied {
+        /// Name that was rejected.
+        name: String,
+    },
+
+    /// A confirm-gated tool is already waiting.
+    ///
+    /// Produced only in reply to [`ClientMessage::ToolRequest`]. The existing
+    /// pending confirmation is left in place.
+    #[error("a confirmation is already pending: {pending_id}")]
+    ConfirmationPending {
+        /// Id of the confirmation that is already waiting.
+        pending_id: String,
+    },
+
+    /// No pending confirmation has this id.
+    ///
+    /// Produced in reply to [`ClientMessage::ConfirmTool`] or
+    /// [`ClientMessage::CancelTool`].
+    #[error("unknown pending confirmation: {pending_id}")]
+    UnknownPending {
+        /// Id the client sent.
+        pending_id: String,
+    },
+
+    /// The optional name did not match the pending tool.
+    ///
+    /// The pending confirmation is left in place.
+    #[error("pending confirmation {pending_id} is not {name}")]
+    PendingMismatch {
+        /// Id the client sent.
+        pending_id: String,
+        /// Name the client expected.
+        name: String,
+    },
+
+    /// Confirm was refused because the daemon is not awake.
+    ///
+    /// The pending confirmation is left in place so a cancel can still clear it.
+    /// Sleep and hibernate clear a pending confirmation themselves; a confirm
+    /// after that is [`Self::UnknownPending`].
+    #[error("cannot confirm {pending_id} while {state}")]
+    ConfirmForbidden {
+        /// Id the client sent.
+        pending_id: String,
+        /// Voice state that refused the confirm.
+        state: VoiceState,
     },
 }
 
@@ -252,6 +306,22 @@ pub struct SoulReport {
     pub reason: Option<String>,
 }
 
+/// A confirm-gated tool that has not run yet.
+///
+/// Older peers omit this object. The tool does not run until `confirm_tool`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingTool {
+    /// Id to send with `confirm_tool` or `cancel_tool`.
+    pub pending_id: String,
+    /// Registered tool name.
+    pub name: String,
+    /// Arguments that will be passed if the operator confirms.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Short operator-facing description from the registry.
+    pub description: String,
+}
+
 /// Voice state returned by a successful command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Status {
@@ -273,6 +343,12 @@ pub struct Status {
     /// Short transition note, when one is cheap to include.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Confirm-gated tool waiting for `confirm_tool`. Absent when nothing is waiting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_tool: Option<PendingTool>,
+    /// One-line summary of the latest tool-log entry, such as `echo safe ran`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool: Option<String>,
 }
 
 /// Successful status or a structured error.
@@ -332,18 +408,41 @@ pub enum Event {
         /// Transcript text received so far.
         text: String,
     },
-    /// An allowlisted tool started.
+    /// A tool started. Safe tools emit this immediately. Confirm-gated tools
+    /// emit it only after `confirm_tool`.
     ToolStarted {
-        /// Tool name from the allowlist.
+        /// Registered tool name.
         name: String,
     },
-    /// An allowlisted tool finished.
+    /// A tool finished.
     ToolFinished {
-        /// Tool name from the allowlist.
+        /// Registered tool name.
         name: String,
         /// Optional result summary.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
+    },
+    /// A confirm-gated tool is waiting. It has not run.
+    ToolConfirmPending {
+        /// Id to send with `confirm_tool` or `cancel_tool`.
+        pending_id: String,
+        /// Registered tool name.
+        name: String,
+        /// Arguments that will be passed if the operator confirms.
+        #[serde(default)]
+        args: Vec<String>,
+        /// Short operator-facing description from the registry.
+        description: String,
+    },
+    /// A pending confirmation was confirmed or cleared.
+    ///
+    /// `accepted` is true only when the tool then runs. Cancel, and a sleep
+    /// or hibernate that drops the pending record, use false.
+    ToolConfirmResolved {
+        /// Id that was resolved.
+        pending_id: String,
+        /// Whether the tool was accepted and run.
+        accepted: bool,
     },
     /// A failure that is not the reply to a specific request.
     Error {
@@ -368,19 +467,48 @@ pub enum ClientMessage {
         /// Command to apply.
         command: Command,
     },
-    /// Run one allowlisted tool. `id` is copied onto the response.
+    /// Run one tool, or stage it when the registry marks it confirm-gated.
+    /// `id` is copied onto the response.
     ///
-    /// The daemon runs the tool only while awake. `args` may be omitted; it
-    /// is then an empty list. This variant is additive: a client that never
-    /// sends it still speaks protocol generation 1.
+    /// The daemon runs a safe tool only while awake. A confirm-gated tool does
+    /// not run; the response carries [`Status::pending_tool`] and the daemon
+    /// emits [`Event::ToolConfirmPending`]. `args` may be omitted; it is then
+    /// an empty list. This variant is additive: a client that never sends it
+    /// still speaks protocol generation 1.
     ToolRequest {
         /// Client-chosen id. The daemon echoes it and does not interpret it.
         id: u64,
-        /// Tool name. Phase 1 allows `echo` only.
+        /// Tool name.
         name: String,
         /// Arguments passed through to the tool. They are not interpreted.
         #[serde(default)]
         args: Vec<String>,
+    },
+    /// Run the pending confirm-gated tool once, then clear it.
+    ///
+    /// Refused when the daemon is not awake. `name`, when present, must match
+    /// the pending tool. Additive on protocol generation 1.
+    ConfirmTool {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+        /// Id from [`Event::ToolConfirmPending`] or [`Status::pending_tool`].
+        pending_id: String,
+        /// When set, the pending tool name must match.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    /// Clear the pending confirmation without running the tool.
+    ///
+    /// Allowed in any voice state when the id matches. `name`, when present,
+    /// must match the pending tool. Additive on protocol generation 1.
+    CancelTool {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+        /// Id from [`Event::ToolConfirmPending`] or [`Status::pending_tool`].
+        pending_id: String,
+        /// When set, the pending tool name must match.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
     },
 }
 
@@ -421,8 +549,8 @@ pub enum ServerMessage {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClientMessage, Command, Event, IpcError, PROTOCOL_VERSION, ResponseBody, ServerMessage,
-        SoulReport, Status, VoiceState,
+        ClientMessage, Command, Event, IpcError, PROTOCOL_VERSION, PendingTool, ResponseBody,
+        ServerMessage, SoulReport, Status, VoiceState,
     };
 
     fn assert_round_trip<T>(value: &T)
@@ -449,6 +577,8 @@ mod tests {
             }),
             message: None,
             detail: Some("sleep -> hibernate".to_owned()),
+            pending_tool: None,
+            last_tool: None,
         }
     }
 
@@ -561,6 +691,38 @@ mod tests {
             .to_string(),
             "unknown tool: volume"
         );
+        assert_round_trip(&IpcError::ToolDenied {
+            name: "shell".to_owned(),
+        });
+        assert_round_trip(&IpcError::ConfirmationPending {
+            pending_id: "1".to_owned(),
+        });
+        assert_round_trip(&IpcError::UnknownPending {
+            pending_id: "4".to_owned(),
+        });
+        assert_round_trip(&IpcError::PendingMismatch {
+            pending_id: "1".to_owned(),
+            name: "echo".to_owned(),
+        });
+        assert_round_trip(&IpcError::ConfirmForbidden {
+            pending_id: "1".to_owned(),
+            state: VoiceState::Sleep,
+        });
+        assert_eq!(
+            IpcError::ToolDenied {
+                name: "shell".to_owned(),
+            }
+            .to_string(),
+            "tool denied: shell"
+        );
+        assert_eq!(
+            IpcError::ConfirmForbidden {
+                pending_id: "1".to_owned(),
+                state: VoiceState::Hibernate,
+            }
+            .to_string(),
+            "cannot confirm 1 while hibernate"
+        );
     }
 
     #[test]
@@ -588,6 +750,73 @@ mod tests {
     }
 
     #[test]
+    fn confirm_and_cancel_round_trip_and_default_an_omitted_name() {
+        let confirm = ClientMessage::ConfirmTool {
+            id: 3,
+            pending_id: "1".to_owned(),
+            name: Some("notify".to_owned()),
+        };
+        assert_round_trip(&confirm);
+        let json = serde_json::to_string(&confirm).expect("encode");
+        assert!(json.contains("\"type\":\"confirm_tool\""));
+        assert!(json.contains("\"pending_id\":\"1\""));
+
+        let omitted: ClientMessage =
+            serde_json::from_str(r#"{"type":"confirm_tool","id":3,"pending_id":"1"}"#)
+                .expect("omitted name");
+        assert_eq!(
+            omitted,
+            ClientMessage::ConfirmTool {
+                id: 3,
+                pending_id: "1".to_owned(),
+                name: None,
+            }
+        );
+
+        let cancel = ClientMessage::CancelTool {
+            id: 8,
+            pending_id: "1".to_owned(),
+            name: None,
+        };
+        assert_round_trip(&cancel);
+        let cancel_json = serde_json::to_string(&cancel).expect("encode");
+        assert!(cancel_json.contains("\"type\":\"cancel_tool\""));
+        assert!(!cancel_json.contains("\"name\""));
+
+        let pending = Event::ToolConfirmPending {
+            pending_id: "1".to_owned(),
+            name: "notify".to_owned(),
+            args: vec!["hello".to_owned()],
+            description: "Append a notification to the in-memory sink.".to_owned(),
+        };
+        assert_round_trip(&pending);
+        assert_round_trip(&Event::ToolConfirmResolved {
+            pending_id: "1".to_owned(),
+            accepted: false,
+        });
+
+        let with_pending = Status {
+            state: VoiceState::Awake,
+            capture_running: true,
+            soul_reload_pending: false,
+            soul: None,
+            message: Some("pending confirmation 1 for notify".to_owned()),
+            detail: None,
+            pending_tool: Some(PendingTool {
+                pending_id: "1".to_owned(),
+                name: "notify".to_owned(),
+                args: vec!["hello".to_owned()],
+                description: "Append a notification to the in-memory sink.".to_owned(),
+            }),
+            last_tool: Some("notify confirm pending".to_owned()),
+        };
+        assert_round_trip(&with_pending);
+        let pending_json = serde_json::to_string(&with_pending).expect("encode");
+        assert!(pending_json.contains("\"pending_tool\""));
+        assert!(pending_json.contains("\"last_tool\":\"notify confirm pending\""));
+    }
+
+    #[test]
     fn unknown_spellings_are_rejected() {
         let error = serde_json::from_str::<Command>("\"GetStatus\"").expect_err("capital");
         assert!(error.to_string().contains("unknown variant"));
@@ -605,6 +834,8 @@ mod tests {
         assert!(status.message.is_none());
         assert!(status.detail.is_none());
         assert!(status.soul.is_none());
+        assert!(status.pending_tool.is_none());
+        assert!(status.last_tool.is_none());
         assert!(status.soul_reload_pending);
     }
 
@@ -620,6 +851,8 @@ mod tests {
             }),
             message: None,
             detail: None,
+            pending_tool: None,
+            last_tool: None,
         };
         assert_round_trip(&missing);
 
@@ -633,6 +866,8 @@ mod tests {
             }),
             message: None,
             detail: None,
+            pending_tool: None,
+            last_tool: None,
         };
         let json = serde_json::to_string(&ok).expect("encode");
         assert!(json.contains("\"soul\":{\"ok\":true}"));

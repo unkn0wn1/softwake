@@ -19,6 +19,8 @@ pub fn run() {
             commands::resume,
             commands::sleep,
             commands::reload_soul,
+            commands::confirm_tool,
+            commands::cancel_tool,
         ])
         .run(tauri::generate_context!())
         .expect("softwake-ui failed to start");

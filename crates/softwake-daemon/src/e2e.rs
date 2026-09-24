@@ -282,3 +282,167 @@ fn ctl_tool_is_refused_until_awake_then_echo_is_deterministic() {
     drop(watcher);
     drop(server);
 }
+
+#[test]
+fn ctl_notify_confirms_once_and_cancel_does_not_run() {
+    let temp = TempSocket::new();
+    let soul = TestSoulDir::valid();
+    let server = serve::spawn(temp.path.clone(), soul.soul_dir()).expect("serve");
+    let woke = server.wake_phrase_for_test();
+    assert!(woke.body.status().is_some(), "wake should apply: {woke:?}");
+
+    let mut watcher = Client::connect(temp.path()).expect("watcher");
+    watcher
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("timeout");
+
+    let pending = ctl::call_tool(temp.path(), "notify", &["hello".to_owned()]).expect("pending");
+    assert_eq!(
+        pending.message.as_deref(),
+        Some("pending confirmation 1 for notify")
+    );
+    let waiting = pending.pending_tool.clone().expect("pending tool");
+    assert_eq!(waiting.pending_id, "1");
+    assert_eq!(waiting.args, ["hello"]);
+    let printed = ctl::format_status(&pending);
+    assert!(printed.contains("pending: 1 notify hello"), "{printed}");
+    assert!(
+        printed.contains("last tool: notify confirm pending"),
+        "{printed}"
+    );
+    match watcher.read().expect("pending event") {
+        ServerMessage::Event {
+            body: Event::ToolConfirmPending {
+                pending_id, name, ..
+            },
+        } => {
+            assert_eq!(pending_id, "1");
+            assert_eq!(name, "notify");
+        }
+        other => panic!("expected tool_confirm_pending, got {other:?}"),
+    }
+
+    let confirmed = ctl::call_confirm(temp.path(), "1").expect("confirm");
+    assert_eq!(confirmed.message.as_deref(), Some("hello"));
+    assert!(confirmed.pending_tool.is_none());
+    assert_eq!(
+        confirmed.last_tool.as_deref(),
+        Some("notify confirm confirmed")
+    );
+    match watcher.read().expect("resolved") {
+        ServerMessage::Event {
+            body:
+                Event::ToolConfirmResolved {
+                    pending_id,
+                    accepted: true,
+                },
+        } => assert_eq!(pending_id, "1"),
+        other => panic!("expected tool_confirm_resolved, got {other:?}"),
+    }
+    match watcher.read().expect("started") {
+        ServerMessage::Event {
+            body: Event::ToolStarted { name },
+        } => assert_eq!(name, "notify"),
+        other => panic!("expected tool_started, got {other:?}"),
+    }
+    match watcher.read().expect("finished") {
+        ServerMessage::Event {
+            body: Event::ToolFinished { name, detail },
+        } => {
+            assert_eq!(name, "notify");
+            assert_eq!(detail.as_deref(), Some("hello"));
+        }
+        other => panic!("expected tool_finished, got {other:?}"),
+    }
+
+    let spent = ctl::call_confirm(temp.path(), "1").expect_err("spent");
+    assert!(
+        spent
+            .to_string()
+            .contains("unknown pending confirmation: 1"),
+        "{spent}"
+    );
+
+    drop(watcher);
+    drop(server);
+}
+
+#[test]
+fn ctl_cancel_and_hibernate_clear_a_pending_notification() {
+    let temp = TempSocket::new();
+    let soul = TestSoulDir::valid();
+    let server = serve::spawn(temp.path.clone(), soul.soul_dir()).expect("serve");
+    assert!(
+        server.wake_phrase_for_test().body.status().is_some(),
+        "wake should apply"
+    );
+
+    let mut watcher = Client::connect(temp.path()).expect("watcher");
+    watcher
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("timeout");
+
+    let staged = ctl::call_tool(temp.path(), "notify", &["nope".to_owned()]).expect("stage");
+    assert_eq!(
+        staged
+            .pending_tool
+            .as_ref()
+            .map(|pending| pending.pending_id.as_str()),
+        Some("1")
+    );
+    watcher.read().expect("pending");
+    let cancelled = ctl::call_cancel(temp.path(), "1").expect("cancel");
+    assert_eq!(cancelled.message.as_deref(), Some("cancelled 1"));
+    assert!(cancelled.pending_tool.is_none());
+    match watcher.read().expect("cancelled") {
+        ServerMessage::Event {
+            body: Event::ToolConfirmResolved {
+                accepted: false, ..
+            },
+        } => {}
+        other => panic!("expected a cancelled resolution, got {other:?}"),
+    }
+    let gone = ctl::call_confirm(temp.path(), "1").expect_err("gone");
+    assert!(
+        gone.to_string().contains("unknown pending confirmation: 1"),
+        "{gone}"
+    );
+
+    let denied = ctl::call_tool(temp.path(), "shell", &[]).expect_err("shell");
+    assert!(
+        denied.to_string().contains("tool denied: shell"),
+        "{denied}"
+    );
+
+    ctl::call_tool(temp.path(), "notify", &["later".to_owned()]).expect("later");
+    watcher.read().expect("third pending");
+    let hibernated = ctl::call(temp.path(), Command::Hibernate).expect("hibernate");
+    assert_eq!(hibernated.state, VoiceState::Hibernate);
+    assert!(hibernated.pending_tool.is_none());
+    match watcher.read().expect("state") {
+        ServerMessage::Event {
+            body: Event::StateChanged { state, .. },
+        } => assert_eq!(state, VoiceState::Hibernate),
+        other => panic!("expected state_changed, got {other:?}"),
+    }
+    match watcher.read().expect("cleared") {
+        ServerMessage::Event {
+            body:
+                Event::ToolConfirmResolved {
+                    pending_id,
+                    accepted: false,
+                },
+        } => assert_eq!(pending_id, "2"),
+        other => panic!("expected the pending call to clear, got {other:?}"),
+    }
+    let stale = ctl::call_confirm(temp.path(), "2").expect_err("stale");
+    assert!(
+        stale
+            .to_string()
+            .contains("unknown pending confirmation: 2"),
+        "{stale}"
+    );
+
+    drop(watcher);
+    drop(server);
+}

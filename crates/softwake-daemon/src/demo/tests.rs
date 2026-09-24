@@ -555,7 +555,8 @@ fn missing_soul_refuses_wake_until_reload() {
     assert!(applied.contains("Fresh user"));
     assert!(applied.contains("# Runtime policy"));
     assert!(applied.contains("State: awake."));
-    assert!(applied.contains("Tool allowlist: echo."));
+    assert!(applied.contains("echo (safe)"));
+    assert!(applied.contains("notify (confirm)"));
     assert_eq!(demo.session_phase(), SessionPhase::Open);
     assert_eq!(demo.session_instructions(), Some(applied));
 }
@@ -589,7 +590,8 @@ fn tool_echo_requires_awake_and_the_session_opens_and_closes() {
     let instructions = demo.session_instructions().expect("open").to_owned();
     assert!(instructions.contains("test soul"));
     assert!(instructions.contains("test user"));
-    assert!(instructions.contains("Tool allowlist: echo."));
+    assert!(instructions.contains("echo (safe)"));
+    assert!(instructions.contains("notify (confirm)"));
 
     let ran = demo.handle_line("tool echo Hello", Duration::ZERO);
     assert!(
@@ -653,5 +655,154 @@ fn tool_echo_requires_awake_and_the_session_opens_and_closes() {
             .lines
             .iter()
             .any(|line| line.contains("cannot run echo while hibernate"))
+    );
+}
+
+#[test]
+fn notify_waits_for_confirm_and_cancel_does_not_append() {
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    let asleep = demo.handle_line("tool notify hello", Duration::ZERO);
+    assert!(
+        asleep
+            .lines
+            .iter()
+            .any(|line| line.contains("cannot run notify while sleep"))
+    );
+    assert!(demo.notifications().is_empty());
+
+    demo.handle_line("wake", Duration::ZERO);
+    let pending = demo.handle_line("tool notify hello", Duration::ZERO);
+    assert!(
+        pending
+            .lines
+            .iter()
+            .any(|line| line.starts_with("pending 1: notify — "))
+    );
+    assert!(
+        pending
+            .lines
+            .iter()
+            .any(|line| line == "waiting for confirm")
+    );
+    assert!(
+        pending
+            .lines
+            .iter()
+            .any(|line| line == "pending: 1 notify hello")
+    );
+    assert!(demo.notifications().is_empty());
+
+    let echo = demo.handle_line("tool echo hi", Duration::ZERO);
+    assert!(echo.lines.iter().any(|line| line == "tool echo: echo: hi"));
+    assert!(demo.notifications().is_empty());
+
+    let busy = demo.handle_line("tool notify other", Duration::ZERO);
+    assert!(
+        busy.lines
+            .iter()
+            .any(|line| line.contains("a confirmation is already pending: 1"))
+    );
+    assert!(demo.notifications().is_empty());
+
+    let cancelled = demo.handle_line("cancel", Duration::ZERO);
+    assert!(
+        cancelled
+            .lines
+            .iter()
+            .any(|line| line == "cancelled 1: notify")
+    );
+    assert!(demo.notifications().is_empty());
+    let again = demo.handle_line("confirm", Duration::ZERO);
+    assert!(
+        again
+            .lines
+            .iter()
+            .any(|line| line.contains("no pending confirmation"))
+    );
+
+    demo.handle_line("tool notify hello world", Duration::ZERO);
+    let confirmed = demo.handle_line("confirm-tool 2", Duration::ZERO);
+    assert!(
+        confirmed
+            .lines
+            .iter()
+            .any(|line| { line == "confirmed 2: tool notify: hello world" })
+    );
+    assert_eq!(demo.notifications(), ["hello world"]);
+    assert!(
+        confirmed
+            .lines
+            .iter()
+            .any(|line| line == "notification: hello world")
+    );
+    let spent = demo.handle_line("confirm 2", Duration::ZERO);
+    assert!(
+        spent
+            .lines
+            .iter()
+            .any(|line| line.contains("unknown pending confirmation: 2"))
+    );
+    assert_eq!(demo.notifications(), ["hello world"]);
+}
+
+#[test]
+fn sleep_clears_a_pending_notification_without_appending() {
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    demo.handle_line("wake", Duration::ZERO);
+    demo.handle_line("tool notify later", Duration::ZERO);
+    let slept = demo.handle_line("sleep", Duration::ZERO);
+    assert!(slept.lines.iter().any(|line| line == "cancelled 1: notify"));
+    assert!(demo.notifications().is_empty());
+    assert_eq!(demo.state(), VoiceState::Sleep);
+}
+
+#[test]
+fn shell_is_denied_and_hibernate_refuses_notify() {
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    demo.handle_line("wake", Duration::ZERO);
+    let denied = demo.handle_line("tool shell rm", Duration::ZERO);
+    assert!(
+        denied
+            .lines
+            .iter()
+            .any(|line| line.contains("tool denied: shell"))
+    );
+    let unknown = demo.handle_line("tool volume", Duration::ZERO);
+    assert!(
+        unknown
+            .lines
+            .iter()
+            .any(|line| line.contains("unknown tool: volume"))
+    );
+    assert!(demo.notifications().is_empty());
+
+    demo.handle_line("tool notify bye", Duration::ZERO);
+    demo.handle_line("hibernate", Duration::ZERO);
+    assert!(demo.notifications().is_empty());
+    let refused = demo.handle_line("tool notify bye", Duration::ZERO);
+    assert!(
+        refused
+            .lines
+            .iter()
+            .any(|line| line.contains("cannot run notify while hibernate"))
+    );
+}
+
+#[test]
+fn confirm_and_cancel_reject_extra_arguments() {
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    let confirm = demo.handle_line("confirm 1 extra", Duration::ZERO);
+    assert!(
+        confirm
+            .lines
+            .iter()
+            .any(|line| line.contains("confirm takes one pending id"))
+    );
+    let cancel = demo.handle_line("CANCEL-TOOL 1 extra", Duration::ZERO);
+    assert!(
+        cancel
+            .lines
+            .iter()
+            .any(|line| line.contains("cancel takes one pending id"))
     );
 }

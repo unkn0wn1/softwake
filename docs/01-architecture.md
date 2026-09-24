@@ -32,7 +32,7 @@ Keep crates small and single-purpose. Exact names can shift; responsibilities sh
 | `softwake-audio` | Capture trait, mock backend, PipeWire stub |
 | `softwake-wake` | Local wake/sleep phrases. Text table for the spike; PCM engine later |
 | `softwake-session` | Text session for one awake period. Stores rendered soul instructions. No model client yet |
-| `softwake-tools` | Tool registry and allowlist. Phase 1 registers `echo` only |
+| `softwake-tools` | Tool registry with safe, confirm, and deny metadata. `echo` is safe, `notify` waits for confirmation, `shell` is denied |
 | `softwake-soul` | Load/validate soul pack; render system instructions |
 | `softwake-ipc` | Shared protocol: newline-delimited JSON over a Unix socket |
 | `softwake-ui` | Tauri window (thin). Status and buttons call the daemon |
@@ -64,9 +64,9 @@ Unix domain socket and newline-delimited JSON, protocol version 1. The path, fra
 - The UI and `softwaked ctl` may request an action. The daemon owns the state machine and accepts or rejects it.
 - The client and daemon exchange a hello before any command. A version mismatch closes the connection.
 - Commands: `get_status`, `hibernate`, `wake_from_ui`, `sleep`, `reload_soul`.
-- `tool_request` runs one allowlisted tool (`id`, `name`, `args`). `args` may be omitted. The daemon answers with the same response shape as a command. A successful run also broadcasts `tool_started` and `tool_finished`. Protocol generation stays 1. See [ADR 0003](ADR-0003-ipc-transport.md) and [ADR 0004](ADR-0004-first-safe-tool.md).
+- `tool_request` runs one safe tool, or stages a confirm-gated tool (`id`, `name`, `args`). `args` may be omitted. The daemon answers with the same response shape as a command. A safe run also broadcasts `tool_started` and `tool_finished`. A confirm-gated tool broadcasts `tool_confirm_pending` and does not run. `confirm_tool` / `cancel_tool` carry the pending id. Protocol generation stays 1. See [ADR 0003](ADR-0003-ipc-transport.md), [ADR 0004](ADR-0004-first-safe-tool.md), and [ADR 0005](ADR-0005-tool-confirmation.md).
 - `set_config` is intentionally absent until the daemon can validate a configuration document.
-- Events: `state_changed`, `partial_transcript` (awake only; not emitted yet), `tool_started`, `tool_finished` (emitted when `echo` runs), `error`.
+- Events: `state_changed`, `partial_transcript` (awake only; not emitted yet), `tool_started`, `tool_finished`, `tool_confirm_pending`, `tool_confirm_resolved`, `error`.
 - A rejected command is an error response. `state_changed` is broadcast only when the voice state changes.
 - `reload_soul` re-reads `soul.md` and `user.md` from disk. The new text applies on the next awake, not in the middle of an awake session. A missing or invalid pack refuses awake; hibernate, sleep, and UI resume still run.
 - Status may include `soul`: `{ "ok": true }` or `{ "ok": false, "reason": "..." }`. The field is optional on the wire so older payloads still decode. Protocol generation stays 1.
@@ -75,12 +75,13 @@ Unix domain socket and newline-delimited JSON, protocol version 1. The path, fra
 
 ## Tool bus
 
-- Tools are named and allowlisted. Phase 1's allowlist is exactly `echo` ([ADR 0004](ADR-0004-first-safe-tool.md)).
-- `echo` is a pure function. With no arguments it returns `pong`. With arguments it returns `echo:` plus those arguments joined by spaces. It does not touch a shell, the filesystem, the clipboard, or an audio device.
-- The daemon calls `permit_tool_dispatch` first. Sleep and hibernate refuse every tool. An unknown name is refused even while awake.
+- Tools are named and carry a risk: safe, confirm, or deny ([ADR 0005](ADR-0005-tool-confirmation.md)). Phase 1's only tool was `echo` ([ADR 0004](ADR-0004-first-safe-tool.md)).
+- `echo` is safe. With no arguments it returns `pong`. With arguments it returns `echo:` plus those arguments joined by spaces. It does not touch a shell, the filesystem, the clipboard, or an audio device.
+- `notify` is confirm-gated. It appends one line to an in-memory sink only after `confirm_tool`. `shell` is denied and never runs.
+- The daemon calls `permit_tool_dispatch` first. Sleep and hibernate refuse every tool and clear a pending confirmation. An unknown name is refused while awake. One confirmation may be pending; a second confirm-gated request is rejected.
 - Entering awake opens a text session with the rendered soul instructions. Sleep, and hibernate from awake, close that session.
-- Dangerous tools (shell, send email, delete files) require explicit policy and confirmation — later phases.
-- “Full device control” is a product vision, not an architecture excuse to skip allowlists.
+- Dangerous tools (a real shell, send email, delete files) stay denied until a later ADR gives them a confirm path. Confirmation here does not make `shell` runnable.
+- “Full device control” is a product vision, not an architecture excuse to skip the registry.
 
 ## Config layout (draft)
 

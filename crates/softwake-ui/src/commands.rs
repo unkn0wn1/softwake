@@ -58,3 +58,39 @@ pub fn sleep() -> Result<Status, String> {
 pub fn reload_soul() -> Result<Status, String> {
     call(Command::ReloadSoul)
 }
+
+/// Run the pending confirm-gated tool.
+///
+/// # Errors
+///
+/// Returns the daemon or socket error as text.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri deserializes this command argument as an owned String"
+)]
+pub fn confirm_tool(pending_id: String) -> Result<Status, String> {
+    let path = resolve_socket_path(None).map_err(|error| error.to_string())?;
+    let mut client = Client::connect(&path).map_err(|error| error.to_string())?;
+    client
+        .confirm_tool(&pending_id)
+        .map_err(|error| error.to_string())
+}
+
+/// Drop the pending confirmation without running the tool.
+///
+/// # Errors
+///
+/// Returns the daemon or socket error as text.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri deserializes this command argument as an owned String"
+)]
+pub fn cancel_tool(pending_id: String) -> Result<Status, String> {
+    let path = resolve_socket_path(None).map_err(|error| error.to_string())?;
+    let mut client = Client::connect(&path).map_err(|error| error.to_string())?;
+    client
+        .cancel_tool(&pending_id)
+        .map_err(|error| error.to_string())
+}

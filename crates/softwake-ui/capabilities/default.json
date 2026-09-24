@@ -8,6 +8,8 @@
     "allow-hibernate",
     "allow-resume",
     "allow-sleep",
-    "allow-reload-soul"
+    "allow-reload-soul",
+    "allow-confirm-tool",
+    "allow-cancel-tool"
   ]
 }

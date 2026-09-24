@@ -53,6 +53,7 @@ cargo run -p softwake-daemon -- demo
 
 ## Consequences
 
-- The soul pack runtime policy names `echo` and still marks confirm-rules as a placeholder.
-- Adding a second tool means updating this allowlist, the policy line, and this ADR. A drive-by registration is a bug.
+- Phase 1's runtime policy named `echo` and left confirm-rules as a placeholder. [ADR 0005](ADR-0005-tool-confirmation.md) replaces that placeholder: the registry is no longer exactly one name.
+- `echo` is unchanged. With no arguments it still returns `pong`. With arguments it still returns `echo:` plus those arguments joined by spaces.
+- Adding another tool means updating the registry, the policy line, and an ADR. A drive-by registration is a bug.
 - `echo` will look trivial next to a real tool. That is the point of the first one: the gate is tested before the side effect exists.

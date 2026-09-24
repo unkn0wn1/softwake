@@ -18,6 +18,6 @@ pub use socket::{
     resolve_socket_path_from,
 };
 pub use types::{
-    ClientMessage, Command, Event, IpcError, PROTOCOL_VERSION, ResponseBody, ServerMessage,
-    SoulReport, Status, VoiceState,
+    ClientMessage, Command, Event, IpcError, PROTOCOL_VERSION, PendingTool, ResponseBody,
+    ServerMessage, SoulReport, Status, VoiceState,
 };

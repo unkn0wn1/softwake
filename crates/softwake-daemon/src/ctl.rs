@@ -22,10 +22,20 @@ pub(crate) enum CtlAction {
     ReloadSoul,
     /// `ctl tool <name> [args...]`
     Tool {
-        /// Tool name. The phase-1 allowlist accepts `echo`.
+        /// Tool name. Safe tools run while awake. Confirm-gated tools wait.
         name: String,
         /// Arguments forwarded to the tool.
         args: Vec<String>,
+    },
+    /// `ctl confirm-tool <pending_id>`
+    ConfirmTool {
+        /// Id returned with the pending confirmation.
+        pending_id: String,
+    },
+    /// `ctl cancel-tool <pending_id>`
+    CancelTool {
+        /// Id returned with the pending confirmation.
+        pending_id: String,
     },
 }
 
@@ -57,6 +67,8 @@ pub(crate) fn run(path: &Path, action: &CtlAction) -> Result<String, CallError> 
         CtlAction::Sleep => call(path, Command::Sleep)?,
         CtlAction::ReloadSoul => call(path, Command::ReloadSoul)?,
         CtlAction::Tool { name, args } => call_tool(path, name, args)?,
+        CtlAction::ConfirmTool { pending_id } => call_confirm(path, pending_id)?,
+        CtlAction::CancelTool { pending_id } => call_cancel(path, pending_id)?,
     };
     Ok(format_status(&status))
 }
@@ -79,6 +91,26 @@ pub(crate) fn call(path: &Path, command: Command) -> Result<Status, CallError> {
 pub(crate) fn call_tool(path: &Path, name: &str, args: &[String]) -> Result<Status, CallError> {
     let mut client = Client::connect(path)?;
     client.call_tool(name, args)
+}
+
+/// Connect and confirm one pending tool.
+///
+/// # Errors
+///
+/// Returns [`CallError`] when the daemon cannot be reached or refuses the confirm.
+pub(crate) fn call_confirm(path: &Path, pending_id: &str) -> Result<Status, CallError> {
+    let mut client = Client::connect(path)?;
+    client.confirm_tool(pending_id)
+}
+
+/// Connect and cancel one pending tool.
+///
+/// # Errors
+///
+/// Returns [`CallError`] when the daemon cannot be reached or the id is unknown.
+pub(crate) fn call_cancel(path: &Path, pending_id: &str) -> Result<Status, CallError> {
+    let mut client = Client::connect(path)?;
+    client.cancel_tool(pending_id)
 }
 
 /// Human-readable status. The string ends with a newline.
@@ -106,6 +138,22 @@ pub(crate) fn format_status(status: &Status) -> String {
         "state: {}\ncapture: {capture}\nsoul: {soul}\nsoul reload: {reload}\n",
         status.state
     );
+    if let Some(pending) = &status.pending_tool {
+        text.push_str("pending: ");
+        text.push_str(&pending.pending_id);
+        text.push(' ');
+        text.push_str(&pending.name);
+        if !pending.args.is_empty() {
+            text.push(' ');
+            text.push_str(&pending.args.join(" "));
+        }
+        text.push('\n');
+    }
+    if let Some(last) = &status.last_tool {
+        text.push_str("last tool: ");
+        text.push_str(last);
+        text.push('\n');
+    }
     if let Some(message) = &status.message {
         text.push_str(message);
         text.push('\n');
