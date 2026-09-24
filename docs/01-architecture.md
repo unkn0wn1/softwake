@@ -29,8 +29,8 @@ Keep crates small and single-purpose. Exact names can shift; responsibilities sh
 |-------|----------------|
 | `softwake-daemon` | Binary: state machine, IPC server, wiring |
 | `softwake-state` | Sleep / awake / hibernate transitions and invariants |
-| `softwake-audio` | Capture/playback traits + PipeWire impl |
-| `softwake-wake` | Local wake/sleep phrase detection over audio frames |
+| `softwake-audio` | Capture trait, mock backend, PipeWire stub |
+| `softwake-wake` | Local wake/sleep phrases. Text table for the spike; PCM engine later |
 | `softwake-session` | Build model session from soul pack; stream events |
 | `softwake-tools` | Tool registry, allowlist, confirm policy, runners |
 | `softwake-soul` | Load/validate soul pack; render system instructions |
@@ -47,6 +47,8 @@ Do not put PipeWire types into `softwake-soul`. Do not put HTTP clients into `so
 4. **Network** only from session and explicitly allowed tools — not from the wake engine.
 
 ## Audio path (phase 1)
+
+Current spike: `MockAudioCapture` plus a text phrase table ([ADR 0002](ADR-0002-wake-engine-spike.md)). `PipeWireCapture` implements the capture trait and reports that native I/O is not linked yet. The `pipewire` feature does not pull a system library.
 
 - Capture via PipeWire (`pw-record` or native bindings behind a trait).
 - **Hibernate:** tear down capture; no frames to wake engine.

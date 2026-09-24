@@ -4,7 +4,10 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 rust-version.workspace = true
-description = "Wake and sleep phrase boundary. No engine yet."
+description = "Local wake and sleep phrase detection."
+
+[dependencies]
+thiserror.workspace = true
 
 [lints]
 workspace = true

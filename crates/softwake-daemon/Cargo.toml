@@ -11,7 +11,9 @@ name = "softwaked"
 path = "src/main.rs"
 
 [dependencies]
+softwake-audio.workspace = true
 softwake-state.workspace = true
+softwake-wake.workspace = true
 
 [lints]
 workspace = true

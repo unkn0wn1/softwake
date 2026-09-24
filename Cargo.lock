@@ -35,12 +35,17 @@ dependencies = [
 [[package]]
 name = "softwake-audio"
 version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "softwake-daemon"
 version = "0.1.0"
 dependencies = [
+ "softwake-audio",
  "softwake-state",
+ "softwake-wake",
 ]
 
 [[package]]
@@ -70,6 +75,9 @@ version = "0.1.0"
 [[package]]
 name = "softwake-wake"
 version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "syn"

@@ -6,7 +6,7 @@ Rust end-to-end (daemon + Tauri UI). Phase 1 nails reliable **wake / sleep / hib
 
 ## Status
 
-Cargo workspace on stable Rust (edition 2024). `softwake-state` implements sleep / awake / hibernate, including rejected transitions. The other crates are compile-clean boundaries: an audio capture trait (no PipeWire backend), wake, session, tools, soul paths, and IPC types. The Tauri app (`softwake-ui`) is not a workspace member yet.
+Cargo workspace on stable Rust (edition 2024). `softwake-state` implements sleep / awake / hibernate, including rejected transitions and phrase cooldowns. `softwake-audio` has a mock capture backend (`stop` ends frame delivery) and a trait-shaped PipeWire stub (default `pipewire` feature, no native library). `softwake-wake` scores configured phrases with a local text matcher ([ADR 0002](docs/ADR-0002-wake-engine-spike.md)). Session, tools, soul paths, and IPC types are compile-clean boundaries. The Tauri app (`softwake-ui`) is not a workspace member yet.
 
 ## Build and test
 
@@ -17,7 +17,36 @@ cargo test --workspace
 cargo build --workspace --all-targets
 ```
 
-`cargo run -p softwake-daemon` builds `softwaked`, prints the initial voice state (`sleep`), and exits.
+The default `pipewire` feature compiles the capture stub. It does not require a system PipeWire library. `--no-default-features` on `softwake-audio` omits the stub.
+
+## Demo
+
+`softwaked` with no arguments prints the initial voice state and exits:
+
+```bash
+cargo run -p softwake-daemon
+```
+
+```text
+softwaked state: sleep
+```
+
+The interactive demo starts in sleep with mock capture running. `wake` and `sleep` submit the configured phrases to the text detector, then apply the voice-state machine, including the 800 ms phrase cooldown. `hibernate` stops capture. A voice command is rejected until `resume`, which returns to sleep and starts capture again.
+
+```bash
+cargo run -p softwake-daemon -- demo
+```
+
+```text
+softwaked demo
+state: sleep
+capture: running
+commands: wake, sleep, hibernate, resume, status, quit
+```
+
+Type one command per line. `softwaked --demo` is the same mode. `softwaked --help` prints usage.
+
+`sleep` in the 800 ms after `wake` stays awake. `wake` in the 800 ms after `sleep` or `resume` stays asleep. `hibernate` is a UI command and applies on the next line.
 
 ## Docs
 
@@ -30,3 +59,5 @@ cargo build --workspace --all-targets
 | [docs/04-coding-style.md](docs/04-coding-style.md) | KISS, DRY, SRP, Rust rules |
 | [docs/05-quality-gates.md](docs/05-quality-gates.md) | CI and definition of done |
 | [docs/06-milestones.md](docs/06-milestones.md) | Phase 1 vertical slice |
+| [docs/ADR-0001-name-and-scope.md](docs/ADR-0001-name-and-scope.md) | Name and phase-1 scope |
+| [docs/ADR-0002-wake-engine-spike.md](docs/ADR-0002-wake-engine-spike.md) | Text phrase table for the wake spike |

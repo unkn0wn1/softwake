@@ -20,7 +20,9 @@ rust-version = "1.85"
 [workspace.dependencies]
 thiserror = "2"
 tracing = "0.1"
+softwake-audio = { path = "crates/softwake-audio" }
 softwake-state = { path = "crates/softwake-state" }
+softwake-wake = { path = "crates/softwake-wake" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

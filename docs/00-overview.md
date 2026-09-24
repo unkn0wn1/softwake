@@ -43,6 +43,6 @@ See [06-milestones.md](06-milestones.md).
 | Daemon | Rust |
 | UI | Tauri 2 (Rust + small web front-end) |
 | Audio | PipeWire on Linux first; abstract traits for later platforms |
-| Wake word | Local (open model / engine TBD in phase 1 spike) |
+| Wake word | Local phrase-table spike; on-device engine TBD ([ADR 0002](ADR-0002-wake-engine-spike.md)) |
 | LLM / voice | Pluggable; realtime APIs are candidates, not hard dependencies in docs |
 | Config / soul | Markdown + TOML on disk under XDG paths |

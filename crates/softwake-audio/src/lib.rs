@@ -1,28 +1,42 @@
 //! Audio capture boundary.
 //!
-//! Backends, including `PipeWire`, are not implemented here. Callers depend on
-//! [`AudioCapture`] so a later backend can plug in without changing who decides
-//! when capture is allowed.
+//! Callers depend on [`AudioCapture`]. [`MockAudioCapture`] is the in-memory
+//! backend for tests and the daemon demo. [`PipeWireCapture`] is compiled with
+//! the default `pipewire` feature: it implements the same trait and reports
+//! that native I/O is not linked. That feature does not pull a `PipeWire` crate
+//! or a system library.
 
-/// Start and stop microphone capture.
-///
-/// After [`AudioCapture::stop`] returns, the implementation must not deliver
-/// further frames. Hibernate relies on that.
-pub trait AudioCapture {
-    /// Backend failure while opening or releasing the device.
-    type Error: std::error::Error;
+mod mock;
+#[cfg(feature = "pipewire")]
+mod pipewire;
+mod traits;
 
-    /// Begin capture and allow frames to flow.
-    ///
-    /// # Errors
-    ///
-    /// Returns the backend error when the device cannot be opened.
-    fn start(&mut self) -> Result<(), Self::Error>;
+pub use mock::{AudioFrame, MockAudioCapture};
+#[cfg(feature = "pipewire")]
+pub use pipewire::{PipeWireCapture, PipeWireError};
+pub use traits::AudioCapture;
 
-    /// Stop capture and release the device.
-    ///
-    /// # Errors
-    ///
-    /// Returns the backend error when the device cannot be released.
-    fn stop(&mut self) -> Result<(), Self::Error>;
+#[cfg(all(test, feature = "pipewire"))]
+mod tests {
+    use super::{AudioCapture, MockAudioCapture, PipeWireCapture};
+
+    fn start_then_stop<C: AudioCapture>(capture: &mut C) -> Result<(), C::Error> {
+        capture.start()?;
+        capture.stop()
+    }
+
+    #[test]
+    fn mock_and_pipewire_stub_both_implement_the_trait() {
+        let mut mock = MockAudioCapture::default();
+        start_then_stop(&mut mock).expect("mock cannot fail");
+        assert!(!mock.is_running());
+
+        let mut pipewire = PipeWireCapture;
+        assert_eq!(
+            start_then_stop(&mut pipewire)
+                .expect_err("stub fails on start")
+                .to_string(),
+            "PipeWire capture is not implemented"
+        );
+    }
 }

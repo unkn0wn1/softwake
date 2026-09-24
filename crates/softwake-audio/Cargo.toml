@@ -4,7 +4,15 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 rust-version.workspace = true
-description = "Audio capture boundary. No backend yet."
+description = "Audio capture boundary. Mock backend and a PipeWire stub."
+
+[features]
+# Compiles the trait-shaped PipeWire stub. No native PipeWire dependency.
+default = ["pipewire"]
+pipewire = []
+
+[dependencies]
+thiserror.workspace = true
 
 [lints]
 workspace = true
