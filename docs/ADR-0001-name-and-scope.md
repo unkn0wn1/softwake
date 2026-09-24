@@ -9,11 +9,10 @@ Project name is **Softwake** (renamed from working title Stillroom). Phase 1 sco
 
 ## Context
 
-Prior attempts: `/www/xai-voice` (webview audio), `/www/agent-desk` (Python conductor). Need a clean OSS-ready Rust tree and an unused name for domain + GitHub. Stillroom was a temporary scaffold name; Softwake better matches the wake/sleep product metaphor.
+Earlier prototypes tried webview-based audio and a Python conductor. Those approaches taught useful lessons (especially: do not put mic capture in Electron/Capacitor/webview), but Softwake needs a clean OSS-ready Rust tree. Stillroom was a temporary scaffold name; Softwake better matches the wake/sleep product metaphor.
 
 ## Consequences
 
 - Docs lead the repo before runtime code.
-- agent-desk remains a reference, not a dependency.
+- Prior prototypes are references for ideas only, not dependencies or vendored trees.
 - Paths, crates, and config use `softwake` (`~/.config/softwake/`, `softwake-daemon`, etc.).
-- Domain: prefer checking `softwake.app` / similar if `softwake.dev` is unavailable.

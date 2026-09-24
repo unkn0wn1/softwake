@@ -53,7 +53,7 @@ Do not put PipeWire types into `softwake-soul`. Do not put HTTP clients into `so
 - **Sleep:** capture + wake engine only; no tool dispatch; no model “acting” channel.
 - **Awake:** capture may feed both wake-for-sleep-phrase and the active voice/session path (design detail in spike — must not miss sleep phrase).
 
-Chromium/Electron/Capacitor WebView audio is **out of scope** for the daemon. Lessons from `/www/xai-voice`: do not put the ear in a webview.
+Chromium/Electron/Capacitor WebView audio is **out of scope** for the daemon. Do not put mic capture in a webview — the daemon owns the ear.
 
 ## IPC
 
@@ -84,8 +84,3 @@ Chromium/Electron/Capacitor WebView audio is **out of scope** for the daemon. Le
 ```
 
 Project-local override optional later (`./.softwake/`) with the same trust caveats as other local config systems.
-
-## References (read, don’t vendor)
-
-- `/www/agent-desk/docs/` — wake/sleep semantics, PipeWire, Voice 2.0 notes
-- `/www/architect-soul-example/` — soul.md / AGENTS.md tone

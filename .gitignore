@@ -27,3 +27,4 @@ src-tauri/target/
 
 # Personal soul copies with private data
 /.softwake/
+/.softwake-briefs/
