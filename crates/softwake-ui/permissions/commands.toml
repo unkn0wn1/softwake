@@ -1,0 +1,24 @@
+[[permission]]
+identifier = "allow-status"
+description = "Read voice state from the daemon."
+commands.allow = ["status"]
+
+[[permission]]
+identifier = "allow-hibernate"
+description = "Ask the daemon to hibernate."
+commands.allow = ["hibernate"]
+
+[[permission]]
+identifier = "allow-resume"
+description = "Ask the daemon to leave hibernate."
+commands.allow = ["resume"]
+
+[[permission]]
+identifier = "allow-sleep"
+description = "Ask the daemon to sleep."
+commands.allow = ["sleep"]
+
+[[permission]]
+identifier = "allow-reload-soul"
+description = "Ask the daemon to record a soul reload."
+commands.allow = ["reload_soul"]

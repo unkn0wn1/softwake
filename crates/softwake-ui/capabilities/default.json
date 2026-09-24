@@ -1,0 +1,13 @@
+{
+  "identifier": "default",
+  "description": "The main window may ask the daemon for voice state.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "allow-status",
+    "allow-hibernate",
+    "allow-resume",
+    "allow-sleep",
+    "allow-reload-soul"
+  ]
+}
