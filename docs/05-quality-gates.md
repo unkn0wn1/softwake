@@ -25,17 +25,32 @@ No deploy pipeline in phase 1. Tag releases later.
 
 ## Product gates (phase 1)
 
-Manual or automated as soon as hardware allows:
+Manual checklist. Run it after clone + soul templates. The typed demo (`softwaked demo`) is the supported path that enters awake; the microphone and PipeWire are not wired yet, so wake and sleep phrases are typed commands that feed the same state machine.
 
-| Gate | Pass condition |
-|------|----------------|
-| Sleep silence | Ambient speech produces **zero** tool calls for N minutes |
-| Wake | Configured phrase transitions sleep → awake within agreed latency budget |
-| Sleep phrase | Awake → sleep; tools stop; mic stays up |
-| Hibernate | UI hibernate stops capture (no frames); voice cannot wake |
-| UI wake | Hibernate → sleep via UI |
-| Soul required | Missing `soul.md` or `user.md` blocks awake with a clear error |
-| Safe tool | One allowlisted tool succeeds end-to-end while awake |
+Copy templates first:
+
+```bash
+mkdir -p ~/.config/softwake/soul
+cp soul/soul.md soul/user.md ~/.config/softwake/soul/
+```
+
+Then:
+
+```bash
+cargo run -p softwake-daemon -- demo
+```
+
+| Gate | Pass condition | How to check today |
+|------|----------------|--------------------|
+| Sleep silence | Ambient speech produces **zero** tool calls for N minutes | Automated in unit tests for the asleep refuse path. Live ambient speech waits on a real mic (out of phase 1). Typed demo: `tool echo` while asleep is rejected. |
+| Wake | Configured phrase transitions sleep → awake within agreed latency budget | Typed demo: `wake` (or the configured wake phrase path). Needs a valid soul pack. |
+| Sleep phrase | Awake → sleep; tools stop; mic stays up | Typed demo: `sleep` after the post-wake cooldown. Capture stays running. Session closes. Further `tool` calls are rejected. |
+| Hibernate | UI hibernate stops capture (no frames); voice cannot wake | Typed demo / UI / `ctl hibernate`: capture stopped; `wake` is rejected until `resume`. |
+| UI wake | Hibernate → sleep via UI | UI button or `ctl resume` / demo `resume`. Lands in sleep, not awake. |
+| Soul required | Missing `soul.md` or `user.md` blocks awake with a clear error | Remove a soul file and `wake`; status shows soul missing and state stays sleep. Hibernate / resume / sleep still work. |
+| Safe tool | One allowlisted tool succeeds end-to-end while awake | Typed demo while awake: `tool echo hello` → `echo: hello`; `tool echo` → `pong`. Unknown names (`tool volume`) are rejected. `ctl tool echo hello` works against `serve` only after the daemon is awake. |
+
+Phase-1 allowlist is exactly `echo` ([ADR 0004](ADR-0004-first-safe-tool.md)). Do not widen it without a docs update.
 
 ## Review bar
 
