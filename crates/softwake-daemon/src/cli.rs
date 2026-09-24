@@ -52,7 +52,7 @@ where
                 }
             }
         }
-        Ok(Mode::Ctl { socket, command }) => run_ctl(socket.as_deref(), command),
+        Ok(Mode::Ctl { socket, command }) => run_ctl(socket.as_deref(), &command),
         Err(message) => {
             eprintln!("softwaked: {message}");
             print_help();
@@ -61,7 +61,7 @@ where
     }
 }
 
-fn run_ctl(socket: Option<&Path>, command: CtlAction) -> ExitCode {
+fn run_ctl(socket: Option<&Path>, command: &CtlAction) -> ExitCode {
     let path = match resolve_socket_path(socket) {
         Ok(path) => path,
         Err(error) => {
@@ -169,6 +169,8 @@ Usage:
   softwaked ctl resume      leave hibernate and land in sleep
   softwaked ctl sleep       sleep from awake
   softwaked ctl reload-soul re-read the soul pack; it applies on the next awake
+  softwaked ctl tool NAME [ARG...]
+                            run one allowlisted tool (awake only)
   softwaked --help          print this help
 
 The demo reads typed commands only and prints "> " before each line.
@@ -176,7 +178,11 @@ Mic and PipeWire are not wired yet.
 SOFTWAKE_LOG=debug enables the same detail as --verbose and -v.
 
 Demo commands, one per line:
-  wake, sleep, hibernate, resume, status, reload-soul, quit
+  wake, sleep, hibernate, resume, status, reload-soul, tool, quit
+
+`tool echo` returns pong. `tool echo hello` returns "echo: hello".
+Other tool names are rejected. Sleep and hibernate reject every tool.
+The tool runs only while awake.
 
 A wake phrase enters awake only when soul.md and user.md are present,
 non-empty, and valid UTF-8. Hibernate, sleep, and resume still run when
@@ -203,7 +209,11 @@ Soul directory, first match wins:
 ctl exits non-zero when the daemon rejects the command or cannot be reached.
 reload-soul re-reads the soul pack from disk. The daemon keeps the pack it
 already applied until the next awake session. Status reports whether that
-read is ok or missing."#
+read is ok or missing.
+
+`ctl tool` asks the running daemon to run one tool. Phase 1 allows `echo`
+only, and only while the daemon is awake. The result is printed after the
+status lines. A refusal names the reason."#
 }
 
 fn print_help() {
@@ -276,29 +286,53 @@ fn parse_serve_flags(args: impl IntoIterator<Item = String>) -> Result<Mode, Str
 }
 
 fn parse_ctl(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
+    let args: Vec<String> = args.into_iter().collect();
     let mut socket = None;
-    let mut command = None;
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--socket" => take_value("ctl", "--socket", &mut args, &mut socket)?,
-            other => {
-                let Some(parsed) = CtlAction::parse(other) else {
-                    return Err(format!("unknown ctl argument {other}"));
-                };
-                if command.is_some() {
-                    return Err("ctl takes one command".to_owned());
-                }
-                command = Some(parsed);
+    let mut positional = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--socket" {
+            if socket.is_some() {
+                return Err("ctl accepts one --socket".to_owned());
             }
+            let Some(path) = args.get(index + 1) else {
+                return Err("--socket needs a path".to_owned());
+            };
+            if path.is_empty() {
+                return Err("--socket needs a path".to_owned());
+            }
+            socket = Some(PathBuf::from(path));
+            index += 2;
+            continue;
+        }
+        positional.push(args[index].clone());
+        index += 1;
+    }
+    let command = ctl_command(&positional)?;
+    Ok(Mode::Ctl { socket, command })
+}
+
+fn ctl_command(positional: &[String]) -> Result<CtlAction, String> {
+    match positional {
+        [] => Err(
+            "ctl needs a command: status, hibernate, resume, sleep, reload-soul, tool".to_owned(),
+        ),
+        [name] if name == "tool" => Err("ctl tool needs a tool name".to_owned()),
+        [name, tool_name, tool_args @ ..] if name == "tool" => Ok(CtlAction::Tool {
+            name: tool_name.to_ascii_lowercase(),
+            args: tool_args.to_vec(),
+        }),
+        [name] => CtlAction::parse(name).ok_or_else(|| format!("unknown ctl argument {name}")),
+        [first, second, ..] => {
+            if CtlAction::parse(first).is_none() {
+                return Err(format!("unknown ctl argument {first}"));
+            }
+            if CtlAction::parse(second).is_some() || second == "tool" {
+                return Err("ctl takes one command".to_owned());
+            }
+            Err(format!("unknown ctl argument {second}"))
         }
     }
-    let Some(command) = command else {
-        return Err(
-            "ctl needs a command: status, hibernate, resume, sleep, reload-soul".to_owned(),
-        );
-    };
-    Ok(Mode::Ctl { socket, command })
 }
 
 fn take_value(
@@ -434,6 +468,9 @@ mod tests {
         assert!(help.contains("~/.config/softwake/soul"));
         assert!(help.contains("valid UTF-8"));
         assert!(help.contains("applies on the next awake"));
+        assert!(help.contains("ctl tool"));
+        assert!(help.contains("tool echo"));
+        assert!(help.contains("pong"));
     }
 
     #[test]
@@ -522,6 +559,25 @@ mod tests {
         assert!(parse_args(["ctl".to_owned()]).is_err());
         assert!(parse_args(["ctl".to_owned(), "status".to_owned(), "sleep".to_owned()]).is_err());
         assert!(parse_args(["ctl".to_owned(), "wake".to_owned()]).is_err());
+        assert!(parse_args(["ctl".to_owned(), "tool".to_owned()]).is_err());
+        assert_eq!(
+            parse_args([
+                "ctl".to_owned(),
+                "tool".to_owned(),
+                "Echo".to_owned(),
+                "Hello".to_owned(),
+                "--socket".to_owned(),
+                "/tmp/sw.sock".to_owned(),
+                "world".to_owned()
+            ]),
+            Ok(Mode::Ctl {
+                socket: Some(PathBuf::from("/tmp/sw.sock")),
+                command: CtlAction::Tool {
+                    name: "echo".to_owned(),
+                    args: vec!["Hello".to_owned(), "world".to_owned()],
+                }
+            })
+        );
         assert!(
             parse_args([
                 "ctl".to_owned(),

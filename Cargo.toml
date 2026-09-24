@@ -25,8 +25,10 @@ thiserror = "2"
 tracing = "0.1"
 softwake-audio = { path = "crates/softwake-audio" }
 softwake-ipc = { path = "crates/softwake-ipc" }
+softwake-session = { path = "crates/softwake-session" }
 softwake-soul = { path = "crates/softwake-soul" }
 softwake-state = { path = "crates/softwake-state" }
+softwake-tools = { path = "crates/softwake-tools" }
 softwake-wake = { path = "crates/softwake-wake" }
 
 [workspace.lints.rust]

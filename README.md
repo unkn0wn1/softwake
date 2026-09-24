@@ -6,7 +6,7 @@ Rust end-to-end (daemon + Tauri UI). Phase 1 nails reliable **wake / sleep / hib
 
 ## Status
 
-Cargo workspace on stable Rust (edition 2024). `softwake-state` implements sleep / awake / hibernate, including rejected transitions and phrase cooldowns. `softwake-audio` has a mock capture backend (`stop` ends frame delivery) and a trait-shaped PipeWire stub (default `pipewire` feature, no native library). `softwake-wake` scores configured phrases with a local text matcher ([ADR 0002](docs/ADR-0002-wake-engine-spike.md)). `softwake-soul` loads `soul.md` and `user.md`, checks them, and renders system instructions. `softwaked serve` speaks newline-delimited JSON on a Unix socket ([ADR 0003](docs/ADR-0003-ipc-transport.md)). `softwaked ctl` and the Tauri window `softwake-ui` are clients of that socket. Session streaming and tool runners are still later work. A missing soul pack refuses awake; `reload-soul` re-reads the files and applies on the next awake.
+Cargo workspace on stable Rust (edition 2024). `softwake-state` implements sleep / awake / hibernate, including rejected transitions and phrase cooldowns. `softwake-audio` has a mock capture backend (`stop` ends frame delivery) and a trait-shaped PipeWire stub (default `pipewire` feature, no native library). `softwake-wake` scores configured phrases with a local text matcher ([ADR 0002](docs/ADR-0002-wake-engine-spike.md)). `softwake-soul` loads `soul.md` and `user.md`, checks them, and renders system instructions. `softwaked serve` speaks newline-delimited JSON on a Unix socket ([ADR 0003](docs/ADR-0003-ipc-transport.md)). `softwaked ctl` and the Tauri window `softwake-ui` are clients of that socket. Entering awake opens a text session with the rendered soul instructions. The only allowlisted tool is `echo` ([ADR 0004](docs/ADR-0004-first-safe-tool.md)); it runs only while awake. A model client and further tools are later work. A missing soul pack refuses awake; `reload-soul` re-reads the files and applies on the next awake.
 
 ## Build and test
 
@@ -45,11 +45,48 @@ typed commands only — mic / PipeWire not wired yet
 state: sleep
 capture: running
 soul: ok
-commands: wake, sleep, hibernate, resume, status, reload-soul, quit
+commands: wake, sleep, hibernate, resume, status, reload-soul, tool, quit
 >
 ```
 
-Without those files the status line is `soul: missing` and `wake` stays in sleep. `hibernate`, `resume`, and `sleep` still run. `reload-soul` reads the directory again.
+Without those files the status line is `soul: missing` and `wake` stays in sleep. `hibernate`, `resume`, and `sleep` still run. `reload-soul` reads the directory again. `tool` is refused until a wake succeeds.
+
+Wake, run the tool, sleep, then hibernate:
+
+```text
+> wake
+heard: "hey softwake" -> wake
+transition sleep -> awake (wake phrase)
+effect: open session
+state: awake
+capture: running
+soul: ok
+> tool echo hello
+tool echo: echo: hello
+state: awake
+capture: running
+soul: ok
+> tool echo
+tool echo: pong
+state: awake
+capture: running
+soul: ok
+> sleep
+heard: "softwake sleep" -> sleep
+transition awake -> sleep (sleep phrase)
+effect: release acting resources
+state: sleep
+capture: running
+soul: ok
+> hibernate
+transition sleep -> hibernate (UI hibernate)
+effect: stop capture
+state: hibernate
+capture: stopped
+soul: ok
+```
+
+`sleep` in the 800 ms after `wake` stays awake, so a fast paste of `wake` then `sleep` will not leave awake. `hibernate` from awake does not use that cooldown. It closes the session and stops capture. `tool volume` is rejected. `tool` while asleep or hibernating is rejected.
 
 A `> ` prompt is printed before each line is read. The same path accepts a pipe (`printf 'wake\nstatus\nquit\n' | cargo run -p softwake-daemon -- demo`). `softwaked --demo` is the same mode.
 
@@ -74,9 +111,10 @@ cargo run -p softwake-daemon -- ctl status    # hibernate, capture stopped
 cargo run -p softwake-daemon -- ctl resume    # back to sleep, not awake
 cargo run -p softwake-daemon -- ctl sleep     # rejected while already asleep
 cargo run -p softwake-daemon -- ctl reload-soul
+cargo run -p softwake-daemon -- ctl tool echo hello
 ```
 
-`ctl` prints `state`, `capture`, `soul` (`ok` or `missing`), and `soul reload`, and exits non-zero when the daemon rejects the command or cannot be reached. `resume` is wake-from-hibernate and lands in sleep. `reload-soul` re-reads the soul pack from disk. The new text applies on the next awake session, not in the middle of one that is already awake.
+`ctl` prints `state`, `capture`, `soul` (`ok` or `missing`), and `soul reload`, and exits non-zero when the daemon rejects the command or cannot be reached. `resume` is wake-from-hibernate and lands in sleep. `reload-soul` re-reads the soul pack from disk. The new text applies on the next awake session, not in the middle of one that is already awake. `ctl tool` runs one allowlisted tool. The daemon starts in sleep, so `ctl tool echo hello` is refused until the daemon is awake. The typed demo is the path that enters awake. A successful tool prints its result on the line after `soul reload` (`echo: hello`, or `pong` when `echo` has no arguments).
 
 The socket path is the first match of `--socket PATH`, `SOFTWAKE_SOCKET`, `$XDG_RUNTIME_DIR/softwake/softwaked.sock`, and `/tmp/softwake-$UID/softwaked.sock` when `XDG_RUNTIME_DIR` is unset.
 
@@ -106,3 +144,4 @@ On Linux the window links WebKitGTK. The packages used in CI are `libwebkit2gtk-
 | [docs/ADR-0001-name-and-scope.md](docs/ADR-0001-name-and-scope.md) | Name and phase-1 scope |
 | [docs/ADR-0002-wake-engine-spike.md](docs/ADR-0002-wake-engine-spike.md) | Text phrase table for the wake spike |
 | [docs/ADR-0003-ipc-transport.md](docs/ADR-0003-ipc-transport.md) | Unix socket and newline-delimited JSON |
+| [docs/ADR-0004-first-safe-tool.md](docs/ADR-0004-first-safe-tool.md) | Why the first tool is `echo` |

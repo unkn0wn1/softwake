@@ -99,7 +99,9 @@ impl LoadedSoul {
     }
 
     /// Instructions applied on the last successful awake entry.
-    #[cfg(test)]
+    ///
+    /// This stays set after the text session closes. The session keeps its
+    /// own copy only while it is open.
     pub(crate) fn applied_instructions(&self) -> Option<&str> {
         self.applied.as_deref()
     }

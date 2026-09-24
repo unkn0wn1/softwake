@@ -10,7 +10,7 @@
 4. [x] `softwake-wake` spike: local wake + sleep phrases ([ADR 0002](ADR-0002-wake-engine-spike.md))
 5. [x] Daemon IPC + minimal Tauri UI: show state, hibernate, wake-from-hibernate, sleep, reload soul
 6. [x] `softwake-soul` loads `soul.md` + `user.md` (missing or invalid pack refuses awake; `reload_soul` re-reads disk and applies on the next awake)
-7. [ ] Awake session stub (even text-only first) + **one** safe tool
+7. [x] Awake session stub (even text-only first) + **one** safe tool (`echo`, [ADR 0004](ADR-0004-first-safe-tool.md))
 8. [ ] Manual gate checklist in [05-quality-gates.md](05-quality-gates.md)
 
 **Exit:** Someone else can clone, configure phrases, and demo wake → tool → sleep → hibernate without babysitting.

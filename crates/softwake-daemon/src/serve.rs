@@ -17,9 +17,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 
 use softwake_ipc::{
-    ClientMessage, Command, Event as WireEvent, HandshakeError, Listener, PROTOCOL_VERSION,
-    ResponseBody, ServerConnection, ServerMessage, ServerReader, ServerWriter, SocketError,
-    resolve_socket_path,
+    ClientMessage, Event as WireEvent, HandshakeError, Listener, PROTOCOL_VERSION, ResponseBody,
+    ServerConnection, ServerMessage, ServerReader, ServerWriter, SocketError, resolve_socket_path,
 };
 
 use softwake_soul::SoulDir;
@@ -71,22 +70,38 @@ pub(crate) fn spawn(path: PathBuf, soul_dir: SoulDir) -> Result<ServeHandle, Ser
     }
     let shutdown = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&shutdown);
+    let shared = Arc::new(Shared::new(soul_dir));
+    #[cfg(test)]
+    let shared_for_handle = Arc::clone(&shared);
     let join = thread::Builder::new()
         .name("softwake-accept".to_owned())
-        .spawn(move || accept_loop(&listener, &flag, soul_dir))
+        .spawn(move || accept_loop(&listener, &flag, &shared))
         .map_err(ServeError::Spawn)?;
     Ok(ServeHandle {
         shutdown,
         join: Some(join),
         path,
+        #[cfg(test)]
+        shared: shared_for_handle,
     })
 }
 
-#[derive(Debug)]
 pub(crate) struct ServeHandle {
     shutdown: Arc<AtomicBool>,
     join: Option<JoinHandle<Result<(), ServeError>>>,
     path: PathBuf,
+    /// Shared with the accept thread so tests can enter awake without a mic.
+    #[cfg(test)]
+    shared: Arc<Shared>,
+}
+
+impl std::fmt::Debug for ServeHandle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ServeHandle")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ServeHandle {
@@ -107,6 +122,15 @@ impl ServeHandle {
             Err(_panic) => Err(ServeError::Panicked),
         }
     }
+
+    /// Enter awake from a wake phrase on the running daemon.
+    ///
+    /// Serve has no public wake command yet. Tests use this to reach the
+    /// state where a tool call is legal. The transition is not broadcast.
+    #[cfg(test)]
+    pub(crate) fn wake_phrase_for_test(&self) -> Outcome {
+        lock(&self.shared.runtime).wake_phrase()
+    }
 }
 
 impl Drop for ServeHandle {
@@ -123,9 +147,8 @@ impl Drop for ServeHandle {
 fn accept_loop(
     listener: &Listener,
     shutdown: &AtomicBool,
-    soul_dir: SoulDir,
+    shared: &Arc<Shared>,
 ) -> Result<(), ServeError> {
-    let shared = Arc::new(Shared::new(soul_dir));
     let result = loop {
         if shutdown.load(Ordering::SeqCst) {
             break Ok(());
@@ -273,7 +296,14 @@ fn client_loop(stream: UnixStream, shared: &Shared) {
 
 fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerReader) -> bool {
     match reader.read() {
-        Ok(ClientMessage::Request { id, command }) => dispatch(shared, tx, id, command),
+        Ok(ClientMessage::Request { id, command }) => {
+            let outcome = lock(&shared.runtime).handle(command);
+            reply(shared, tx, id, outcome)
+        }
+        Ok(ClientMessage::ToolRequest { id, name, args }) => {
+            let outcome = lock(&shared.runtime).invoke_tool(&name, &args);
+            reply(shared, tx, id, outcome)
+        }
         Ok(ClientMessage::Hello { .. }) => false,
         Err(error) if error.is_disconnect() => false,
         Err(error) => {
@@ -283,12 +313,15 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
     }
 }
 
-fn dispatch(shared: &Shared, tx: &SyncSender<Outbound>, id: u64, command: Command) -> bool {
-    let Outcome { body, event } = lock(&shared.runtime).handle(command);
-    if let Some(event) = event {
-        shared.broadcast(&event);
+fn reply(shared: &Shared, tx: &SyncSender<Outbound>, id: u64, outcome: Outcome) -> bool {
+    for event in &outcome.events {
+        shared.broadcast(event);
     }
-    tx.send(Outbound::Response { id, body }).is_ok()
+    tx.send(Outbound::Response {
+        id,
+        body: outcome.body,
+    })
+    .is_ok()
 }
 
 fn write_loop(mut writer: ServerWriter, inbound: &Receiver<Outbound>) {

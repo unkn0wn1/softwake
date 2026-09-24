@@ -12,19 +12,25 @@
 //!
 //! A wake phrase is refused when the loaded soul pack is missing or invalid.
 //! `reload-soul` reads the directory again; the new text applies on the next awake.
+//! Entering awake opens a text session with those instructions. Sleep and
+//! hibernate close it. `tool` runs the one allowlisted tool, and only while awake.
 
 use std::time::Duration;
 
 use softwake_audio::{AudioCapture, MockAudioCapture};
+#[cfg(test)]
+use softwake_session::SessionPhase;
+use softwake_session::TextStubSession;
 use softwake_soul::SoulDir;
 #[cfg(test)]
 use softwake_state::VoiceState;
 use softwake_state::{CooldownConfig, Effect, Event, Machine};
 use softwake_wake::{PhraseHit, PhraseTable, TextWakeDetector};
 
+use crate::dispatch;
 use crate::soul::LoadedSoul;
 
-const COMMANDS: &str = "commands: wake, sleep, hibernate, resume, status, reload-soul, quit";
+const COMMANDS: &str = "commands: wake, sleep, hibernate, resume, status, reload-soul, tool, quit";
 const TYPED_ONLY: &str = "typed commands only — mic / PipeWire not wired yet";
 
 /// One step of the demo loop.
@@ -44,7 +50,7 @@ impl CommandResult {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Parsed {
     Empty,
     Wake,
@@ -53,6 +59,8 @@ enum Parsed {
     Resume,
     Status,
     ReloadSoul,
+    Tool { name: String, args: Vec<String> },
+    ToolMissingName,
     Quit,
     Unknown,
 }
@@ -80,7 +88,7 @@ impl VoiceCommand {
 }
 
 impl Parsed {
-    const fn as_str(self) -> &'static str {
+    fn as_str(&self) -> &'static str {
         match self {
             Self::Empty => "empty",
             Self::Wake => "wake",
@@ -89,6 +97,7 @@ impl Parsed {
             Self::Resume => "resume",
             Self::Status => "status",
             Self::ReloadSoul => "reload-soul",
+            Self::Tool { .. } | Self::ToolMissingName => "tool",
             Self::Quit => "quit",
             Self::Unknown => "unknown",
         }
@@ -102,6 +111,7 @@ pub(crate) struct Demo {
     capture: MockAudioCapture,
     detector: TextWakeDetector,
     soul: LoadedSoul,
+    session: TextStubSession,
     verbose: bool,
 }
 
@@ -118,6 +128,7 @@ impl Demo {
             capture,
             detector: TextWakeDetector::new(table),
             soul: LoadedSoul::open(soul_dir),
+            session: TextStubSession::default(),
             verbose: false,
         }
     }
@@ -145,6 +156,8 @@ impl Demo {
     pub(crate) fn handle_line(&mut self, line: &str, elapsed: Duration) -> CommandResult {
         self.machine.advance(elapsed);
         let parsed = parse_line(line);
+        let parsed_label = parsed.as_str();
+        let quit = matches!(parsed, Parsed::Quit);
         let mut lines = match parsed {
             Parsed::Empty => return CommandResult::stay(Vec::new()),
             Parsed::Wake => self.voice(VoiceCommand::Wake),
@@ -153,6 +166,17 @@ impl Demo {
             Parsed::Resume => self.ui(Event::UiResume),
             Parsed::Status => self.status_lines(),
             Parsed::ReloadSoul => self.reload(),
+            Parsed::Tool { name, args } => self.tool(&name, &args),
+            Parsed::ToolMissingName => {
+                let mut lines = vec![
+                    "rejected: tool needs a name".to_owned(),
+                    COMMANDS.to_owned(),
+                ];
+                if self.verbose {
+                    lines.insert(0, "verbose: rejected: tool needs a name".to_owned());
+                }
+                lines
+            }
             Parsed::Quit => vec!["quit".to_owned()],
             Parsed::Unknown => vec![
                 format!("unknown command: {}", line.trim()),
@@ -162,11 +186,11 @@ impl Demo {
         if self.verbose {
             let mut prefixed = Vec::with_capacity(lines.len() + 2);
             prefixed.push(format!("verbose: raw: {line:?}"));
-            prefixed.push(format!("verbose: parsed: {}", parsed.as_str()));
+            prefixed.push(format!("verbose: parsed: {parsed_label}"));
             prefixed.append(&mut lines);
             lines = prefixed;
         }
-        if parsed == Parsed::Quit {
+        if quit {
             CommandResult::quit(lines)
         } else {
             CommandResult::stay(lines)
@@ -191,6 +215,16 @@ impl Demo {
     #[cfg(test)]
     fn applied_instructions(&self) -> Option<&str> {
         self.soul.applied_instructions()
+    }
+
+    #[cfg(test)]
+    fn session_phase(&self) -> SessionPhase {
+        self.session.phase()
+    }
+
+    #[cfg(test)]
+    fn session_instructions(&self) -> Option<&str> {
+        self.session.instructions()
     }
 
     fn voice(&mut self, command: VoiceCommand) -> Vec<String> {
@@ -275,6 +309,24 @@ impl Demo {
         self.with_status(vec![self.soul.reload_summary()])
     }
 
+    fn tool(&mut self, name: &str, args: &[String]) -> Vec<String> {
+        let mut lines = Vec::new();
+        self.push_verbose(&mut lines, format!("tool: {name}"));
+        self.push_verbose(&mut lines, format!("args: {args:?}"));
+        match dispatch::invoke(&self.machine, name, args) {
+            Ok(result) => {
+                let detail = result.detail;
+                lines.push(format!("tool {name}: {detail}"));
+            }
+            Err(error) => {
+                let rejected = format!("rejected: {error}");
+                self.push_verbose(&mut lines, &rejected);
+                lines.push(rejected);
+            }
+        }
+        self.with_status(lines)
+    }
+
     fn transition(&mut self, event: Event) -> Vec<String> {
         if event == Event::WakePhrase {
             if let Some(reason) = self.soul.refusal() {
@@ -318,9 +370,8 @@ impl Demo {
 
     fn run_effect(&mut self, effect: Effect) {
         match effect {
-            // The session crate is a later milestone. `Machine::apply` has
-            // already stored the new state, so tool dispatch follows it.
-            Effect::OpenSession | Effect::ReleaseActingResources => {}
+            Effect::OpenSession => self.open_session(),
+            Effect::ReleaseActingResources => self.session.close(),
             Effect::StopCapture => {
                 let Ok(()) = self.capture.stop();
             }
@@ -328,6 +379,15 @@ impl Demo {
                 let Ok(()) = self.capture.start();
             }
         }
+    }
+
+    fn open_session(&mut self) {
+        // `commit_awake` runs before effects on a wake phrase. A missing pack
+        // never reaches this effect; leave the session closed if it does.
+        let Some(instructions) = self.soul.applied_instructions() else {
+            return;
+        };
+        self.session = TextStubSession::open(instructions.to_owned());
     }
 
     fn status_lines(&self) -> Vec<String> {
@@ -355,8 +415,24 @@ impl Demo {
 }
 
 fn parse_line(line: &str) -> Parsed {
-    match line.trim().to_ascii_lowercase().as_str() {
-        "" => Parsed::Empty,
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Parsed::Empty;
+    }
+    let mut parts = trimmed.split_whitespace();
+    let Some(head) = parts.next() else {
+        return Parsed::Empty;
+    };
+    if head.eq_ignore_ascii_case("tool") {
+        let Some(name) = parts.next() else {
+            return Parsed::ToolMissingName;
+        };
+        return Parsed::Tool {
+            name: name.to_ascii_lowercase(),
+            args: parts.map(str::to_owned).collect(),
+        };
+    }
+    match trimmed.to_ascii_lowercase().as_str() {
         "wake" => Parsed::Wake,
         "sleep" => Parsed::Sleep,
         "hibernate" => Parsed::Hibernate,

@@ -198,3 +198,87 @@ impl TempSocket {
         &self.path
     }
 }
+
+#[test]
+fn ctl_tool_is_refused_until_awake_then_echo_is_deterministic() {
+    let temp = TempSocket::new();
+    let soul = TestSoulDir::valid();
+    let server = serve::spawn(temp.path.clone(), soul.soul_dir()).expect("serve");
+
+    let asleep = ctl::call_tool(temp.path(), "echo", &["hello".to_owned()]).expect_err("asleep");
+    assert!(
+        asleep.to_string().contains("cannot run echo while sleep"),
+        "{asleep}"
+    );
+
+    let woke = server.wake_phrase_for_test();
+    assert!(woke.body.status().is_some(), "wake should apply: {woke:?}");
+
+    let mut watcher = Client::connect(temp.path()).expect("watcher");
+    watcher
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("timeout");
+
+    let ran = ctl::call_tool(temp.path(), "echo", &["hello".to_owned()]).expect("echo");
+    assert_eq!(ran.state, VoiceState::Awake);
+    assert_eq!(ran.message.as_deref(), Some("echo: hello"));
+    assert_eq!(ran.detail.as_deref(), Some("echo: hello"));
+    assert!(ctl::format_status(&ran).contains("echo: hello"));
+
+    let pong = ctl::call_tool(temp.path(), "echo", &[]).expect("pong");
+    assert_eq!(pong.message.as_deref(), Some("pong"));
+
+    match watcher.read().expect("started") {
+        ServerMessage::Event {
+            body: Event::ToolStarted { name },
+        } => assert_eq!(name, "echo"),
+        other => panic!("expected tool_started, got {other:?}"),
+    }
+    match watcher.read().expect("finished") {
+        ServerMessage::Event {
+            body: Event::ToolFinished { name, detail },
+        } => {
+            assert_eq!(name, "echo");
+            assert_eq!(detail.as_deref(), Some("echo: hello"));
+        }
+        other => panic!("expected tool_finished, got {other:?}"),
+    }
+    match watcher.read().expect("pong started") {
+        ServerMessage::Event {
+            body: Event::ToolStarted { name },
+        } => assert_eq!(name, "echo"),
+        other => panic!("expected tool_started, got {other:?}"),
+    }
+    match watcher.read().expect("pong finished") {
+        ServerMessage::Event {
+            body: Event::ToolFinished { detail, .. },
+        } => assert_eq!(detail.as_deref(), Some("pong")),
+        other => panic!("expected tool_finished, got {other:?}"),
+    }
+
+    let unknown = ctl::call_tool(temp.path(), "volume", &[]).expect_err("unknown");
+    assert!(
+        unknown.to_string().contains("unknown tool: volume"),
+        "{unknown}"
+    );
+
+    let hibernated = ctl::call(temp.path(), Command::Hibernate).expect("hibernate");
+    assert_eq!(hibernated.state, VoiceState::Hibernate);
+    match watcher.read().expect("state") {
+        ServerMessage::Event {
+            body: Event::StateChanged { state, .. },
+        } => assert_eq!(state, VoiceState::Hibernate),
+        other => panic!("expected state_changed after the tool events, got {other:?}"),
+    }
+
+    let refused = ctl::call_tool(temp.path(), "echo", &[]).expect_err("hibernate");
+    assert!(
+        refused
+            .to_string()
+            .contains("cannot run echo while hibernate"),
+        "{refused}"
+    );
+
+    drop(watcher);
+    drop(server);
+}

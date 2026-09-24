@@ -5,25 +5,32 @@
 //! [`Command::ReloadSoul`] re-reads the soul directory. That read applies on
 //! the next transition into awake, not in the middle of an awake session.
 //! A wake phrase with a missing or invalid pack leaves the machine where it is.
+//! A successful awake opens a text session with the rendered instructions.
+//! Sleep and hibernate close that session. Tools run only while awake.
 
 use softwake_audio::{AudioCapture, MockAudioCapture};
 use softwake_ipc::VoiceState as WireState;
 use softwake_ipc::{Command, Event as WireEvent, IpcError, ResponseBody, Status};
+#[cfg(test)]
+use softwake_session::SessionPhase;
+use softwake_session::TextStubSession;
 use softwake_soul::SoulDir;
 use softwake_state::{CooldownConfig, Effect, Event, Machine, StateError, VoiceState};
 
+use crate::dispatch::{self, DispatchError};
 use crate::soul::LoadedSoul;
 
 #[derive(Debug)]
 pub(crate) struct Outcome {
     pub(crate) body: ResponseBody,
-    pub(crate) event: Option<WireEvent>,
+    pub(crate) events: Vec<WireEvent>,
 }
 
 pub(crate) struct Runtime {
     machine: Machine,
     capture: MockAudioCapture,
     soul: LoadedSoul,
+    session: TextStubSession,
 }
 
 impl Runtime {
@@ -36,6 +43,7 @@ impl Runtime {
             machine: Machine::new(CooldownConfig::default()),
             capture,
             soul: LoadedSoul::open(soul_dir),
+            session: TextStubSession::default(),
         }
     }
 
@@ -46,16 +54,10 @@ impl Runtime {
     /// not emit that event.
     pub(crate) fn handle(&mut self, command: Command) -> Outcome {
         match command {
-            Command::GetStatus => Outcome {
-                body: ResponseBody::ok(self.snapshot(None, None)),
-                event: None,
-            },
+            Command::GetStatus => Self::quiet(self.snapshot(None, None)),
             Command::ReloadSoul => {
                 self.soul.reload();
-                Outcome {
-                    body: ResponseBody::ok(self.snapshot(Some(self.soul.reload_summary()), None)),
-                    event: None,
-                }
+                Self::quiet(self.snapshot(Some(self.soul.reload_summary()), None))
             }
             Command::Hibernate | Command::WakeFromUi | Command::Sleep => self.transition(command),
         }
@@ -72,12 +74,7 @@ impl Runtime {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn wake_phrase(&mut self) -> Outcome {
         if let Some(reason) = self.soul.refusal() {
-            return Outcome {
-                body: ResponseBody::Err {
-                    error: IpcError::protocol(reason),
-                },
-                event: None,
-            };
+            return Self::rejected(IpcError::protocol(reason));
         }
         self.apply_voice(Event::WakePhrase, |error| {
             IpcError::protocol(error.to_string())
@@ -88,6 +85,45 @@ impl Runtime {
     #[cfg(test)]
     pub(crate) fn applied_instructions(&self) -> Option<&str> {
         self.soul.applied_instructions()
+    }
+
+    /// Phase of the text session. Closed unless awake opened it.
+    #[cfg(test)]
+    pub(crate) fn session_phase(&self) -> SessionPhase {
+        self.session.phase()
+    }
+
+    /// Instructions held by the open session.
+    #[cfg(test)]
+    pub(crate) fn session_instructions(&self) -> Option<&str> {
+        self.session.instructions()
+    }
+
+    /// Run one tool. Sleep and hibernate refuse the call before the allowlist.
+    ///
+    /// A successful run emits [`WireEvent::ToolStarted`] and then
+    /// [`WireEvent::ToolFinished`]. A refusal emits neither.
+    pub(crate) fn invoke_tool(&mut self, name: &str, args: &[String]) -> Outcome {
+        match dispatch::invoke(&self.machine, name, args) {
+            Ok(result) => {
+                let detail = result.detail;
+                Outcome {
+                    body: ResponseBody::ok(
+                        self.snapshot(Some(detail.clone()), Some(detail.clone())),
+                    ),
+                    events: vec![
+                        WireEvent::ToolStarted {
+                            name: name.to_owned(),
+                        },
+                        WireEvent::ToolFinished {
+                            name: name.to_owned(),
+                            detail: Some(detail),
+                        },
+                    ],
+                }
+            }
+            Err(error) => Self::rejected(tool_ipc_error(name, &error)),
+        }
     }
 
     fn transition(&mut self, command: Command) -> Outcome {
@@ -113,27 +149,60 @@ impl Runtime {
                 if event == Event::WakePhrase {
                     self.soul.commit_awake();
                 }
-                apply_effects(&mut self.capture, applied.effects);
+                self.apply_effects(applied.effects);
                 let state = wire_state(self.machine.state());
                 let capture_running = self.capture.is_running();
                 let detail = Some(format!("{previous} -> {state}"));
                 Outcome {
                     body: ResponseBody::ok(self.snapshot(None, detail.clone())),
-                    event: Some(WireEvent::StateChanged {
+                    events: vec![WireEvent::StateChanged {
                         state,
                         previous,
                         capture_running,
                         detail,
-                    }),
+                    }],
                 }
             }
-            Err(error) => Outcome {
-                body: ResponseBody::Err {
-                    error: map_err(error),
-                },
-                event: None,
-            },
+            Err(error) => Self::rejected(map_err(error)),
         }
+    }
+
+    fn quiet(snapshot: Status) -> Outcome {
+        Outcome {
+            body: ResponseBody::ok(snapshot),
+            events: Vec::new(),
+        }
+    }
+
+    fn rejected(error: IpcError) -> Outcome {
+        Outcome {
+            body: ResponseBody::Err { error },
+            events: Vec::new(),
+        }
+    }
+
+    fn apply_effects(&mut self, effects: &[Effect]) {
+        for effect in effects {
+            match effect {
+                Effect::OpenSession => self.open_session(),
+                Effect::ReleaseActingResources => self.session.close(),
+                Effect::StopCapture => {
+                    let Ok(()) = self.capture.stop();
+                }
+                Effect::StartCapture => {
+                    let Ok(()) = self.capture.start();
+                }
+            }
+        }
+    }
+
+    fn open_session(&mut self) {
+        // `commit_awake` runs before effects on a wake phrase. A missing pack
+        // never reaches this effect; leave the session closed if it does.
+        let Some(instructions) = self.soul.applied_instructions() else {
+            return;
+        };
+        self.session = TextStubSession::open(instructions.to_owned());
     }
 
     fn snapshot(&self, message: Option<String>, detail: Option<String>) -> Status {
@@ -153,23 +222,17 @@ fn protocol_outcome(message: &str) -> Outcome {
         body: ResponseBody::Err {
             error: IpcError::protocol(message),
         },
-        event: None,
+        events: Vec::new(),
     }
 }
 
-/// Session open and release are recorded by [`Machine::apply`] itself.
-/// The session crate arrives in a later milestone.
-fn apply_effects(capture: &mut MockAudioCapture, effects: &[Effect]) {
-    for effect in effects {
-        match effect {
-            Effect::OpenSession | Effect::ReleaseActingResources => {}
-            Effect::StopCapture => {
-                let Ok(()) = capture.stop();
-            }
-            Effect::StartCapture => {
-                let Ok(()) = capture.start();
-            }
-        }
+fn tool_ipc_error(name: &str, error: &DispatchError) -> IpcError {
+    match error {
+        DispatchError::Forbidden { state, .. } => IpcError::ToolForbidden {
+            name: name.to_owned(),
+            state: wire_state(*state),
+        },
+        DispatchError::Unknown { name } => IpcError::UnknownTool { name: name.clone() },
     }
 }
 
@@ -204,6 +267,7 @@ mod tests {
     use super::Runtime;
     use crate::soul::{TestSoulDir, reload_message};
     use softwake_ipc::{Command, Event, IpcError, ResponseBody, VoiceState};
+    use softwake_session::SessionPhase;
 
     fn valid_runtime() -> (Runtime, TestSoulDir) {
         let dir = TestSoulDir::valid();
@@ -230,13 +294,13 @@ mod tests {
         assert_eq!(status.detail.as_deref(), Some("awake -> sleep"));
         assert!(status.soul.as_ref().is_some_and(|soul| soul.ok));
         assert!(matches!(
-            slept.event,
-            Some(Event::StateChanged {
+            slept.events.as_slice(),
+            [Event::StateChanged {
                 state: VoiceState::Sleep,
                 previous: VoiceState::Awake,
                 capture_running: true,
                 ..
-            })
+            }]
         ));
 
         runtime
@@ -248,11 +312,11 @@ mod tests {
         assert_eq!(status.state, VoiceState::Hibernate);
         assert!(!status.capture_running);
         assert!(matches!(
-            hibernated.event,
-            Some(Event::StateChanged {
+            hibernated.events.as_slice(),
+            [Event::StateChanged {
                 capture_running: false,
                 ..
-            })
+            }]
         ));
     }
 
@@ -260,7 +324,7 @@ mod tests {
     fn illegal_sleep_does_not_emit_a_state_change() {
         let (mut runtime, _soul) = valid_runtime();
         let outcome = runtime.handle(Command::Sleep);
-        assert!(outcome.event.is_none());
+        assert!(outcome.events.is_empty());
         match outcome.body {
             ResponseBody::Err {
                 error: IpcError::IllegalTransition { from, command, .. },
@@ -271,7 +335,7 @@ mod tests {
             other => panic!("expected illegal transition, got {other:?}"),
         }
         let status = runtime.handle(Command::GetStatus);
-        assert!(status.event.is_none());
+        assert!(status.events.is_empty());
         assert_eq!(
             status.body.status().expect("status").state,
             VoiceState::Sleep
@@ -282,7 +346,7 @@ mod tests {
     fn reload_sticks_across_hibernate_without_a_state_event() {
         let (mut runtime, _soul) = valid_runtime();
         let reloaded = runtime.handle(Command::ReloadSoul);
-        assert!(reloaded.event.is_none());
+        assert!(reloaded.events.is_empty());
         let status = reloaded.body.status().expect("reload");
         assert!(status.soul_reload_pending);
         assert!(status.soul.as_ref().is_some_and(|soul| soul.ok));
@@ -307,7 +371,7 @@ mod tests {
         let soul = TestSoulDir::empty();
         let mut runtime = Runtime::new(soul.soul_dir());
         let refused = runtime.wake_phrase();
-        assert!(refused.event.is_none());
+        assert!(refused.events.is_empty());
         match refused.body {
             ResponseBody::Err {
                 error: IpcError::Protocol { message },
@@ -366,12 +430,12 @@ mod tests {
     fn reload_then_wake_applies_the_fixed_pack() {
         let soul = TestSoulDir::empty();
         let mut runtime = Runtime::new(soul.soul_dir());
-        assert!(runtime.wake_phrase().event.is_none());
+        assert!(runtime.wake_phrase().events.is_empty());
         assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Sleep);
 
         soul.write("fixed soul\n", "fixed user\n");
         // Files changed on disk. Without reload the cached miss still refuses.
-        assert!(runtime.wake_phrase().event.is_none());
+        assert!(runtime.wake_phrase().events.is_empty());
         assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Sleep);
 
         let reloaded = runtime.handle(Command::ReloadSoul);
@@ -386,12 +450,12 @@ mod tests {
         assert_eq!(status.state, VoiceState::Awake);
         assert!(!status.soul_reload_pending);
         assert!(matches!(
-            woke.event,
-            Some(Event::StateChanged {
+            woke.events.as_slice(),
+            [Event::StateChanged {
                 state: VoiceState::Awake,
                 previous: VoiceState::Sleep,
                 ..
-            })
+            }]
         ));
         assert!(runtime.machine.permit_tool_dispatch().is_ok());
         let applied = runtime.applied_instructions().expect("applied");
@@ -477,10 +541,149 @@ mod tests {
         runtime.handle(Command::Sleep);
         runtime.machine.advance(Duration::from_millis(800));
         let refused = runtime.wake_phrase();
-        assert!(refused.event.is_none());
+        assert!(refused.events.is_empty());
         assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Sleep);
         assert!(runtime.machine.permit_tool_dispatch().is_err());
         assert!(runtime.soul.reload_pending());
         assert_eq!(runtime.applied_instructions(), Some(original.as_str()));
+        assert_eq!(runtime.session_phase(), SessionPhase::Closed);
+        assert!(runtime.session_instructions().is_none());
+    }
+
+    #[test]
+    fn echo_runs_only_while_awake() {
+        let (mut runtime, _soul) = valid_runtime();
+
+        let asleep = runtime.invoke_tool("echo", &["hello".to_owned()]);
+        assert!(asleep.events.is_empty());
+        assert!(matches!(
+            asleep.body,
+            ResponseBody::Err {
+                error: IpcError::ToolForbidden {
+                    name,
+                    state: VoiceState::Sleep,
+                }
+            } if name == "echo"
+        ));
+
+        let unknown_asleep = runtime.invoke_tool("volume", &[]);
+        assert!(unknown_asleep.events.is_empty());
+        assert!(matches!(
+            unknown_asleep.body,
+            ResponseBody::Err {
+                error: IpcError::ToolForbidden {
+                    state: VoiceState::Sleep,
+                    ..
+                }
+            }
+        ));
+
+        wake(&mut runtime);
+        let ran = runtime.invoke_tool("echo", &["hello".to_owned(), "world".to_owned()]);
+        let status = ran.body.status().expect("echo");
+        assert_eq!(status.message.as_deref(), Some("echo: hello world"));
+        assert_eq!(status.detail.as_deref(), Some("echo: hello world"));
+        assert!(matches!(
+            ran.events.as_slice(),
+            [
+                Event::ToolStarted { name: started },
+                Event::ToolFinished {
+                    name: finished,
+                    detail: Some(detail),
+                },
+            ] if started == "echo" && finished == "echo" && detail == "echo: hello world"
+        ));
+        assert_eq!(
+            runtime
+                .invoke_tool("echo", &[])
+                .body
+                .status()
+                .expect("pong")
+                .message
+                .as_deref(),
+            Some("pong")
+        );
+
+        let unknown = runtime.invoke_tool("volume", &[]);
+        assert!(unknown.events.is_empty());
+        assert!(matches!(
+            unknown.body,
+            ResponseBody::Err {
+                error: IpcError::UnknownTool { name }
+            } if name == "volume"
+        ));
+
+        runtime.handle(Command::Sleep);
+        assert!(matches!(
+            runtime.invoke_tool("echo", &[]).body,
+            ResponseBody::Err {
+                error: IpcError::ToolForbidden {
+                    state: VoiceState::Sleep,
+                    ..
+                }
+            }
+        ));
+
+        runtime.machine.advance(Duration::from_millis(800));
+        wake(&mut runtime);
+        runtime.handle(Command::Hibernate);
+        let hibernated = runtime.invoke_tool("echo", &["x".to_owned()]);
+        assert!(hibernated.events.is_empty());
+        assert!(matches!(
+            hibernated.body,
+            ResponseBody::Err {
+                error: IpcError::ToolForbidden {
+                    state: VoiceState::Hibernate,
+                    ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn session_opens_with_soul_instructions_and_closes_when_acting_stops() {
+        let (mut runtime, soul) = valid_runtime();
+        assert_eq!(runtime.session_phase(), SessionPhase::Closed);
+        assert!(runtime.session_instructions().is_none());
+
+        wake(&mut runtime);
+        assert_eq!(runtime.session_phase(), SessionPhase::Open);
+        let instructions = runtime
+            .session_instructions()
+            .expect("session opened")
+            .to_owned();
+        assert!(instructions.contains("test soul"));
+        assert!(instructions.contains("test user"));
+        assert!(instructions.contains("Tool allowlist: echo."));
+        assert_eq!(runtime.applied_instructions(), Some(instructions.as_str()));
+
+        soul.write("updated soul\n", "updated user\n");
+        runtime.handle(Command::ReloadSoul);
+        assert_eq!(runtime.session_instructions(), Some(instructions.as_str()));
+
+        runtime.handle(Command::Sleep);
+        assert_eq!(runtime.session_phase(), SessionPhase::Closed);
+        assert!(runtime.session_instructions().is_none());
+        assert!(
+            runtime
+                .applied_instructions()
+                .expect("last applied pack")
+                .contains("test soul")
+        );
+
+        runtime.machine.advance(Duration::from_millis(800));
+        wake(&mut runtime);
+        let reopened = runtime.session_instructions().expect("reopened");
+        assert!(reopened.contains("updated soul"));
+        assert!(reopened.contains("updated user"));
+        assert!(reopened.contains("Tool allowlist: echo."));
+
+        runtime.handle(Command::Hibernate);
+        assert_eq!(
+            runtime.machine.state(),
+            softwake_state::VoiceState::Hibernate
+        );
+        assert_eq!(runtime.session_phase(), SessionPhase::Closed);
+        assert!(runtime.session_instructions().is_none());
     }
 }

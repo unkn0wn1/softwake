@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use softwake_session::SessionPhase;
 use softwake_state::{CooldownConfig, VoiceState};
 use softwake_wake::PhraseTable;
 
@@ -554,4 +555,103 @@ fn missing_soul_refuses_wake_until_reload() {
     assert!(applied.contains("Fresh user"));
     assert!(applied.contains("# Runtime policy"));
     assert!(applied.contains("State: awake."));
+    assert!(applied.contains("Tool allowlist: echo."));
+    assert_eq!(demo.session_phase(), SessionPhase::Open);
+    assert_eq!(demo.session_instructions(), Some(applied));
+}
+
+#[test]
+fn tool_echo_requires_awake_and_the_session_opens_and_closes() {
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    assert_eq!(demo.session_phase(), SessionPhase::Closed);
+    assert!(demo.session_instructions().is_none());
+
+    let asleep = demo.handle_line("tool echo hello", Duration::ZERO);
+    assert!(
+        asleep
+            .lines
+            .iter()
+            .any(|line| line.contains("cannot run echo while sleep"))
+    );
+    assert_eq!(demo.state(), VoiceState::Sleep);
+    assert_eq!(demo.session_phase(), SessionPhase::Closed);
+
+    let unknown_asleep = demo.handle_line("tool volume", Duration::ZERO);
+    assert!(
+        unknown_asleep
+            .lines
+            .iter()
+            .any(|line| line.contains("cannot run volume while sleep"))
+    );
+
+    demo.handle_line("wake", Duration::ZERO);
+    assert_eq!(demo.session_phase(), SessionPhase::Open);
+    let instructions = demo.session_instructions().expect("open").to_owned();
+    assert!(instructions.contains("test soul"));
+    assert!(instructions.contains("test user"));
+    assert!(instructions.contains("Tool allowlist: echo."));
+
+    let ran = demo.handle_line("tool echo Hello", Duration::ZERO);
+    assert!(
+        ran.lines
+            .iter()
+            .any(|line| line == "tool echo: echo: Hello")
+    );
+    assert_eq!(demo.state(), VoiceState::Awake);
+
+    let pong = demo.handle_line("tool echo", Duration::ZERO);
+    assert!(pong.lines.iter().any(|line| line == "tool echo: pong"));
+
+    let multi = demo.handle_line("tool echo hello world", Duration::ZERO);
+    assert!(
+        multi
+            .lines
+            .iter()
+            .any(|line| line == "tool echo: echo: hello world")
+    );
+
+    let unknown = demo.handle_line("tool volume", Duration::ZERO);
+    assert!(
+        unknown
+            .lines
+            .iter()
+            .any(|line| line.contains("unknown tool: volume"))
+    );
+    assert_eq!(demo.state(), VoiceState::Awake);
+    assert_eq!(demo.session_instructions(), Some(instructions.as_str()));
+
+    let missing = demo.handle_line("tool", Duration::ZERO);
+    assert!(
+        missing
+            .lines
+            .iter()
+            .any(|line| line.contains("tool needs a name"))
+    );
+
+    demo.handle_line("sleep", Duration::ZERO);
+    assert_eq!(demo.state(), VoiceState::Sleep);
+    assert!(demo.capture_running());
+    assert_eq!(demo.session_phase(), SessionPhase::Closed);
+    assert!(demo.session_instructions().is_none());
+    let after_sleep = demo.handle_line("tool echo", Duration::ZERO);
+    assert!(
+        after_sleep
+            .lines
+            .iter()
+            .any(|line| line.contains("cannot run echo while sleep"))
+    );
+
+    demo.handle_line("wake", Duration::ZERO);
+    assert_eq!(demo.session_phase(), SessionPhase::Open);
+    demo.handle_line("hibernate", Duration::ZERO);
+    assert_eq!(demo.state(), VoiceState::Hibernate);
+    assert!(!demo.capture_running());
+    assert_eq!(demo.session_phase(), SessionPhase::Closed);
+    let hibernated = demo.handle_line("tool echo", Duration::ZERO);
+    assert!(
+        hibernated
+            .lines
+            .iter()
+            .any(|line| line.contains("cannot run echo while hibernate"))
+    );
 }
