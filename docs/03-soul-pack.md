@@ -23,13 +23,37 @@ When memory lands, it must be a **separate module** with clear read/write APIs. 
 
 ## Loading rules
 
-1. Read from configured soul directory (default `~/.config/softwake/soul/`).
-2. Validate UTF-8, max size caps (prevent multi‑MB accidents).
-3. Render a single system instruction document with clear sections:
+1. Read from the configured soul directory.
+2. Both files must be present, non-empty (whitespace-only counts as empty), and valid UTF-8.
+3. Each file is capped at 1 MiB so a multi-megabyte paste is rejected before it is decoded.
+4. Render one system instruction document with three sections:
    - Identity (`soul.md`)
    - User profile (`user.md`)
-   - Runtime policy (state: awake; tool allowlist summary; confirm rules)
-4. `reload_soul` IPC re-reads from disk; in-flight awake session either hot-reloads safely or requires re-wake (pick one in implementation and document it — prefer “applies on next awake” for simplicity).
+   - Runtime policy stub (state: awake; tool allowlist placeholder; confirm-rules placeholder)
+5. A missing or invalid pack **refuses awake**. Hibernate, sleep, and UI resume still run. The machine is not left half-awake.
+
+## Directory
+
+First match wins:
+
+1. `--soul-dir PATH` on `softwaked serve` and `softwaked demo`
+2. `SOFTWAKE_SOUL_DIR`
+3. `$XDG_CONFIG_HOME/softwake/soul` when `XDG_CONFIG_HOME` is set and not blank
+4. `~/.config/softwake/soul/` otherwise (`$HOME/.config/softwake/soul`)
+
+The directory does not have to exist at startup. Serve and the demo still start; status reports the pack as missing until the files are in place and re-read.
+
+## Reload
+
+`reload_soul` (ctl `reload-soul`, the demo command `reload-soul`, and the UI button) **re-reads the files from disk now** and reports whether that read is valid. The new text **applies on the next awake**. It does not replace instructions in an awake session that is already running.
+
+- Startup reads the directory once and does not set the pending flag.
+- `reload_soul` sets the pending flag, including when the new read is invalid.
+- The flag clears only after a **successful** transition into awake applies the last good read.
+- A refused wake leaves the flag set and leaves the voice state unchanged.
+- Editing the files without `reload_soul` does not change what the next wake applies. The daemon uses the last startup or reload read, not a silent re-read at wake time.
+
+Status carries an optional `soul` object: `{ "ok": true }` or `{ "ok": false, "reason": "..." }`. Peers that predate the field still decode. Protocol generation stays `1`.
 
 ## Repo templates
 

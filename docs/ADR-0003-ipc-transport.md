@@ -20,7 +20,9 @@ The uid is the owner of `/proc/self` (Linux). If that cannot be read and `XDG_RU
 
 A client read waits at most 5 seconds for a frame. Serve accepts more than one client. A state change is broadcast as `state_changed`. A rejected command is a `response` with `status: err` and does not emit `state_changed`. `event: error` is reserved for a failure that is not the reply to one request.
 
-`reload_soul` records that the soul pack should be re-read on the next awake session. It does not parse `soul.md`. The flag stays set. `set_config` stays absent.
+`reload_soul` re-reads `soul.md` and `user.md` from disk and sets `soul_reload_pending`. The new text applies on the next transition into awake; an in-flight awake session keeps the instructions it already applied. The flag clears only after that apply succeeds. A missing or invalid pack refuses awake and leaves the flag set. `set_config` stays absent.
+
+Status gained an optional `soul` object (`ok`, and `reason` when the pack is not valid) with `serde` default. Omitted on older peers, ignored by older clients. That did not change the meaning of existing fields, so the protocol generation stays `1`. The hello handshake is unchanged. This replaces the earlier note that `reload_soul` only recorded a request and did not parse the pack.
 
 Lines longer than 1 MiB, including the newline, are rejected.
 
@@ -43,3 +45,4 @@ Phase 1 does not take a tokio runtime. Blocking std threads are enough for a han
 - A crashed serve can leave the socket file. The next serve removes it when the probe is refused.
 - A client that stops reading can fill a small outbound queue. Further events for that client are dropped until it reads again. `get_status` still reports the current state.
 - The Tauri window polls `get_status`. It can also be a long-lived subscriber later. The broadcast is already there.
+- `soul` on status is additive. Clients that do not know the field still parse the rest of a status payload.

@@ -1,5 +1,6 @@
 const stateEl = document.querySelector("#state");
 const captureEl = document.querySelector("#capture");
+const soulEl = document.querySelector("#soul");
 const reloadEl = document.querySelector("#reload");
 const detailEl = document.querySelector("#detail");
 const errorEl = document.querySelector("#error");
@@ -19,9 +20,17 @@ function invoke(command) {
   return core.invoke(command);
 }
 
+function soulLine(status) {
+  if (!status.soul) {
+    return "soul: unknown";
+  }
+  return status.soul.ok ? "soul: ok" : "soul: missing";
+}
+
 function show(status, keepError) {
   stateEl.textContent = status.state;
   captureEl.textContent = status.capture_running ? "capture: running" : "capture: stopped";
+  soulEl.textContent = soulLine(status);
   reloadEl.textContent = status.soul_reload_pending
     ? "soul reload: pending — applies on next awake"
     : "soul reload: not pending";
@@ -42,6 +51,7 @@ async function refresh() {
   } catch (error) {
     stateEl.textContent = "—";
     captureEl.textContent = "";
+    soulEl.textContent = "";
     reloadEl.textContent = "";
     detailEl.textContent = "";
     showError(error);

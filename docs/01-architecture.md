@@ -67,7 +67,9 @@ Unix domain socket and newline-delimited JSON, protocol version 1. The path, fra
 - `set_config` is intentionally absent until the daemon can validate a configuration document.
 - Events: `state_changed`, `partial_transcript` (awake only; not emitted yet), `tool_started`, `tool_finished`, `error`.
 - A rejected command is an error response. `state_changed` is broadcast only when the voice state changes.
-- `reload_soul` records that a reload should apply on the next awake session. It does not parse the soul pack.
+- `reload_soul` re-reads `soul.md` and `user.md` from disk. The new text applies on the next awake, not in the middle of an awake session. A missing or invalid pack refuses awake; hibernate, sleep, and UI resume still run.
+- Status may include `soul`: `{ "ok": true }` or `{ "ok": false, "reason": "..." }`. The field is optional on the wire so older payloads still decode. Protocol generation stays 1.
+- Soul directory, first match: `--soul-dir`, `SOFTWAKE_SOUL_DIR`, `$XDG_CONFIG_HOME/softwake/soul`, `~/.config/softwake/soul`.
 - `softwaked serve` listens. `softwaked ctl` and the Tauri window connect to it. Default path: `$XDG_RUNTIME_DIR/softwake/softwaked.sock`, or `/tmp/softwake-$UID/softwaked.sock` when `XDG_RUNTIME_DIR` is unset.
 
 ## Tool bus

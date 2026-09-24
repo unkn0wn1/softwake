@@ -11,6 +11,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use softwake_ipc::resolve_socket_path;
+use softwake_soul::resolve_soul_dir;
 use softwake_state::{CooldownConfig, Machine};
 use softwake_wake::PhraseTable;
 
@@ -27,21 +28,30 @@ where
             println!("{}", status_line());
             ExitCode::SUCCESS
         }
-        Ok(Mode::Demo { verbose }) => {
+        Ok(Mode::Demo { verbose, soul_dir }) => {
             let verbose = verbose || debug_log_requested(env::var("SOFTWAKE_LOG").ok().as_deref());
-            run_demo(verbose)
+            run_demo(verbose, soul_dir.as_deref())
         }
         Ok(Mode::Help) => {
             print_help();
             ExitCode::SUCCESS
         }
-        Ok(Mode::Serve { socket }) => match serve::run(socket.as_deref()) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => {
-                eprintln!("softwaked: {error}");
-                ExitCode::from(1)
+        Ok(Mode::Serve { socket, soul_dir }) => {
+            let dir = match resolve_soul_dir(soul_dir.as_deref()) {
+                Ok(dir) => dir,
+                Err(error) => {
+                    eprintln!("softwaked: {error}");
+                    return ExitCode::from(1);
+                }
+            };
+            match serve::run(socket.as_deref(), dir) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("softwaked: {error}");
+                    ExitCode::from(1)
+                }
             }
-        },
+        }
         Ok(Mode::Ctl { socket, command }) => run_ctl(socket.as_deref(), command),
         Err(message) => {
             eprintln!("softwaked: {message}");
@@ -76,9 +86,16 @@ fn status_line() -> String {
     format!("softwaked state: {}", machine.state())
 }
 
-fn run_demo(verbose: bool) -> ExitCode {
+fn run_demo(verbose: bool, soul_dir: Option<&Path>) -> ExitCode {
+    let dir = match resolve_soul_dir(soul_dir) {
+        Ok(dir) => dir,
+        Err(error) => {
+            eprintln!("softwaked: {error}");
+            return ExitCode::from(1);
+        }
+    };
     let mut demo =
-        Demo::new(PhraseTable::default(), CooldownConfig::default()).with_verbose(verbose);
+        Demo::new(PhraseTable::default(), CooldownConfig::default(), dir).with_verbose(verbose);
     for line in demo.banner_lines() {
         println!("{line}");
     }
@@ -142,14 +159,16 @@ Usage:
   softwaked demo --verbose  per-line phrase and transition detail
   softwaked demo -v         same as --verbose
   softwaked --demo          same as demo (--verbose and -v work here too)
+  softwaked demo --soul-dir PATH
   softwaked serve           listen for ctl and UI clients
   softwaked --serve         same as serve
   softwaked serve --socket PATH
+  softwaked serve --soul-dir PATH
   softwaked ctl status      print the running daemon's voice state
   softwaked ctl hibernate   hibernate (stop capture)
   softwaked ctl resume      leave hibernate and land in sleep
   softwaked ctl sleep       sleep from awake
-  softwaked ctl reload-soul record a soul reload for the next awake session
+  softwaked ctl reload-soul re-read the soul pack; it applies on the next awake
   softwaked --help          print this help
 
 The demo reads typed commands only and prints "> " before each line.
@@ -157,7 +176,12 @@ Mic and PipeWire are not wired yet.
 SOFTWAKE_LOG=debug enables the same detail as --verbose and -v.
 
 Demo commands, one per line:
-  wake, sleep, hibernate, resume, status, quit
+  wake, sleep, hibernate, resume, status, reload-soul, quit
+
+A wake phrase enters awake only when soul.md and user.md are present,
+non-empty, and valid UTF-8. Hibernate, sleep, and resume still run when
+the pack is missing. reload-soul reads the files again; the new text
+applies on the next awake.
 
 Serve owns the voice-state machine and mock capture. It speaks
 newline-delimited JSON (protocol 1) on a Unix socket. A stale socket file
@@ -170,9 +194,16 @@ Socket path, first match wins:
   $XDG_RUNTIME_DIR/softwake/softwaked.sock
   /tmp/softwake-$UID/softwaked.sock when XDG_RUNTIME_DIR is unset
 
-ctl exits non-zero when the daemon rejects a command or cannot be reached.
-reload-soul does not parse the soul pack; it records that a reload should
-apply on the next awake session."#
+Soul directory, first match wins:
+  --soul-dir PATH
+  SOFTWAKE_SOUL_DIR
+  $XDG_CONFIG_HOME/softwake/soul
+  ~/.config/softwake/soul when XDG_CONFIG_HOME is unset
+
+ctl exits non-zero when the daemon rejects the command or cannot be reached.
+reload-soul re-reads the soul pack from disk. The daemon keeps the pack it
+already applied until the next awake session. Status reports whether that
+read is ok or missing."#
 }
 
 fn print_help() {
@@ -184,10 +215,12 @@ enum Mode {
     Status,
     Demo {
         verbose: bool,
+        soul_dir: Option<PathBuf>,
     },
     Help,
     Serve {
         socket: Option<PathBuf>,
+        soul_dir: Option<PathBuf>,
     },
     Ctl {
         socket: Option<PathBuf>,
@@ -216,25 +249,30 @@ where
 
 fn parse_demo_flags(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
     let mut verbose = false;
-    for arg in args {
+    let mut soul_dir = None;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--verbose" | "-v" => verbose = true,
+            "--soul-dir" => take_value("demo", "--soul-dir", &mut args, &mut soul_dir)?,
             other => return Err(format!("unknown demo argument {other}")),
         }
     }
-    Ok(Mode::Demo { verbose })
+    Ok(Mode::Demo { verbose, soul_dir })
 }
 
 fn parse_serve_flags(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
     let mut socket = None;
+    let mut soul_dir = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--socket" => take_socket("serve", &mut args, &mut socket)?,
+            "--socket" => take_value("serve", "--socket", &mut args, &mut socket)?,
+            "--soul-dir" => take_value("serve", "--soul-dir", &mut args, &mut soul_dir)?,
             other => return Err(format!("unknown serve argument {other}")),
         }
     }
-    Ok(Mode::Serve { socket })
+    Ok(Mode::Serve { socket, soul_dir })
 }
 
 fn parse_ctl(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
@@ -243,7 +281,7 @@ fn parse_ctl(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--socket" => take_socket("ctl", &mut args, &mut socket)?,
+            "--socket" => take_value("ctl", "--socket", &mut args, &mut socket)?,
             other => {
                 let Some(parsed) = CtlAction::parse(other) else {
                     return Err(format!("unknown ctl argument {other}"));
@@ -263,19 +301,20 @@ fn parse_ctl(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
     Ok(Mode::Ctl { socket, command })
 }
 
-fn take_socket(
+fn take_value(
     mode: &str,
+    flag: &str,
     args: &mut impl Iterator<Item = String>,
     slot: &mut Option<PathBuf>,
 ) -> Result<(), String> {
     if slot.is_some() {
-        return Err(format!("{mode} accepts one --socket"));
+        return Err(format!("{mode} accepts one {flag}"));
     }
     let Some(path) = args.next() else {
-        return Err("--socket needs a path".to_owned());
+        return Err(format!("{flag} needs a path"));
     };
     if path.is_empty() {
-        return Err("--socket needs a path".to_owned());
+        return Err(format!("{flag} needs a path"));
     }
     *slot = Some(PathBuf::from(path));
     Ok(())
@@ -298,11 +337,17 @@ mod tests {
     fn demo_and_help_flags() {
         assert_eq!(
             parse_args(["demo".to_owned()]),
-            Ok(Mode::Demo { verbose: false })
+            Ok(Mode::Demo {
+                verbose: false,
+                soul_dir: None
+            })
         );
         assert_eq!(
             parse_args(["--demo".to_owned()]),
-            Ok(Mode::Demo { verbose: false })
+            Ok(Mode::Demo {
+                verbose: false,
+                soul_dir: None
+            })
         );
         assert_eq!(parse_args(["--help".to_owned()]), Ok(Mode::Help));
         assert_eq!(parse_args(["-h".to_owned()]), Ok(Mode::Help));
@@ -312,19 +357,31 @@ mod tests {
     fn demo_verbose_flags() {
         assert_eq!(
             parse_args(["demo".to_owned(), "--verbose".to_owned()]),
-            Ok(Mode::Demo { verbose: true })
+            Ok(Mode::Demo {
+                verbose: true,
+                soul_dir: None
+            })
         );
         assert_eq!(
             parse_args(["demo".to_owned(), "-v".to_owned()]),
-            Ok(Mode::Demo { verbose: true })
+            Ok(Mode::Demo {
+                verbose: true,
+                soul_dir: None
+            })
         );
         assert_eq!(
             parse_args(["--demo".to_owned(), "-v".to_owned()]),
-            Ok(Mode::Demo { verbose: true })
+            Ok(Mode::Demo {
+                verbose: true,
+                soul_dir: None
+            })
         );
         assert_eq!(
             parse_args(["demo".to_owned(), "-v".to_owned(), "--verbose".to_owned()]),
-            Ok(Mode::Demo { verbose: true })
+            Ok(Mode::Demo {
+                verbose: true,
+                soul_dir: None
+            })
         );
     }
 
@@ -371,22 +428,46 @@ mod tests {
         assert!(help.contains("/tmp/softwake-$UID/softwaked.sock"));
         assert!(help.contains("stale socket"));
         assert!(help.contains("newline-delimited JSON"));
+        assert!(help.contains("--soul-dir"));
+        assert!(help.contains("SOFTWAKE_SOUL_DIR"));
+        assert!(help.contains("XDG_CONFIG_HOME"));
+        assert!(help.contains("~/.config/softwake/soul"));
+        assert!(help.contains("valid UTF-8"));
+        assert!(help.contains("applies on the next awake"));
     }
 
     #[test]
     fn serve_and_ctl_flags() {
         assert_eq!(
             parse_args(["serve".to_owned()]),
-            Ok(Mode::Serve { socket: None })
+            Ok(Mode::Serve {
+                socket: None,
+                soul_dir: None
+            })
         );
         assert_eq!(
             parse_args([
                 "--serve".to_owned(),
                 "--socket".to_owned(),
-                "/tmp/sw.sock".to_owned()
+                "/tmp/sw.sock".to_owned(),
+                "--soul-dir".to_owned(),
+                "/tmp/soul".to_owned()
             ]),
             Ok(Mode::Serve {
-                socket: Some(PathBuf::from("/tmp/sw.sock"))
+                socket: Some(PathBuf::from("/tmp/sw.sock")),
+                soul_dir: Some(PathBuf::from("/tmp/soul"))
+            })
+        );
+        assert_eq!(
+            parse_args([
+                "demo".to_owned(),
+                "--soul-dir".to_owned(),
+                "/tmp/soul".to_owned(),
+                "-v".to_owned()
+            ]),
+            Ok(Mode::Demo {
+                verbose: true,
+                soul_dir: Some(PathBuf::from("/tmp/soul"))
             })
         );
         assert_eq!(
@@ -425,6 +506,18 @@ mod tests {
     #[test]
     fn serve_and_ctl_reject_incomplete_arguments() {
         assert!(parse_args(["serve".to_owned(), "--socket".to_owned()]).is_err());
+        assert!(parse_args(["serve".to_owned(), "--soul-dir".to_owned()]).is_err());
+        assert!(parse_args(["demo".to_owned(), "--soul-dir".to_owned()]).is_err());
+        assert!(
+            parse_args([
+                "serve".to_owned(),
+                "--soul-dir".to_owned(),
+                "/tmp/a".to_owned(),
+                "--soul-dir".to_owned(),
+                "/tmp/b".to_owned()
+            ])
+            .is_err()
+        );
         assert!(parse_args(["serve".to_owned(), "--verbose".to_owned()]).is_err());
         assert!(parse_args(["ctl".to_owned()]).is_err());
         assert!(parse_args(["ctl".to_owned(), "status".to_owned(), "sleep".to_owned()]).is_err());

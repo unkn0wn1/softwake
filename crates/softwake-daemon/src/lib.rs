@@ -10,6 +10,7 @@ mod ctl;
 mod demo;
 mod runtime;
 mod serve;
+mod soul;
 
 #[cfg(test)]
 mod e2e;

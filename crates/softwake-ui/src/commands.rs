@@ -49,7 +49,7 @@ pub fn sleep() -> Result<Status, String> {
     call(Command::Sleep)
 }
 
-/// Ask the daemon to record a soul reload for the next awake session.
+/// Ask the daemon to re-read the soul pack. It applies on the next awake.
 ///
 /// # Errors
 ///

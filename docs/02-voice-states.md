@@ -17,9 +17,10 @@ Three states. Names are fixed vocabulary for UI, logs, and docs.
 
 ## Awake
 
-- Entered when local wake engine accepts a wake phrase (and optional confidence / cooldown rules).
+- Entered when local wake engine accepts a wake phrase (and optional confidence / cooldown rules) **and** the loaded soul pack is valid.
+- A missing or invalid `soul.md` / `user.md` refuses the transition. The machine stays in sleep (capture still running). Hibernate, sleep, and UI resume are not blocked.
 - Acting session starts (STT/LLM/TTS or realtime — pluggable).
-- Soul pack is applied as system instructions for this session.
+- The soul pack last read at startup or by `reload_soul` is applied as system instructions for this session. A reload during awake waits for the next awake entry.
 - Tools may run only while awake and only if allowlisted.
 - Sleep phrase (or explicit UI control) returns to **sleep**: end acting session cleanly; keep capture + wake engine.
 

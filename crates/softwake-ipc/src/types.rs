@@ -88,9 +88,10 @@ pub enum Command {
     WakeFromUi,
     /// Ask the daemon to sleep from awake.
     Sleep,
-    /// Record that the soul pack should be re-read on the next awake session.
+    /// Re-read the soul pack from disk.
     ///
-    /// This does not parse the soul pack.
+    /// The new text applies on the next transition into awake. An awake
+    /// session keeps the instructions it already applied.
     ReloadSoul,
 }
 
@@ -218,6 +219,19 @@ impl IpcError {
     }
 }
 
+/// Last soul-pack read.
+///
+/// Older peers omit this object. `ok` is false when `soul.md` or `user.md`
+/// is missing or failed validation. `reason` is a short sentence in that case.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoulReport {
+    /// The last read passed validation.
+    pub ok: bool,
+    /// Why `ok` is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 /// Voice state returned by a successful command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Status {
@@ -225,11 +239,14 @@ pub struct Status {
     pub state: VoiceState,
     /// Whether capture is running after the command.
     pub capture_running: bool,
-    /// A soul reload was requested and has not been consumed.
+    /// A `reload_soul` has not yet been applied on an awake entry.
     ///
-    /// Phase 1 records the request and does not parse the soul pack. The flag
-    /// stays set.
+    /// Cleared only after a valid pack is applied while entering awake. A
+    /// missing or invalid pack leaves the flag set.
     pub soul_reload_pending: bool,
+    /// Last soul-pack read. Absent when the peer predates this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soul: Option<SoulReport>,
     /// Operator-facing sentence, when this reply has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
@@ -371,7 +388,7 @@ pub enum ServerMessage {
 mod tests {
     use super::{
         ClientMessage, Command, Event, IpcError, PROTOCOL_VERSION, ResponseBody, ServerMessage,
-        Status, VoiceState,
+        SoulReport, Status, VoiceState,
     };
 
     fn assert_round_trip<T>(value: &T)
@@ -392,6 +409,10 @@ mod tests {
             state: VoiceState::Sleep,
             capture_running: true,
             soul_reload_pending: false,
+            soul: Some(SoulReport {
+                ok: true,
+                reason: None,
+            }),
             message: None,
             detail: Some("sleep -> hibernate".to_owned()),
         }
@@ -503,7 +524,40 @@ mod tests {
         assert_eq!(status.state, VoiceState::Awake);
         assert!(status.message.is_none());
         assert!(status.detail.is_none());
+        assert!(status.soul.is_none());
         assert!(status.soul_reload_pending);
+    }
+
+    #[test]
+    fn soul_report_round_trips_and_omits_an_empty_reason() {
+        let missing = Status {
+            state: VoiceState::Sleep,
+            capture_running: true,
+            soul_reload_pending: true,
+            soul: Some(SoulReport {
+                ok: false,
+                reason: Some("missing soul.md".to_owned()),
+            }),
+            message: None,
+            detail: None,
+        };
+        assert_round_trip(&missing);
+
+        let ok = Status {
+            state: VoiceState::Sleep,
+            capture_running: true,
+            soul_reload_pending: false,
+            soul: Some(SoulReport {
+                ok: true,
+                reason: None,
+            }),
+            message: None,
+            detail: None,
+        };
+        let json = serde_json::to_string(&ok).expect("encode");
+        assert!(json.contains("\"soul\":{\"ok\":true}"));
+        assert!(!json.contains("reason"));
+        assert_round_trip(&ok);
     }
 
     fn ok_status(message: &ServerMessage) -> Option<&Status> {

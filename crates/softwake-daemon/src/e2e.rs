@@ -13,8 +13,8 @@ use softwake_ipc::{
 };
 
 use crate::ctl;
-use crate::runtime::RELOAD_MESSAGE;
 use crate::serve;
+use crate::soul::{TestSoulDir, reload_message};
 
 struct TempSocket {
     dir: PathBuf,
@@ -43,12 +43,14 @@ impl Drop for TempSocket {
 #[test]
 fn ctl_hibernate_then_resume_lands_in_sleep() {
     let temp = TempSocket::new();
-    let server = serve::spawn(temp.path.clone()).expect("serve");
+    let soul = TestSoulDir::valid();
+    let server = serve::spawn(temp.path.clone(), soul.soul_dir()).expect("serve");
 
     let status = ctl::call(temp.path(), Command::GetStatus).expect("status");
     assert_eq!(status.state, VoiceState::Sleep);
     assert!(status.capture_running);
     assert!(!status.soul_reload_pending);
+    assert!(status.soul.as_ref().is_some_and(|report| report.ok));
 
     let hibernated = ctl::call(temp.path(), Command::Hibernate).expect("hibernate");
     assert_eq!(hibernated.state, VoiceState::Hibernate);
@@ -74,9 +76,10 @@ fn ctl_hibernate_then_resume_lands_in_sleep() {
 }
 
 #[test]
-fn reload_soul_is_a_stub_and_a_second_client_sees_state_changed() {
+fn reload_soul_rereads_and_a_second_client_sees_state_changed() {
     let temp = TempSocket::new();
-    let server = serve::spawn(temp.path.clone()).expect("serve");
+    let soul = TestSoulDir::valid();
+    let server = serve::spawn(temp.path.clone(), soul.soul_dir()).expect("serve");
 
     let mut watcher = Client::connect(temp.path()).expect("watcher");
     watcher
@@ -85,10 +88,12 @@ fn reload_soul_is_a_stub_and_a_second_client_sees_state_changed() {
 
     let reloaded = ctl::call(temp.path(), Command::ReloadSoul).expect("reload");
     assert!(reloaded.soul_reload_pending);
-    assert_eq!(reloaded.message.as_deref(), Some(RELOAD_MESSAGE));
+    assert!(reloaded.soul.as_ref().is_some_and(|report| report.ok));
+    let message = reload_message(true, None);
+    assert_eq!(reloaded.message.as_deref(), Some(message.as_str()));
     assert_eq!(
         ctl::format_status(&reloaded),
-        format!("state: sleep\ncapture: running\nsoul reload: pending\n{RELOAD_MESSAGE}\n")
+        format!("state: sleep\ncapture: running\nsoul: ok\nsoul reload: pending\n{message}\n")
     );
 
     let hibernated = ctl::call(temp.path(), Command::Hibernate).expect("hibernate");
@@ -121,8 +126,9 @@ fn reload_soul_is_a_stub_and_a_second_client_sees_state_changed() {
 #[test]
 fn a_live_socket_is_kept_and_a_bad_hello_does_not_stop_serve() {
     let temp = TempSocket::new();
-    let server = serve::spawn(temp.path.clone()).expect("serve");
-    let error = serve::spawn(temp.path.clone()).expect_err("second");
+    let soul = TestSoulDir::valid();
+    let server = serve::spawn(temp.path.clone(), soul.soul_dir()).expect("serve");
+    let error = serve::spawn(temp.path.clone(), soul.soul_dir()).expect_err("second");
     assert!(error.to_string().contains("is listening"), "{error}");
 
     let stream = UnixStream::connect(temp.path()).expect("connect");
@@ -148,8 +154,43 @@ fn a_live_socket_is_kept_and_a_bad_hello_does_not_stop_serve() {
     assert_eq!(status.state, VoiceState::Sleep);
     drop(server);
 
-    let restarted = serve::spawn(temp.path.clone()).expect("restart");
+    let restarted = serve::spawn(temp.path.clone(), soul.soul_dir()).expect("restart");
     drop(restarted);
+}
+
+#[test]
+fn status_reports_a_missing_soul_and_hibernate_still_works() {
+    let temp = TempSocket::new();
+    let soul = TestSoulDir::empty();
+    let server = serve::spawn(temp.path.clone(), soul.soul_dir()).expect("serve");
+
+    let status = ctl::call(temp.path(), Command::GetStatus).expect("status");
+    assert_eq!(status.state, VoiceState::Sleep);
+    assert!(status.capture_running);
+    let text = ctl::format_status(&status);
+    assert!(text.contains("soul: missing"), "{text}");
+    assert!(text.contains("missing soul.md"), "{text}");
+    let report = status.soul.expect("soul report");
+    assert!(!report.ok);
+    let reason = report.reason.expect("reason");
+    assert!(reason.contains("missing soul.md"), "{reason}");
+
+    let hibernated = ctl::call(temp.path(), Command::Hibernate).expect("hibernate");
+    assert_eq!(hibernated.state, VoiceState::Hibernate);
+    assert!(!hibernated.capture_running);
+    assert!(hibernated.soul.as_ref().is_some_and(|report| !report.ok));
+
+    let resumed = ctl::call(temp.path(), Command::WakeFromUi).expect("resume");
+    assert_eq!(resumed.state, VoiceState::Sleep);
+    assert!(resumed.capture_running);
+
+    soul.write("now soul\n", "now user\n");
+    let reloaded = ctl::call(temp.path(), Command::ReloadSoul).expect("reload");
+    assert!(reloaded.soul_reload_pending);
+    assert!(reloaded.soul.as_ref().is_some_and(|report| report.ok));
+    assert_eq!(reloaded.state, VoiceState::Sleep);
+
+    drop(server);
 }
 
 impl TempSocket {

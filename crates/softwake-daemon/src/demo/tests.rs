@@ -4,9 +4,18 @@ use softwake_state::{CooldownConfig, VoiceState};
 use softwake_wake::PhraseTable;
 
 use super::{COMMANDS, CommandResult, Demo};
+use crate::soul::TestSoulDir;
 
-fn demo_with(cooldown: CooldownConfig) -> Demo {
-    Demo::new(PhraseTable::default(), cooldown)
+fn demo_with(cooldown: CooldownConfig) -> (Demo, TestSoulDir) {
+    let soul = TestSoulDir::valid();
+    let demo = Demo::new(PhraseTable::default(), cooldown, soul.soul_dir());
+    (demo, soul)
+}
+
+fn demo_table(table: PhraseTable, cooldown: CooldownConfig) -> (Demo, TestSoulDir) {
+    let soul = TestSoulDir::valid();
+    let demo = Demo::new(table, cooldown, soul.soul_dir());
+    (demo, soul)
 }
 
 fn no_cooldown() -> CooldownConfig {
@@ -18,7 +27,7 @@ fn no_cooldown() -> CooldownConfig {
 
 #[test]
 fn new_demo_is_asleep_with_capture_running() {
-    let demo = demo_with(CooldownConfig::default());
+    let (demo, _soul) = demo_with(CooldownConfig::default());
     assert_eq!(demo.state(), VoiceState::Sleep);
     assert!(demo.capture_running());
     assert!(!demo.permits_tools());
@@ -35,6 +44,7 @@ fn new_demo_is_asleep_with_capture_running() {
             "typed commands only — mic / PipeWire not wired yet".to_owned(),
             "state: sleep".to_owned(),
             "capture: running".to_owned(),
+            "soul: ok".to_owned(),
             COMMANDS.to_owned(),
         ]
     );
@@ -42,7 +52,7 @@ fn new_demo_is_asleep_with_capture_running() {
 
 #[test]
 fn wake_command_submits_the_configured_phrase() {
-    let mut demo = demo_with(no_cooldown());
+    let (mut demo, _soul) = demo_with(no_cooldown());
     let result = demo.handle_line("wake", Duration::ZERO);
     assert_eq!(
         result.lines,
@@ -52,6 +62,7 @@ fn wake_command_submits_the_configured_phrase() {
             "effect: open session".to_owned(),
             "state: awake".to_owned(),
             "capture: running".to_owned(),
+            "soul: ok".to_owned(),
         ]
     );
     assert!(demo.permits_tools());
@@ -60,7 +71,7 @@ fn wake_command_submits_the_configured_phrase() {
 
 #[test]
 fn unmatched_text_does_not_transition() {
-    let mut demo = demo_with(CooldownConfig::default());
+    let (mut demo, _soul) = demo_with(CooldownConfig::default());
     let lines = demo.hear("just chatting", None);
     assert_eq!(
         lines,
@@ -68,6 +79,7 @@ fn unmatched_text_does_not_transition() {
             "heard: \"just chatting\" -> none".to_owned(),
             "state: sleep".to_owned(),
             "capture: running".to_owned(),
+            "soul: ok".to_owned(),
         ]
     );
     assert_eq!(demo.state(), VoiceState::Sleep);
@@ -76,7 +88,7 @@ fn unmatched_text_does_not_transition() {
 
 #[test]
 fn mixed_case_text_wakes_through_the_detector() {
-    let mut demo = demo_with(no_cooldown());
+    let (mut demo, _soul) = demo_with(no_cooldown());
     let lines = demo.hear("  HeY SoFtWaKe  ", None);
     assert_eq!(demo.state(), VoiceState::Awake);
     assert!(
@@ -89,7 +101,7 @@ fn mixed_case_text_wakes_through_the_detector() {
 #[test]
 fn wake_command_rejects_when_the_detector_scores_sleep() {
     let table = PhraseTable::new(["go to sleep"], ["go to sleep"]).expect("phrases");
-    let mut demo = Demo::new(table, no_cooldown());
+    let (mut demo, _soul) = demo_table(table, no_cooldown());
     let result = demo.handle_line("wake", Duration::ZERO);
     assert_eq!(
         result.lines,
@@ -98,6 +110,7 @@ fn wake_command_rejects_when_the_detector_scores_sleep() {
             "rejected: phrase scored as sleep, not wake".to_owned(),
             "state: sleep".to_owned(),
             "capture: running".to_owned(),
+            "soul: ok".to_owned(),
         ]
     );
     assert_eq!(demo.state(), VoiceState::Sleep);
@@ -106,7 +119,7 @@ fn wake_command_rejects_when_the_detector_scores_sleep() {
 
 #[test]
 fn sleep_while_asleep_reaches_the_machine() {
-    let mut demo = demo_with(CooldownConfig::default());
+    let (mut demo, _soul) = demo_with(CooldownConfig::default());
     let result = demo.handle_line("sleep", Duration::ZERO);
     assert_eq!(
         result.lines,
@@ -115,6 +128,7 @@ fn sleep_while_asleep_reaches_the_machine() {
             "rejected: cannot apply sleep phrase from sleep: already asleep".to_owned(),
             "state: sleep".to_owned(),
             "capture: running".to_owned(),
+            "soul: ok".to_owned(),
         ]
     );
     assert!(demo.capture_running());
@@ -122,7 +136,7 @@ fn sleep_while_asleep_reaches_the_machine() {
 
 #[test]
 fn post_wake_cooldown_blocks_sleep_until_the_clock_advances() {
-    let mut demo = demo_with(CooldownConfig::default());
+    let (mut demo, _soul) = demo_with(CooldownConfig::default());
     demo.handle_line("wake", Duration::ZERO);
     let blocked = demo.handle_line("sleep", Duration::ZERO);
     assert_eq!(
@@ -132,6 +146,7 @@ fn post_wake_cooldown_blocks_sleep_until_the_clock_advances() {
             "rejected: cannot apply sleep phrase during cooldown (800ms remaining)".to_owned(),
             "state: awake".to_owned(),
             "capture: running".to_owned(),
+            "soul: ok".to_owned(),
         ]
     );
     assert_eq!(demo.state(), VoiceState::Awake);
@@ -149,6 +164,7 @@ fn post_wake_cooldown_blocks_sleep_until_the_clock_advances() {
             "effect: release acting resources".to_owned(),
             "state: sleep".to_owned(),
             "capture: running".to_owned(),
+            "soul: ok".to_owned(),
         ]
     );
     assert!(!demo.permits_tools());
@@ -157,7 +173,7 @@ fn post_wake_cooldown_blocks_sleep_until_the_clock_advances() {
 
 #[test]
 fn configured_cooldown_is_what_the_demo_waits_for() {
-    let mut demo = demo_with(CooldownConfig {
+    let (mut demo, _soul) = demo_with(CooldownConfig {
         post_wake: Duration::from_millis(25),
         post_sleep: Duration::from_millis(25),
     });
@@ -171,7 +187,7 @@ fn configured_cooldown_is_what_the_demo_waits_for() {
 
 #[test]
 fn zero_cooldown_allows_an_immediate_sleep_phrase() {
-    let mut demo = demo_with(no_cooldown());
+    let (mut demo, _soul) = demo_with(no_cooldown());
     demo.handle_line("wake", Duration::ZERO);
     demo.handle_line("sleep", Duration::ZERO);
     assert_eq!(demo.state(), VoiceState::Sleep);
@@ -181,7 +197,7 @@ fn zero_cooldown_allows_an_immediate_sleep_phrase() {
 
 #[test]
 fn hibernate_from_sleep_stops_capture() {
-    let mut demo = demo_with(CooldownConfig::default());
+    let (mut demo, _soul) = demo_with(CooldownConfig::default());
     let result = demo.handle_line("hibernate", Duration::ZERO);
     assert_eq!(
         result.lines,
@@ -190,6 +206,7 @@ fn hibernate_from_sleep_stops_capture() {
             "effect: stop capture".to_owned(),
             "state: hibernate".to_owned(),
             "capture: stopped".to_owned(),
+            "soul: ok".to_owned(),
         ]
     );
     assert!(!demo.capture_running());
@@ -198,7 +215,7 @@ fn hibernate_from_sleep_stops_capture() {
 
 #[test]
 fn hibernate_stops_capture_and_rejects_voice_until_resume() {
-    let mut demo = demo_with(CooldownConfig::default());
+    let (mut demo, _soul) = demo_with(CooldownConfig::default());
     demo.handle_line("wake", Duration::ZERO);
 
     let hibernate = demo.handle_line("hibernate", Duration::ZERO);
@@ -210,6 +227,7 @@ fn hibernate_stops_capture_and_rejects_voice_until_resume() {
             "effect: stop capture".to_owned(),
             "state: hibernate".to_owned(),
             "capture: stopped".to_owned(),
+            "soul: ok".to_owned(),
         ]
     );
     assert!(!demo.capture_running());
@@ -222,6 +240,7 @@ fn hibernate_stops_capture_and_rejects_voice_until_resume() {
             "rejected: voice input while capture is stopped (hibernate)".to_owned(),
             "state: hibernate".to_owned(),
             "capture: stopped".to_owned(),
+            "soul: ok".to_owned(),
         ]
     );
     assert!(voice.lines.iter().all(|line| !line.starts_with("heard:")));
@@ -236,6 +255,7 @@ fn hibernate_stops_capture_and_rejects_voice_until_resume() {
             "effect: start capture".to_owned(),
             "state: sleep".to_owned(),
             "capture: running".to_owned(),
+            "soul: ok".to_owned(),
         ]
     );
     assert_eq!(demo.state(), VoiceState::Sleep);
@@ -253,7 +273,7 @@ fn hibernate_stops_capture_and_rejects_voice_until_resume() {
 
 #[test]
 fn resume_outside_hibernate_is_rejected() {
-    let mut demo = demo_with(CooldownConfig::default());
+    let (mut demo, _soul) = demo_with(CooldownConfig::default());
     let result = demo.handle_line("resume", Duration::ZERO);
     assert_eq!(
         result.lines[0],
@@ -266,7 +286,7 @@ fn resume_outside_hibernate_is_rejected() {
 #[test]
 fn wake_without_a_configured_phrase_does_not_transition() {
     let table = PhraseTable::new(std::iter::empty::<&str>(), ["go to sleep"]).expect("table");
-    let mut demo = Demo::new(table, CooldownConfig::default());
+    let (mut demo, _soul) = demo_table(table, CooldownConfig::default());
     let result = demo.handle_line("wake", Duration::ZERO);
     assert_eq!(
         result.lines,
@@ -274,6 +294,7 @@ fn wake_without_a_configured_phrase_does_not_transition() {
             "rejected: no wake phrase configured".to_owned(),
             "state: sleep".to_owned(),
             "capture: running".to_owned(),
+            "soul: ok".to_owned(),
         ]
     );
     assert_eq!(demo.state(), VoiceState::Sleep);
@@ -281,7 +302,7 @@ fn wake_without_a_configured_phrase_does_not_transition() {
 
 #[test]
 fn blank_line_advances_the_cooldown_clock_without_printing() {
-    let mut demo = demo_with(CooldownConfig::default());
+    let (mut demo, _soul) = demo_with(CooldownConfig::default());
     demo.handle_line("wake", Duration::ZERO);
     let blank = demo.handle_line("   ", Duration::from_millis(800));
     assert_eq!(blank, CommandResult::stay(Vec::new()));
@@ -291,10 +312,14 @@ fn blank_line_advances_the_cooldown_clock_without_printing() {
 
 #[test]
 fn status_quit_and_unknown_commands() {
-    let mut demo = demo_with(CooldownConfig::default());
+    let (mut demo, _soul) = demo_with(CooldownConfig::default());
     assert_eq!(
         demo.handle_line("status", Duration::ZERO).lines,
-        vec!["state: sleep".to_owned(), "capture: running".to_owned()]
+        vec![
+            "state: sleep".to_owned(),
+            "capture: running".to_owned(),
+            "soul: ok".to_owned(),
+        ]
     );
     let unknown = demo.handle_line("dance", Duration::ZERO);
     assert_eq!(
@@ -312,7 +337,8 @@ fn status_quit_and_unknown_commands() {
 
 #[test]
 fn verbose_wake_records_the_phrase_hit_and_transition() {
-    let mut demo = demo_with(no_cooldown()).with_verbose(true);
+    let (demo, _soul) = demo_with(no_cooldown());
+    let mut demo = demo.with_verbose(true);
     let result = demo.handle_line("wake", Duration::ZERO);
     assert_eq!(
         result.lines,
@@ -327,13 +353,15 @@ fn verbose_wake_records_the_phrase_hit_and_transition() {
             "effect: open session".to_owned(),
             "state: awake".to_owned(),
             "capture: running".to_owned(),
+            "soul: ok".to_owned(),
         ]
     );
 }
 
 #[test]
 fn verbose_unknown_names_the_raw_input() {
-    let mut demo = demo_with(CooldownConfig::default()).with_verbose(true);
+    let (demo, _soul) = demo_with(CooldownConfig::default());
+    let mut demo = demo.with_verbose(true);
     let unknown = demo.handle_line("dance", Duration::ZERO);
     assert_eq!(
         unknown.lines,
@@ -350,7 +378,8 @@ fn verbose_unknown_names_the_raw_input() {
 
 #[test]
 fn verbose_blank_line_stays_silent_and_advances_cooldown() {
-    let mut demo = demo_with(CooldownConfig::default()).with_verbose(true);
+    let (demo, _soul) = demo_with(CooldownConfig::default());
+    let mut demo = demo.with_verbose(true);
     demo.handle_line("wake", Duration::ZERO);
     let blank = demo.handle_line("   ", Duration::from_millis(800));
     assert_eq!(blank, CommandResult::stay(Vec::new()));
@@ -360,7 +389,8 @@ fn verbose_blank_line_stays_silent_and_advances_cooldown() {
 
 #[test]
 fn verbose_cooldown_rejection_names_the_reason() {
-    let mut demo = demo_with(CooldownConfig::default()).with_verbose(true);
+    let (demo, _soul) = demo_with(CooldownConfig::default());
+    let mut demo = demo.with_verbose(true);
     demo.handle_line("wake", Duration::ZERO);
     let blocked = demo.handle_line("sleep", Duration::ZERO);
     assert_eq!(
@@ -376,6 +406,7 @@ fn verbose_cooldown_rejection_names_the_reason() {
             "rejected: cannot apply sleep phrase during cooldown (800ms remaining)".to_owned(),
             "state: awake".to_owned(),
             "capture: running".to_owned(),
+            "soul: ok".to_owned(),
         ]
     );
     assert_eq!(demo.state(), VoiceState::Awake);
@@ -383,7 +414,8 @@ fn verbose_cooldown_rejection_names_the_reason() {
 
 #[test]
 fn verbose_capture_stopped_names_the_reason_without_a_hit() {
-    let mut demo = demo_with(CooldownConfig::default()).with_verbose(true);
+    let (demo, _soul) = demo_with(CooldownConfig::default());
+    let mut demo = demo.with_verbose(true);
     demo.handle_line("hibernate", Duration::ZERO);
     let voice = demo.handle_line("wake", Duration::ZERO);
     assert_eq!(
@@ -396,6 +428,7 @@ fn verbose_capture_stopped_names_the_reason_without_a_hit() {
             "rejected: voice input while capture is stopped (hibernate)".to_owned(),
             "state: hibernate".to_owned(),
             "capture: stopped".to_owned(),
+            "soul: ok".to_owned(),
         ]
     );
     assert!(voice.lines.iter().all(|line| !line.starts_with("heard:")));
@@ -410,7 +443,8 @@ fn verbose_capture_stopped_names_the_reason_without_a_hit() {
 #[test]
 fn verbose_missing_phrase_names_the_reason() {
     let table = PhraseTable::new(std::iter::empty::<&str>(), ["go to sleep"]).expect("table");
-    let mut demo = Demo::new(table, CooldownConfig::default()).with_verbose(true);
+    let (demo, _soul) = demo_table(table, CooldownConfig::default());
+    let mut demo = demo.with_verbose(true);
     let result = demo.handle_line("wake", Duration::ZERO);
     assert_eq!(
         result.lines,
@@ -421,6 +455,7 @@ fn verbose_missing_phrase_names_the_reason() {
             "rejected: no wake phrase configured".to_owned(),
             "state: sleep".to_owned(),
             "capture: running".to_owned(),
+            "soul: ok".to_owned(),
         ]
     );
     assert_eq!(demo.state(), VoiceState::Sleep);
@@ -429,7 +464,8 @@ fn verbose_missing_phrase_names_the_reason() {
 #[test]
 fn verbose_hit_mismatch_names_the_reason() {
     let table = PhraseTable::new(["go to sleep"], ["go to sleep"]).expect("phrases");
-    let mut demo = Demo::new(table, no_cooldown()).with_verbose(true);
+    let (demo, _soul) = demo_table(table, no_cooldown());
+    let mut demo = demo.with_verbose(true);
     let result = demo.handle_line("wake", Duration::ZERO);
     assert_eq!(
         result.lines,
@@ -443,7 +479,79 @@ fn verbose_hit_mismatch_names_the_reason() {
             "rejected: phrase scored as sleep, not wake".to_owned(),
             "state: sleep".to_owned(),
             "capture: running".to_owned(),
+            "soul: ok".to_owned(),
         ]
     );
     assert_eq!(demo.state(), VoiceState::Sleep);
+}
+
+#[test]
+fn missing_soul_refuses_wake_until_reload() {
+    let soul = TestSoulDir::empty();
+    let mut demo = Demo::new(PhraseTable::default(), no_cooldown(), soul.soul_dir());
+
+    let refused = demo.handle_line("wake", Duration::ZERO);
+    assert!(
+        refused
+            .lines
+            .iter()
+            .any(|line| line.contains("refusing awake"))
+    );
+    assert!(
+        refused
+            .lines
+            .iter()
+            .any(|line| line.contains("missing soul.md"))
+    );
+    assert!(refused.lines.iter().any(|line| line == "soul: missing"));
+    assert_eq!(demo.state(), VoiceState::Sleep);
+    assert!(demo.capture_running());
+    assert!(!demo.permits_tools());
+    assert!(demo.applied_instructions().is_none());
+
+    demo.handle_line("hibernate", Duration::ZERO);
+    assert_eq!(demo.state(), VoiceState::Hibernate);
+    assert!(!demo.capture_running());
+    assert!(!demo.permits_tools());
+
+    demo.handle_line("resume", Duration::ZERO);
+    assert_eq!(demo.state(), VoiceState::Sleep);
+    assert!(demo.capture_running());
+    assert!(!demo.permits_tools());
+
+    demo.handle_line("sleep", Duration::ZERO);
+    assert_eq!(demo.state(), VoiceState::Sleep);
+    assert!(demo.capture_running());
+
+    let still = demo.handle_line("wake", Duration::ZERO);
+    assert_eq!(demo.state(), VoiceState::Sleep);
+    assert!(
+        still
+            .lines
+            .iter()
+            .any(|line| line.contains("refusing awake"))
+    );
+
+    soul.write("Fresh soul\n", "Fresh user\n");
+    let reloaded = demo.handle_line("reload-soul", Duration::ZERO);
+    assert!(
+        reloaded
+            .lines
+            .iter()
+            .any(|line| line.contains("reloaded soul pack; applies on next awake"))
+    );
+    assert!(reloaded.lines.iter().any(|line| line == "soul: ok"));
+    assert!(demo.applied_instructions().is_none());
+
+    demo.handle_line("wake", Duration::ZERO);
+    assert_eq!(demo.state(), VoiceState::Awake);
+    assert!(demo.capture_running());
+    assert!(demo.permits_tools());
+    let applied = demo.applied_instructions().expect("applied");
+    assert!(applied.contains("# Identity"));
+    assert!(applied.contains("Fresh soul"));
+    assert!(applied.contains("# User profile"));
+    assert!(applied.contains("Fresh user"));
+    assert!(applied.contains("# Runtime policy"));
+    assert!(applied.contains("State: awake."));
 }
