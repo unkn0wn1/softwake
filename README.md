@@ -17,7 +17,17 @@ cargo test --workspace
 cargo build --workspace --all-targets
 ```
 
-The default `pipewire` feature compiles the capture stub. It does not require a system PipeWire library. `--no-default-features` on `softwake-audio` omits the stub. `pipewire-native` and `sherpa-kws` are optional. CI does not enable them. Neither opens a microphone or downloads weights:
+See [Cargo features](#cargo-features) for `pipewire`, `pipewire-native`, and `sherpa-kws`.
+
+## Cargo features
+
+| Crate | Feature | Default | What it compiles |
+|-------|---------|---------|------------------|
+| `softwake-audio` | `pipewire` | yes | Capture stub. Does not link `libpipewire`. |
+| `softwake-audio` | `pipewire-native` | no | Same stub. The stream stays unwired. Not enabled in CI. |
+| `softwake-wake` | `sherpa-kws` | no | PCM detector stub. No weights and no ONNX download. Not enabled in CI. |
+
+`--no-default-features` on `softwake-audio` omits the `pipewire` stub. The sherpa-onnx keyword-spotting choice is [ADR 0006](docs/ADR-0006-on-device-wake.md).
 
 ```bash
 cargo test -p softwake-audio --features pipewire-native
@@ -25,6 +35,30 @@ cargo test -p softwake-wake --features sherpa-kws
 ```
 
 A later native PipeWire stream will also need `libpipewire-0.3-dev`. This build does not link that library.
+
+## Install
+
+From the repository root, using the workspace `Cargo.lock`:
+
+```bash
+cargo install --path crates/softwake-daemon --locked
+```
+
+That installs the `softwaked` binary. The window binary is `softwake-ui`. From a checkout, start `softwaked serve`, then:
+
+```bash
+cargo run -p softwake-ui
+```
+
+The same lockfile install for the window:
+
+```bash
+cargo install --path crates/softwake-ui --locked
+```
+
+Linux packages for the window are listed under [Window](#window). Socket and soul paths are under [Serve and ctl](#serve-and-ctl).
+
+[`packaging/softwake.desktop`](packaging/softwake.desktop) is a sample launcher. `Exec` is `softwake-ui` and `Icon` is the theme name `softwake`. After `softwake-ui` is on `PATH`, copy the file to `~/.local/share/applications/` and set `Icon=` to an icon you provide.
 
 ## Demo
 

@@ -23,7 +23,7 @@
    - [ ] Streaming STT / TTS path (later)
 2. [x] Confirmation UX for risky tools ([ADR 0005](ADR-0005-tool-confirmation.md))
 3. [x] Richer tool registry + logging
-4. [ ] Packaging polish
+4. [x] Packaging polish
 
 ## Phase 3 — World connectors + memory
 
