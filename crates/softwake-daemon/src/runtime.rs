@@ -1,4 +1,4 @@
-//! Voice machine, mock capture, and the loaded soul pack.
+//! Voice machine, mock capture, the PCM wake stand-in, and the loaded soul pack.
 //!
 //! UI commands map onto [`softwake_state::Event`]. Capture starts in sleep,
 //! stops for hibernate, and starts again when hibernate returns to sleep.
@@ -18,10 +18,12 @@ use softwake_session::SessionPhase;
 use softwake_session::TextStubSession;
 use softwake_soul::SoulDir;
 use softwake_state::{CooldownConfig, Effect, Event, Machine, StateError, VoiceState};
+use softwake_wake::{NullDetector, PhraseHit};
 
 use crate::dispatch::{
     CancelledTool, ConfirmedTool, DispatchError, Hands, PendingToolCall, RanTool, RequestOutcome,
 };
+use crate::pcm::score_frame;
 use crate::soul::LoadedSoul;
 
 #[derive(Debug)]
@@ -33,6 +35,10 @@ pub(crate) struct Outcome {
 pub(crate) struct Runtime {
     machine: Machine,
     capture: MockAudioCapture,
+    pcm: NullDetector,
+    /// Last PCM score from [`Self::drain_pcm`]. `None` means the queue was empty.
+    #[cfg_attr(not(test), allow(dead_code))]
+    last_pcm_hit: Option<PhraseHit>,
     soul: LoadedSoul,
     session: TextStubSession,
     hands: Hands,
@@ -47,6 +53,8 @@ impl Runtime {
         Self {
             machine: Machine::new(CooldownConfig::default()),
             capture,
+            pcm: NullDetector,
+            last_pcm_hit: None,
             soul: LoadedSoul::open(soul_dir),
             session: TextStubSession::default(),
             hands: Hands::new(),
@@ -59,6 +67,9 @@ impl Runtime {
     /// connected client. A rejection leaves the machine untouched and does
     /// not emit that event.
     pub(crate) fn handle(&mut self, command: Command) -> Outcome {
+        // Score PCM that arrived before this command. Serve's queue is empty
+        // unless a test pushed samples. The typed demo enters awake on its own.
+        self.drain_pcm();
         match command {
             Command::GetStatus => Self::quiet(self.snapshot(None, None)),
             Command::ReloadSoul => {
@@ -74,9 +85,9 @@ impl Runtime {
     /// An invalid pack does not change the voice state. The pack applied here
     /// is the last startup or `reload_soul` read, not a fresh disk read.
     ///
-    /// Serve does not feed capture into the wake engine yet. The typed demo
-    /// applies the same [`LoadedSoul`] gate itself; this is the serve entry
-    /// for that later capture loop, and tests call it now.
+    /// Serve does not open a microphone. [`Self::drain_pcm`] still scores any
+    /// frame already queued. The typed demo applies the same [`LoadedSoul`]
+    /// gate itself; this is the serve entry for a wake phrase, and tests call it.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn wake_phrase(&mut self) -> Outcome {
         if let Some(reason) = self.soul.refusal() {
@@ -138,6 +149,24 @@ impl Runtime {
             Ok(cancelled) => self.cancelled_outcome(cancelled),
             Err(error) => Self::rejected(tool_ipc_error(&error)),
         }
+    }
+
+    /// Pull every queued frame into the PCM detector.
+    ///
+    /// Returns the last hit, or [`PhraseHit::None`] when the queue is empty.
+    /// [`NullDetector`] never matches. After `stop`, the mock drops the queue,
+    /// so hibernate does not score a late frame.
+    fn drain_pcm(&mut self) -> PhraseHit {
+        let mut hit = PhraseHit::None;
+        let mut scored = false;
+        while let Ok(Some(frame)) = AudioCapture::poll_frame(&mut self.capture) {
+            hit = score_frame(&mut self.pcm, &frame);
+            scored = true;
+        }
+        if scored {
+            self.last_pcm_hit = Some(hit);
+        }
+        hit
     }
 
     fn transition(&mut self, command: Command) -> Outcome {
@@ -394,6 +423,7 @@ mod tests {
     use crate::soul::{TestSoulDir, reload_message};
     use softwake_ipc::{Command, Event, IpcError, ResponseBody, VoiceState};
     use softwake_session::SessionPhase;
+    use softwake_wake::PhraseHit;
 
     fn valid_runtime() -> (Runtime, TestSoulDir) {
         let dir = TestSoulDir::valid();
@@ -407,6 +437,26 @@ mod tests {
             outcome.body.status().is_some(),
             "wake should apply, got {outcome:?}"
         );
+    }
+
+    #[test]
+    fn queued_silence_is_scored_before_a_command_and_dropped_after_hibernate() {
+        let (mut runtime, _soul) = valid_runtime();
+        assert_eq!(runtime.last_pcm_hit, None);
+        assert!(runtime.capture.push_frame(&[0; 160]));
+        let status = runtime.handle(Command::GetStatus);
+        assert_eq!(
+            status.body.status().expect("status").state,
+            VoiceState::Sleep
+        );
+        assert_eq!(runtime.last_pcm_hit, Some(PhraseHit::None));
+        assert!(runtime.capture.poll_frame().is_none());
+
+        runtime.handle(Command::Hibernate);
+        assert!(!runtime.capture.push_frame(&[0; 160]));
+        runtime.last_pcm_hit = None;
+        runtime.handle(Command::GetStatus);
+        assert_eq!(runtime.last_pcm_hit, None);
     }
 
     #[test]

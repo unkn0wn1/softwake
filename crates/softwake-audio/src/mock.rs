@@ -5,21 +5,7 @@
 
 use std::collections::VecDeque;
 
-use crate::AudioCapture;
-
-/// One captured window of interleaved 16-bit samples.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AudioFrame {
-    samples: Vec<i16>,
-}
-
-impl AudioFrame {
-    /// Samples in this window.
-    #[must_use]
-    pub fn samples(&self) -> &[i16] {
-        &self.samples
-    }
-}
+use crate::{AudioCapture, AudioFormat, AudioFrame};
 
 /// Microphone stand-in. It starts stopped.
 ///
@@ -47,15 +33,16 @@ impl MockAudioCapture {
         if !self.running {
             return false;
         }
-        self.pending.push_back(AudioFrame {
-            samples: samples.to_vec(),
-        });
+        self.pending
+            .push_back(AudioFrame::from_samples(samples.to_vec()));
         true
     }
 
     /// Next queued frame, and only while running.
     ///
     /// After `stop`, this returns [`None`] and the queue stays empty.
+    /// [`AudioCapture::poll_frame`] is the same queue behind `Result`, so a
+    /// caller that only has the trait can pull PCM the same way.
     #[must_use]
     pub fn poll_frame(&mut self) -> Option<AudioFrame> {
         if !self.running {
@@ -78,6 +65,14 @@ impl AudioCapture for MockAudioCapture {
         self.running = false;
         self.pending.clear();
         Ok(())
+    }
+
+    fn poll_frame(&mut self) -> Result<Option<AudioFrame>, Self::Error> {
+        Ok(MockAudioCapture::poll_frame(self))
+    }
+
+    fn format(&self) -> AudioFormat {
+        AudioFormat::WAKE
     }
 }
 

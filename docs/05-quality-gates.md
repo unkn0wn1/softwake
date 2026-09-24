@@ -25,7 +25,7 @@ No deploy pipeline in phase 1. Tag releases later.
 
 ## Product gates (phase 1)
 
-Manual checklist. Run it after clone + soul templates. The typed demo (`softwaked demo`) is the supported path that enters awake; the microphone and PipeWire are not wired yet, so wake and sleep phrases are typed commands that feed the same state machine.
+Manual checklist. Run it after clone + soul templates. The typed demo (`softwaked demo`) is the supported path that enters awake. Default builds use mock capture and do not open a microphone. Native PipeWire is the `pipewire-native` feature and CI does not enable it. Wake and sleep phrases in the demo are typed commands that feed the same state machine. The PCM detector still sees a silent frame on that path ([ADR 0006](ADR-0006-on-device-wake.md)).
 
 Copy templates first:
 

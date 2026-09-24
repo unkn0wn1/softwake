@@ -6,7 +6,7 @@ Rust end-to-end (daemon + Tauri UI). Phase 1 nails reliable **wake / sleep / hib
 
 ## Status
 
-Cargo workspace on stable Rust (edition 2024). `softwake-state` implements sleep / awake / hibernate, including rejected transitions and phrase cooldowns. `softwake-audio` has a mock capture backend (`stop` ends frame delivery) and a trait-shaped PipeWire stub (default `pipewire` feature, no native library). `softwake-wake` scores configured phrases with a local text matcher ([ADR 0002](docs/ADR-0002-wake-engine-spike.md)). `softwake-soul` loads `soul.md` and `user.md`, checks them, and renders system instructions. `softwaked serve` speaks newline-delimited JSON on a Unix socket ([ADR 0003](docs/ADR-0003-ipc-transport.md)). `softwaked ctl` and the Tauri window `softwake-ui` are clients of that socket. Entering awake opens a text session with the rendered soul instructions. `echo` runs immediately while awake ([ADR 0004](docs/ADR-0004-first-safe-tool.md)). `notify` waits for confirmation and then appends a line to an in-memory sink. `shell` is denied ([ADR 0005](docs/ADR-0005-tool-confirmation.md)). A model client and further tools are later work. A missing soul pack refuses awake; `reload-soul` re-reads the files and applies on the next awake.
+Cargo workspace on stable Rust (edition 2024). `softwake-state` implements sleep / awake / hibernate, including rejected transitions and phrase cooldowns. `softwake-audio` has a mock capture backend (`stop` ends frame delivery) and a trait-shaped PipeWire stub (default `pipewire` feature, no native library). `softwake-wake` scores configured phrases with a local text matcher ([ADR 0002](docs/ADR-0002-wake-engine-spike.md)). The production on-device wake engine is sherpa-onnx keyword spotting ([ADR 0006](docs/ADR-0006-on-device-wake.md)). Weights are not in the repo, and the demo stays typed. `softwake-soul` loads `soul.md` and `user.md`, checks them, and renders system instructions. `softwaked serve` speaks newline-delimited JSON on a Unix socket ([ADR 0003](docs/ADR-0003-ipc-transport.md)). `softwaked ctl` and the Tauri window `softwake-ui` are clients of that socket. Entering awake opens a text session with the rendered soul instructions. `echo` runs immediately while awake ([ADR 0004](docs/ADR-0004-first-safe-tool.md)). `notify` waits for confirmation and then appends a line to an in-memory sink. `shell` is denied ([ADR 0005](docs/ADR-0005-tool-confirmation.md)). A model client and further tools are later work. A missing soul pack refuses awake; `reload-soul` re-reads the files and applies on the next awake.
 
 ## Build and test
 
@@ -17,7 +17,14 @@ cargo test --workspace
 cargo build --workspace --all-targets
 ```
 
-The default `pipewire` feature compiles the capture stub. It does not require a system PipeWire library. `--no-default-features` on `softwake-audio` omits the stub.
+The default `pipewire` feature compiles the capture stub. It does not require a system PipeWire library. `--no-default-features` on `softwake-audio` omits the stub. `pipewire-native` and `sherpa-kws` are optional. CI does not enable them. Neither opens a microphone or downloads weights:
+
+```bash
+cargo test -p softwake-audio --features pipewire-native
+cargo test -p softwake-wake --features sherpa-kws
+```
+
+A later native PipeWire stream will also need `libpipewire-0.3-dev`. This build does not link that library.
 
 ## Demo
 
@@ -31,7 +38,7 @@ cargo run -p softwake-daemon
 softwaked state: sleep
 ```
 
-The interactive demo is typed commands only. The microphone is not open, and PipeWire is not wired yet. It starts in sleep with mock capture running. `wake` and `sleep` submit the configured phrases to the text detector, then apply the voice-state machine, including the 800 ms phrase cooldown. `hibernate` stops capture. A voice command is rejected until `resume`, which returns to sleep and starts capture again. `wake` also requires a valid soul pack. Copy the repo templates into the config directory first (or pass `--soul-dir`):
+The interactive demo is typed commands only. The microphone is not opened. Mock capture is the default, and native PipeWire is an optional feature that is not linked in the default build. It starts in sleep with mock capture running. `wake` and `sleep` submit the configured phrases to the text detector, then apply the voice-state machine, including the 800 ms phrase cooldown. `hibernate` stops capture. A voice command is rejected until `resume`, which returns to sleep and starts capture again. `wake` also requires a valid soul pack. Copy the repo templates into the config directory first (or pass `--soul-dir`):
 
 ```bash
 mkdir -p ~/.config/softwake/soul
@@ -41,7 +48,7 @@ cargo run -p softwake-daemon -- demo
 
 ```text
 softwaked demo
-typed commands only — mic / PipeWire not wired yet
+typed commands only — mock capture; native PipeWire is feature-gated
 state: sleep
 capture: running
 soul: ok
@@ -180,3 +187,4 @@ On Linux the window links WebKitGTK. The packages used in CI are `libwebkit2gtk-
 | [docs/ADR-0003-ipc-transport.md](docs/ADR-0003-ipc-transport.md) | Unix socket and newline-delimited JSON |
 | [docs/ADR-0004-first-safe-tool.md](docs/ADR-0004-first-safe-tool.md) | Why the first tool is `echo` |
 | [docs/ADR-0005-tool-confirmation.md](docs/ADR-0005-tool-confirmation.md) | Safe, confirm, and deny tools |
+| [docs/ADR-0006-on-device-wake.md](docs/ADR-0006-on-device-wake.md) | On-device wake engine (sherpa-onnx keyword spotting) |

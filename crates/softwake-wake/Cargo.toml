@@ -6,6 +6,10 @@ publish.workspace = true
 rust-version.workspace = true
 description = "Local wake and sleep phrase detection."
 
+[features]
+# Compiles the sherpa-onnx PCM detector stub. No model download and no ONNX runtime.
+sherpa-kws = []
+
 [dependencies]
 thiserror.workspace = true
 

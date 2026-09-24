@@ -1,14 +1,21 @@
 //! Wake and sleep phrase boundary.
 //!
-//! [`WakeDetector`] is the PCM seam for a later on-device engine.
-//! [`NullDetector`] never matches. [`TextWakeDetector`] is the phase-1 spike:
-//! it scores UTF-8 windows against a [`PhraseTable`]. ADR 0002 records why
-//! the spike is text instead of a model.
+//! [`WakeDetector`] is the PCM seam for the on-device engine chosen in
+//! ADR 0006 (sherpa-onnx keyword spotting). [`NullDetector`] never matches
+//! and is the default PCM stand-in: weights are not linked.
+//! [`TextWakeDetector`] is the phase-1 spike: it scores UTF-8 windows against
+//! a [`PhraseTable`]. ADR 0002 records why the spike is text instead of a
+//! model. The `sherpa-kws` feature compiles `SherpaKwsDetector`, which
+//! implements the same PCM trait and also returns no hit until weights load.
 
+#[cfg(feature = "sherpa-kws")]
+mod sherpa;
 mod text;
 
 use std::fmt;
 
+#[cfg(feature = "sherpa-kws")]
+pub use sherpa::SherpaKwsDetector;
 pub use text::{PhraseTable, PhraseTableError, TextWakeDetector};
 
 /// What a detector heard in one window.
