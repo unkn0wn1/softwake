@@ -5,6 +5,7 @@ members = [
     "crates/softwake-state",
     "crates/softwake-audio",
     "crates/softwake-wake",
+    "crates/softwake-voice",
     "crates/softwake-session",
     "crates/softwake-tools",
     "crates/softwake-soul",
@@ -30,6 +31,7 @@ softwake-soul = { path = "crates/softwake-soul" }
 softwake-state = { path = "crates/softwake-state" }
 softwake-tools = { path = "crates/softwake-tools" }
 softwake-wake = { path = "crates/softwake-wake" }
+softwake-voice = { path = "crates/softwake-voice" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

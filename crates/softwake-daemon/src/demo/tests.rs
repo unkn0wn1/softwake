@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use softwake_session::SessionPhase;
 use softwake_state::{CooldownConfig, VoiceState};
+use softwake_voice::TranscriptEvent;
 use softwake_wake::{PhraseHit, PhraseTable};
 
 use super::{COMMANDS, CommandResult, Demo};
@@ -821,4 +822,89 @@ fn confirm_and_cancel_reject_extra_arguments() {
             .iter()
             .any(|line| line.contains("cancel takes one pending id"))
     );
+}
+
+#[test]
+fn hear_injects_transcript_while_awake() {
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    demo.handle_line("wake", Duration::ZERO);
+    let result = demo.handle_line("hear hello there", Duration::from_millis(800));
+    assert!(
+        result
+            .lines
+            .iter()
+            .any(|line| line == "partial transcript: \"hello there\"")
+    );
+    assert!(
+        result
+            .lines
+            .iter()
+            .any(|line| line == "final transcript: \"hello there\"")
+    );
+    assert_eq!(
+        demo.last_transcripts(),
+        &[
+            TranscriptEvent::Partial {
+                text: "hello there".to_owned(),
+            },
+            TranscriptEvent::Final {
+                text: "hello there".to_owned(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn hear_refused_while_asleep_and_hibernating() {
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    let asleep = demo.handle_line("hear nope", Duration::ZERO);
+    assert!(
+        asleep
+            .lines
+            .iter()
+            .any(|line| line.contains("hear while sleep"))
+    );
+    assert!(demo.last_transcripts().is_empty());
+
+    demo.handle_line("hibernate", Duration::ZERO);
+    let hibernating = demo.handle_line("hear nope", Duration::ZERO);
+    assert!(
+        hibernating
+            .lines
+            .iter()
+            .any(|line| line.contains("hear while hibernate"))
+    );
+}
+
+#[test]
+fn say_records_speech_while_awake_and_refuses_asleep() {
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    let asleep = demo.handle_line("say hello", Duration::ZERO);
+    assert!(
+        asleep
+            .lines
+            .iter()
+            .any(|line| line.contains("say while sleep"))
+    );
+    assert!(demo.spoken().is_empty());
+
+    demo.handle_line("wake", Duration::ZERO);
+    let said = demo.handle_line("say hello", Duration::from_millis(800));
+    assert!(said.lines.iter().any(|line| line == "said: \"hello\""));
+    assert_eq!(demo.spoken(), &["hello".to_owned()]);
+    assert!(said.lines.iter().any(|line| line == "last said: hello"));
+}
+
+#[test]
+fn hear_and_say_need_text() {
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    demo.handle_line("wake", Duration::ZERO);
+    let hear = demo.handle_line("hear", Duration::from_millis(800));
+    assert!(
+        hear.lines
+            .iter()
+            .any(|line| line.contains("hear needs text"))
+    );
+    let say = demo.handle_line("say", Duration::ZERO);
+    assert!(say.lines.iter().any(|line| line.contains("say needs text")));
 }

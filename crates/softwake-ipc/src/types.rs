@@ -408,6 +408,11 @@ pub enum Event {
         /// Transcript text received so far.
         text: String,
     },
+    /// Final transcript for one utterance. Awake only; additive on protocol 1.
+    FinalTranscript {
+        /// Completed transcript text.
+        text: String,
+    },
     /// A tool started. Safe tools emit this immediately. Confirm-gated tools
     /// emit it only after `confirm_tool`.
     ToolStarted {
@@ -657,6 +662,9 @@ mod tests {
         });
         assert_round_trip(&Event::PartialTranscript {
             text: "hello\nsoftwake".to_owned(),
+        });
+        assert_round_trip(&Event::FinalTranscript {
+            text: "hello world".to_owned(),
         });
         assert_round_trip(&Event::ToolStarted {
             name: "volume".to_owned(),

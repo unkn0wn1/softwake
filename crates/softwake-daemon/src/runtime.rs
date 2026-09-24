@@ -9,6 +9,7 @@
 //! Sleep and hibernate close that session and drop a pending confirmation.
 //! Safe tools run only while awake. A confirm-gated tool waits for
 //! `confirm_tool`. `cancel_tool` clears it without running.
+//! Mock STT/TTS act only while awake ([ADR 0007](../../docs/ADR-0007-awake-stt-tts.md)).
 
 use softwake_audio::{AudioCapture, MockAudioCapture};
 use softwake_ipc::VoiceState as WireState;
@@ -18,6 +19,7 @@ use softwake_session::SessionPhase;
 use softwake_session::TextStubSession;
 use softwake_soul::SoulDir;
 use softwake_state::{CooldownConfig, Effect, Event, Machine, StateError, VoiceState};
+use softwake_voice::{MockStt, MockTts, TextToSpeech, TranscriptEvent};
 use softwake_wake::{NullDetector, PhraseHit};
 
 use crate::dispatch::{
@@ -42,6 +44,8 @@ pub(crate) struct Runtime {
     soul: LoadedSoul,
     session: TextStubSession,
     hands: Hands,
+    stt: MockStt,
+    tts: MockTts,
 }
 
 impl Runtime {
@@ -58,6 +62,8 @@ impl Runtime {
             soul: LoadedSoul::open(soul_dir),
             session: TextStubSession::default(),
             hands: Hands::new(),
+            stt: MockStt::default(),
+            tts: MockTts::default(),
         }
     }
 
@@ -151,6 +157,63 @@ impl Runtime {
         }
     }
 
+    /// Inject mock STT text while awake and emit transcript IPC events.
+    ///
+    /// Sleep and hibernate refuse the channel. Used by tests and as the serve
+    /// stand-in until a microphone ASR path is wired.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn inject_transcript(&mut self, text: &str) -> Outcome {
+        if self.machine.permit_tool_dispatch().is_err() {
+            return Self::rejected(IpcError::protocol(format!(
+                "cannot hear while {}",
+                wire_state(self.machine.state())
+            )));
+        }
+        self.stt.inject_partial(text);
+        self.stt.inject_final(text);
+        let events = self.stt.drain();
+        let mut wire = Vec::with_capacity(events.len());
+        for event in events {
+            match event {
+                TranscriptEvent::Partial { text } => {
+                    wire.push(WireEvent::PartialTranscript { text });
+                }
+                TranscriptEvent::Final { text } => {
+                    wire.push(WireEvent::FinalTranscript { text });
+                }
+            }
+        }
+        let detail = Some(format!("transcript events: {}", wire.len()));
+        Outcome {
+            body: ResponseBody::ok(self.snapshot(Some(format!("heard: {text}")), detail)),
+            events: wire,
+        }
+    }
+
+    /// Record mock TTS while awake.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn speak(&mut self, text: &str) -> Outcome {
+        if self.machine.permit_tool_dispatch().is_err() {
+            return Self::rejected(IpcError::protocol(format!(
+                "cannot say while {}",
+                wire_state(self.machine.state())
+            )));
+        }
+        let Ok(()) = TextToSpeech::speak(&mut self.tts, text);
+        Outcome {
+            body: ResponseBody::ok(
+                self.snapshot(Some(format!("said: {text}")), Some("mock tts".to_owned())),
+            ),
+            events: Vec::new(),
+        }
+    }
+
+    /// Strings recorded by mock TTS (tests).
+    #[cfg(test)]
+    pub(crate) fn spoken(&self) -> &[String] {
+        self.tts.spoken()
+    }
+
     /// Pull every queued frame into the PCM detector.
     ///
     /// Returns the last hit, or [`PhraseHit::None`] when the queue is empty.
@@ -233,6 +296,7 @@ impl Runtime {
                 Effect::OpenSession => self.open_session(),
                 Effect::ReleaseActingResources => {
                     self.session.close();
+                    let _ = self.stt.drain();
                     if let Some(cancelled) = self.hands.clear_pending() {
                         extra.push(WireEvent::ToolConfirmResolved {
                             pending_id: cancelled.pending_id,
@@ -1073,5 +1137,56 @@ mod tests {
                 }
             }
         ));
+    }
+
+    #[test]
+    fn mock_stt_emits_partial_and_final_while_awake() {
+        let soul = TestSoulDir::valid();
+        let mut runtime = Runtime::new(soul.soul_dir());
+        wake(&mut runtime);
+
+        let outcome = runtime.inject_transcript("hello there");
+        assert!(outcome.body.status().is_some());
+        assert_eq!(
+            outcome.events,
+            vec![
+                Event::PartialTranscript {
+                    text: "hello there".to_owned(),
+                },
+                Event::FinalTranscript {
+                    text: "hello there".to_owned(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn mock_stt_refused_while_asleep() {
+        let soul = TestSoulDir::valid();
+        let mut runtime = Runtime::new(soul.soul_dir());
+        let outcome = runtime.inject_transcript("nope");
+        assert!(matches!(
+            outcome.body,
+            ResponseBody::Err {
+                error: IpcError::Protocol { .. }
+            }
+        ));
+        assert!(outcome.events.is_empty());
+    }
+
+    #[test]
+    fn mock_tts_records_while_awake_and_refuses_asleep() {
+        let soul = TestSoulDir::valid();
+        let mut runtime = Runtime::new(soul.soul_dir());
+        assert!(matches!(
+            runtime.speak("early").body,
+            ResponseBody::Err {
+                error: IpcError::Protocol { .. }
+            }
+        ));
+        wake(&mut runtime);
+        let said = runtime.speak("hello");
+        assert!(said.body.status().is_some());
+        assert_eq!(runtime.spoken(), &["hello".to_owned()]);
     }
 }

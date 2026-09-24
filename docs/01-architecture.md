@@ -30,6 +30,7 @@ Keep crates small and single-purpose. Exact names can shift; responsibilities sh
 | `softwake-daemon` | Binary: state machine, IPC server, wiring |
 | `softwake-state` | Sleep / awake / hibernate transitions and invariants |
 | `softwake-audio` | Capture trait, mock backend, PipeWire stub. `pipewire-native` is off unless a developer opts in |
+| `softwake-voice` | Awake STT/TTS boundary (mock default; sherpa stubs feature-gated; [ADR 0007](ADR-0007-awake-stt-tts.md)) |
 | `softwake-wake` | Local wake/sleep phrases. Text table for the typed demo. PCM seam for sherpa-onnx keyword spotting ([ADR 0006](ADR-0006-on-device-wake.md)) |
 | `softwake-session` | Text session for one awake period. Stores rendered soul instructions. No model client yet |
 | `softwake-tools` | Tool registry with safe, confirm, and deny metadata. `echo` is safe, `notify` waits for confirmation, `shell` is denied |

@@ -1,0 +1,19 @@
+[package]
+name = "softwake-voice"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Awake speech-to-text and text-to-speech boundary. Mock default; feature-gated sherpa stubs."
+
+[features]
+# Compiles the sherpa-onnx streaming ASR stub. No model download and no ONNX runtime.
+sherpa-asr = []
+# Compiles the sherpa-onnx TTS stub. No model download and no ONNX runtime.
+sherpa-tts = []
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true

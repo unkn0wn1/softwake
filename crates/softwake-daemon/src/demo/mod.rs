@@ -30,14 +30,14 @@ use softwake_soul::SoulDir;
 #[cfg(test)]
 use softwake_state::VoiceState;
 use softwake_state::{CooldownConfig, Effect, Event, Machine};
+use softwake_voice::{MockStt, MockTts, TextToSpeech, TranscriptEvent};
 use softwake_wake::{NullDetector, PhraseHit, PhraseTable, TextWakeDetector};
 
 use crate::dispatch::{Hands, RequestOutcome};
 use crate::pcm::score_frame;
 use crate::soul::LoadedSoul;
 
-const COMMANDS: &str =
-    "commands: wake, sleep, hibernate, resume, status, reload-soul, tool, confirm, cancel, quit";
+const COMMANDS: &str = "commands: wake, sleep, hibernate, resume, status, reload-soul, tool, confirm, cancel, hear, say, quit";
 const TYPED_ONLY: &str = "typed commands only — mock capture; native PipeWire is feature-gated";
 
 /// One step of the demo loop.
@@ -72,6 +72,10 @@ enum Parsed {
     Cancel { id: Option<String> },
     ConfirmExtra,
     CancelExtra,
+    Hear { text: String },
+    HearMissingText,
+    Say { text: String },
+    SayMissingText,
     Quit,
     Unknown,
 }
@@ -111,6 +115,8 @@ impl Parsed {
             Self::Tool { .. } | Self::ToolMissingName => "tool",
             Self::Confirm { .. } | Self::ConfirmExtra => "confirm",
             Self::Cancel { .. } | Self::CancelExtra => "cancel",
+            Self::Hear { .. } | Self::HearMissingText => "hear",
+            Self::Say { .. } | Self::SayMissingText => "say",
             Self::Quit => "quit",
             Self::Unknown => "unknown",
         }
@@ -131,6 +137,13 @@ pub(crate) struct Demo {
     soul: LoadedSoul,
     session: TextStubSession,
     hands: Hands,
+    /// Mock STT. Typed `hear` injects while awake.
+    stt: MockStt,
+    /// Mock TTS. Typed `say` records while awake.
+    tts: MockTts,
+    /// Last STT events produced by a successful `hear` (tests).
+    #[cfg_attr(not(test), allow(dead_code))]
+    last_transcripts: Vec<TranscriptEvent>,
     verbose: bool,
 }
 
@@ -151,6 +164,9 @@ impl Demo {
             soul: LoadedSoul::open(soul_dir),
             session: TextStubSession::default(),
             hands: Hands::new(),
+            stt: MockStt::default(),
+            tts: MockTts::default(),
+            last_transcripts: Vec::new(),
             verbose: false,
         }
     }
@@ -193,6 +209,22 @@ impl Demo {
             Parsed::Cancel { id } => self.cancel_pending(id),
             Parsed::ConfirmExtra => self.reject_extra("confirm"),
             Parsed::CancelExtra => self.reject_extra("cancel"),
+            Parsed::Hear { text } => self.inject_transcript(&text),
+            Parsed::HearMissingText => {
+                let mut lines = vec!["rejected: hear needs text".to_owned(), COMMANDS.to_owned()];
+                if self.verbose {
+                    lines.insert(0, "verbose: rejected: hear needs text".to_owned());
+                }
+                lines
+            }
+            Parsed::Say { text } => self.speak_text(&text),
+            Parsed::SayMissingText => {
+                let mut lines = vec!["rejected: say needs text".to_owned(), COMMANDS.to_owned()];
+                if self.verbose {
+                    lines.insert(0, "verbose: rejected: say needs text".to_owned());
+                }
+                lines
+            }
             Parsed::ToolMissingName => {
                 let mut lines = vec![
                     "rejected: tool needs a name".to_owned(),
@@ -245,6 +277,16 @@ impl Demo {
     }
 
     #[cfg(test)]
+    fn spoken(&self) -> &[String] {
+        self.tts.spoken()
+    }
+
+    #[cfg(test)]
+    fn last_transcripts(&self) -> &[TranscriptEvent] {
+        &self.last_transcripts
+    }
+
+    #[cfg(test)]
     fn applied_instructions(&self) -> Option<&str> {
         self.soul.applied_instructions()
     }
@@ -285,6 +327,61 @@ impl Demo {
             return self.with_status(lines);
         };
         self.hear(&phrase, Some(command.hit()))
+    }
+
+    /// Inject a mock STT partial and final while awake.
+    ///
+    /// Sleep and hibernate refuse the channel. This is the typed stand-in for
+    /// a streaming ASR partial/final pair ([ADR 0007](../../../../docs/ADR-0007-awake-stt-tts.md)).
+    fn inject_transcript(&mut self, text: &str) -> Vec<String> {
+        if self.machine.permit_tool_dispatch().is_err() {
+            let rejected = format!(
+                "rejected: hear while {} (STT acts only while awake)",
+                self.machine.state()
+            );
+            let mut lines = Vec::new();
+            self.push_verbose(&mut lines, &rejected);
+            lines.push(rejected);
+            return self.with_status(lines);
+        }
+        self.stt.inject_partial(text);
+        self.stt.inject_final(text);
+        let events = self.stt.drain();
+        self.last_transcripts.clone_from(&events);
+        let mut lines = Vec::new();
+        for event in &events {
+            match event {
+                TranscriptEvent::Partial { text } => {
+                    lines.push(format!("partial transcript: \"{text}\""));
+                }
+                TranscriptEvent::Final { text } => {
+                    lines.push(format!("final transcript: \"{text}\""));
+                }
+            }
+        }
+        self.with_status(lines)
+    }
+
+    /// Record mock TTS while awake.
+    ///
+    /// Sleep and hibernate prefer silence and refuse `say`.
+    fn speak_text(&mut self, text: &str) -> Vec<String> {
+        if self.machine.permit_tool_dispatch().is_err() {
+            let rejected = format!(
+                "rejected: say while {} (TTS acts only while awake)",
+                self.machine.state()
+            );
+            let mut lines = Vec::new();
+            self.push_verbose(&mut lines, &rejected);
+            lines.push(rejected);
+            return self.with_status(lines);
+        }
+        // MockTts::speak is infallible.
+        let Ok(()) = TextToSpeech::speak(&mut self.tts, text);
+        let mut lines = Vec::new();
+        self.push_verbose(&mut lines, format!("tts: {text:?}"));
+        lines.push(format!("said: \"{text}\""));
+        self.with_status(lines)
     }
 
     /// Score `text` when capture delivers a frame, then apply that hit.
@@ -485,6 +582,10 @@ impl Demo {
             }
             Effect::ReleaseActingResources => {
                 self.session.close();
+                // Drop any queued mock STT. Prefer TTS silence outside awake:
+                // do not speak on the way out; leave the spoken log for status.
+                let _ = self.stt.drain();
+                self.last_transcripts.clear();
                 self.hands.clear_pending().map(|cancelled| {
                     format!("cancelled {}: {}", cancelled.pending_id, cancelled.name)
                 })
@@ -542,6 +643,9 @@ impl Demo {
         if let Some(notification) = self.hands.notifications().back() {
             lines.push(format!("notification: {notification}"));
         }
+        if let Some(said) = self.tts.spoken().last() {
+            lines.push(format!("last said: {said}"));
+        }
         lines
     }
 
@@ -574,6 +678,24 @@ fn parse_line(line: &str) -> Parsed {
     }
     if head.eq_ignore_ascii_case("cancel") || head.eq_ignore_ascii_case("cancel-tool") {
         return parse_pending_id(parts, false);
+    }
+    if head.eq_ignore_ascii_case("hear") {
+        let rest = trimmed[head.len()..].trim();
+        if rest.is_empty() {
+            return Parsed::HearMissingText;
+        }
+        return Parsed::Hear {
+            text: rest.to_owned(),
+        };
+    }
+    if head.eq_ignore_ascii_case("say") {
+        let rest = trimmed[head.len()..].trim();
+        if rest.is_empty() {
+            return Parsed::SayMissingText;
+        }
+        return Parsed::Say {
+            text: rest.to_owned(),
+        };
     }
     match trimmed.to_ascii_lowercase().as_str() {
         "wake" => Parsed::Wake,
