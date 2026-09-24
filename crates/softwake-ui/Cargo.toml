@@ -1,0 +1,29 @@
+[package]
+name = "softwake-ui"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Thin Softwake window. It shows daemon state and sends commands over the local socket."
+
+[lib]
+name = "softwake_ui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "softwake-ui"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+softwake-ipc.workspace = true
+tauri = { version = "2", features = [] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[lints]
+workspace = true

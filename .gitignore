@@ -9,6 +9,7 @@ dist/
 dist-ssr/
 .tauri/
 src-tauri/target/
+crates/softwake-ui/gen/
 *.local
 
 # IDE / OS

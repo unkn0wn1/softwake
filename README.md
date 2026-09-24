@@ -6,7 +6,7 @@ Rust end-to-end (daemon + Tauri UI). Phase 1 nails reliable **wake / sleep / hib
 
 ## Status
 
-Cargo workspace on stable Rust (edition 2024). `softwake-state` implements sleep / awake / hibernate, including rejected transitions and phrase cooldowns. `softwake-audio` has a mock capture backend (`stop` ends frame delivery) and a trait-shaped PipeWire stub (default `pipewire` feature, no native library). `softwake-wake` scores configured phrases with a local text matcher ([ADR 0002](docs/ADR-0002-wake-engine-spike.md)). Session, tools, soul paths, and IPC types are compile-clean boundaries. The Tauri app (`softwake-ui`) is not a workspace member yet.
+Cargo workspace on stable Rust (edition 2024). `softwake-state` implements sleep / awake / hibernate, including rejected transitions and phrase cooldowns. `softwake-audio` has a mock capture backend (`stop` ends frame delivery) and a trait-shaped PipeWire stub (default `pipewire` feature, no native library). `softwake-wake` scores configured phrases with a local text matcher ([ADR 0002](docs/ADR-0002-wake-engine-spike.md)). `softwaked serve` speaks newline-delimited JSON on a Unix socket ([ADR 0003](docs/ADR-0003-ipc-transport.md)). `softwaked ctl` and the Tauri window `softwake-ui` are clients of that socket. Session, tools, and soul loading are still boundaries: `reload-soul` records a request and does not parse the soul pack yet.
 
 ## Build and test
 
@@ -52,6 +52,39 @@ A `> ` prompt is printed before each line is read. The same path accepts a pipe 
 
 Type one command per line. `sleep` in the 800 ms after `wake` stays awake. `wake` in the 800 ms after `sleep` or `resume` stays asleep. `hibernate` is a UI command and applies on the next line.
 
+## Serve and ctl
+
+`softwaked serve` keeps the voice-state machine and mock capture running and listens for clients. `softwaked --serve` is the same mode. A stale socket file is removed on startup. If another serve is already listening, startup fails and leaves that socket in place.
+
+```bash
+cargo run -p softwake-daemon -- serve
+```
+
+In another terminal:
+
+```bash
+cargo run -p softwake-daemon -- ctl status
+cargo run -p softwake-daemon -- ctl hibernate
+cargo run -p softwake-daemon -- ctl status    # hibernate, capture stopped
+cargo run -p softwake-daemon -- ctl resume    # back to sleep, not awake
+cargo run -p softwake-daemon -- ctl sleep     # rejected while already asleep
+cargo run -p softwake-daemon -- ctl reload-soul
+```
+
+`ctl` prints `state`, `capture`, and `soul reload`, and exits non-zero when the daemon rejects the command or cannot be reached. `resume` is wake-from-hibernate and lands in sleep. `reload-soul` records that a reload should apply on the next awake session.
+
+The socket path is the first match of `--socket PATH`, `SOFTWAKE_SOCKET`, `$XDG_RUNTIME_DIR/softwake/softwaked.sock`, and `/tmp/softwake-$UID/softwaked.sock` when `XDG_RUNTIME_DIR` is unset.
+
+## Window
+
+`softwake-ui` is a small Tauri window: the current state, and buttons for Hibernate, Wake (leave hibernate into sleep), Sleep, and Reload soul. It only talks to the socket. Start `softwaked serve` first.
+
+```bash
+cargo run -p softwake-ui
+```
+
+On Linux the window links WebKitGTK. The packages used in CI are `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `patchelf`, `libxdo-dev`, and `libssl-dev`.
+
 ## Docs
 
 | Doc | Purpose |
@@ -65,3 +98,4 @@ Type one command per line. `sleep` in the 800 ms after `wake` stays awake. `wake
 | [docs/06-milestones.md](docs/06-milestones.md) | Phase 1 vertical slice |
 | [docs/ADR-0001-name-and-scope.md](docs/ADR-0001-name-and-scope.md) | Name and phase-1 scope |
 | [docs/ADR-0002-wake-engine-spike.md](docs/ADR-0002-wake-engine-spike.md) | Text phrase table for the wake spike |
+| [docs/ADR-0003-ipc-transport.md](docs/ADR-0003-ipc-transport.md) | Unix socket and newline-delimited JSON |

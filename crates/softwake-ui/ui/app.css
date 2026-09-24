@@ -1,0 +1,83 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: #16161d;
+  color: #f4f1ea;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: 28px 24px 32px;
+}
+
+.eyebrow {
+  margin: 0;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  color: #b7b1c4;
+}
+
+h1 {
+  margin: 8px 0 16px;
+  font-size: 3rem;
+  font-weight: 560;
+  letter-spacing: -0.03em;
+}
+
+.meta,
+.detail,
+.error {
+  margin: 0 0 8px;
+  line-height: 1.4;
+}
+
+.meta {
+  color: #d9d3c7;
+}
+
+.detail {
+  min-height: 1.4em;
+  color: #9d97a8;
+}
+
+.error {
+  min-height: 1.4em;
+  color: #ffb4a8;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 28px;
+}
+
+button {
+  appearance: none;
+  border: 1px solid #3c3948;
+  border-radius: 10px;
+  background: #24222d;
+  color: inherit;
+  font: inherit;
+  padding: 14px 12px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #312e3c;
+}
+
+button:active {
+  background: #1b1a22;
+}
+
+button:focus-visible {
+  outline: 2px solid #d7c4a3;
+  outline-offset: 2px;
+}

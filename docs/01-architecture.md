@@ -7,7 +7,7 @@
 │  softwake-ui (Tauri)                                   │
 │  settings · status · hibernate/wake · soul editor       │
 └───────────────────────────┬─────────────────────────────┘
-                            │ localhost IPC (JSON-RPC or similar)
+                            │ Unix socket, newline-delimited JSON
 ┌───────────────────────────▼─────────────────────────────┐
 │  softwaked (Rust daemon)                               │
 │  state machine · wake gate · session · tool dispatcher  │
@@ -34,8 +34,8 @@ Keep crates small and single-purpose. Exact names can shift; responsibilities sh
 | `softwake-session` | Build model session from soul pack; stream events |
 | `softwake-tools` | Tool registry, allowlist, confirm policy, runners |
 | `softwake-soul` | Load/validate soul pack; render system instructions |
-| `softwake-ipc` | Shared protocol types (daemon ↔ UI) |
-| `softwake-ui` | Tauri app (thin) |
+| `softwake-ipc` | Shared protocol: newline-delimited JSON over a Unix socket |
+| `softwake-ui` | Tauri window (thin). Status and buttons call the daemon |
 
 Do not put PipeWire types into `softwake-soul`. Do not put HTTP clients into `softwake-state`.
 
@@ -59,10 +59,16 @@ Chromium/Electron/Capacitor WebView audio is **out of scope** for the daemon. Do
 
 ## IPC
 
-- Local socket (Unix domain) preferred over binding a LAN port.
-- Version the protocol. UI and daemon negotiate version on connect.
-- Events: `state_changed`, `partial_transcript` (awake only), `tool_started` / `tool_finished`, `error`.
-- Commands: `get_status`, `hibernate`, `wake_from_ui`, `reload_soul`, `set_config` (validated).
+Unix domain socket and newline-delimited JSON, protocol version 1. The path, framing, and hello handshake are in [ADR 0003](ADR-0003-ipc-transport.md).
+
+- The UI and `softwaked ctl` may request an action. The daemon owns the state machine and accepts or rejects it.
+- The client and daemon exchange a hello before any command. A version mismatch closes the connection.
+- Commands: `get_status`, `hibernate`, `wake_from_ui`, `sleep`, `reload_soul`.
+- `set_config` is intentionally absent until the daemon can validate a configuration document.
+- Events: `state_changed`, `partial_transcript` (awake only; not emitted yet), `tool_started`, `tool_finished`, `error`.
+- A rejected command is an error response. `state_changed` is broadcast only when the voice state changes.
+- `reload_soul` records that a reload should apply on the next awake session. It does not parse the soul pack.
+- `softwaked serve` listens. `softwaked ctl` and the Tauri window connect to it. Default path: `$XDG_RUNTIME_DIR/softwake/softwaked.sock`, or `/tmp/softwake-$UID/softwaked.sock` when `XDG_RUNTIME_DIR` is unset.
 
 ## Tool bus
 

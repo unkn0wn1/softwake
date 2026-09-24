@@ -10,10 +10,16 @@ description = "Softwake daemon process"
 name = "softwaked"
 path = "src/main.rs"
 
+[lib]
+name = "softwake_daemon"
+path = "src/lib.rs"
+
 [dependencies]
 softwake-audio.workspace = true
+softwake-ipc.workspace = true
 softwake-state.workspace = true
 softwake-wake.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

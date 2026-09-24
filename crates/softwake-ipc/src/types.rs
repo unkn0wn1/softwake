@@ -1,0 +1,525 @@
+//! JSON messages shared by the daemon and its clients.
+//!
+//! Voice states use the same spellings as the state machine: `sleep`,
+//! `awake`, and `hibernate`. Commands and events keep the names the UI and
+//! the daemon already share. Payloads carry the state, a short detail line,
+//! or a structured error.
+
+use serde::de::Error as DeserializeError;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+/// Protocol generation negotiated when a client connects.
+///
+/// The client and the daemon must send this exact value. There is no
+/// compatibility range inside one generation.
+pub const PROTOCOL_VERSION: u32 = 1;
+
+/// Fixed voice-state vocabulary on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoiceState {
+    /// Listening. The acting session and tools are off.
+    Sleep,
+    /// Acting session and allowlisted tools may run.
+    Awake,
+    /// Capture is off. Only a UI command can leave.
+    Hibernate,
+}
+
+impl VoiceState {
+    /// Stable protocol spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sleep => "sleep",
+            Self::Awake => "awake",
+            Self::Hibernate => "hibernate",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "sleep" => Some(Self::Sleep),
+            "awake" => Some(Self::Awake),
+            "hibernate" => Some(Self::Hibernate),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for VoiceState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl Serialize for VoiceState {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for VoiceState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = <&str>::deserialize(deserializer)?;
+        Self::parse(value).ok_or_else(|| {
+            DeserializeError::unknown_variant(value, &["sleep", "awake", "hibernate"])
+        })
+    }
+}
+
+/// Request from a client to the daemon.
+///
+/// `set_config` is intentionally absent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Command {
+    /// Ask for the current voice state.
+    GetStatus,
+    /// Enter hibernate from sleep or awake.
+    Hibernate,
+    /// Leave hibernate.
+    ///
+    /// The daemon lands in sleep, not awake.
+    WakeFromUi,
+    /// Ask the daemon to sleep from awake.
+    Sleep,
+    /// Record that the soul pack should be re-read on the next awake session.
+    ///
+    /// This does not parse the soul pack.
+    ReloadSoul,
+}
+
+impl Command {
+    /// Stable protocol spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::GetStatus => "get_status",
+            Self::Hibernate => "hibernate",
+            Self::WakeFromUi => "wake_from_ui",
+            Self::Sleep => "sleep",
+            Self::ReloadSoul => "reload_soul",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "get_status" => Some(Self::GetStatus),
+            "hibernate" => Some(Self::Hibernate),
+            "wake_from_ui" => Some(Self::WakeFromUi),
+            "sleep" => Some(Self::Sleep),
+            "reload_soul" => Some(Self::ReloadSoul),
+            _ => None,
+        }
+    }
+
+    const VARIANTS: &'static [&'static str] = &[
+        "get_status",
+        "hibernate",
+        "wake_from_ui",
+        "sleep",
+        "reload_soul",
+    ];
+}
+
+impl std::fmt::Display for Command {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl Serialize for Command {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for Command {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = <&str>::deserialize(deserializer)?;
+        Self::parse(value).ok_or_else(|| DeserializeError::unknown_variant(value, Self::VARIANTS))
+    }
+}
+
+/// Failure a client can show.
+///
+/// Command failures travel in a [`ResponseBody::Err`]. [`Event::Error`] is
+/// for a failure that is not the reply to one request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum IpcError {
+    /// The command is not legal from the current voice state.
+    #[error("cannot apply {command} from {from}: {reason}")]
+    IllegalTransition {
+        /// State the daemon was in.
+        from: VoiceState,
+        /// Command that was rejected.
+        command: Command,
+        /// Why that pair is rejected.
+        reason: String,
+    },
+
+    /// A phrase command arrived inside its cooldown.
+    ///
+    /// UI commands are not cooled down. The variant is part of the protocol
+    /// so a later phrase command can use the same error.
+    #[error("cannot apply {command} during cooldown ({remaining_ms} ms remaining)")]
+    Cooldown {
+        /// Command that was rejected.
+        command: Command,
+        /// Time left before the command can apply, in milliseconds.
+        remaining_ms: u64,
+        /// Extra text when the daemon has it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
+
+    /// A socket or file operation failed.
+    #[error("io: {message}")]
+    Io {
+        /// What failed, without a socket path from another machine.
+        message: String,
+    },
+
+    /// The peer did not follow this protocol generation.
+    #[error("protocol: {message}")]
+    Protocol {
+        /// What the receiver objected to.
+        message: String,
+    },
+}
+
+impl IpcError {
+    /// Protocol failure with a display message.
+    #[must_use]
+    pub fn protocol(message: impl Into<String>) -> Self {
+        Self::Protocol {
+            message: message.into(),
+        }
+    }
+
+    /// I/O failure with a display message.
+    #[must_use]
+    pub fn io(message: impl Into<String>) -> Self {
+        Self::Io {
+            message: message.into(),
+        }
+    }
+}
+
+/// Voice state returned by a successful command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Status {
+    /// Current voice state.
+    pub state: VoiceState,
+    /// Whether capture is running after the command.
+    pub capture_running: bool,
+    /// A soul reload was requested and has not been consumed.
+    ///
+    /// Phase 1 records the request and does not parse the soul pack. The flag
+    /// stays set.
+    pub soul_reload_pending: bool,
+    /// Operator-facing sentence, when this reply has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// Short transition note, when one is cheap to include.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// Successful status or a structured error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ResponseBody {
+    /// The command was applied, or status was read.
+    Ok {
+        /// Fields of [`Status`], inline so a client sees one object.
+        ///
+        /// The field name is not `status`: that would collide with the serde tag.
+        #[serde(flatten)]
+        snapshot: Status,
+    },
+    /// The command was rejected. The daemon's state is unchanged.
+    Err {
+        /// Why the command did not apply.
+        error: IpcError,
+    },
+}
+
+impl ResponseBody {
+    /// Wrap a status snapshot.
+    #[must_use]
+    pub fn ok(snapshot: Status) -> Self {
+        Self::Ok { snapshot }
+    }
+
+    /// Status when the command succeeded.
+    #[must_use]
+    pub fn status(&self) -> Option<&Status> {
+        match self {
+            Self::Ok { snapshot } => Some(snapshot),
+            Self::Err { .. } => None,
+        }
+    }
+}
+
+/// Notification from the daemon to connected clients.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum Event {
+    /// The voice state changed.
+    StateChanged {
+        /// State after the transition.
+        state: VoiceState,
+        /// State before the transition.
+        previous: VoiceState,
+        /// Capture flag after the transition's effects.
+        capture_running: bool,
+        /// Short note such as `sleep -> hibernate`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
+    /// Partial transcript. Awake only; do not emit this while asleep or hibernating.
+    PartialTranscript {
+        /// Transcript text received so far.
+        text: String,
+    },
+    /// An allowlisted tool started.
+    ToolStarted {
+        /// Tool name from the allowlist.
+        name: String,
+    },
+    /// An allowlisted tool finished.
+    ToolFinished {
+        /// Tool name from the allowlist.
+        name: String,
+        /// Optional result summary.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
+    /// A failure that is not the reply to a specific request.
+    Error {
+        /// What failed.
+        error: IpcError,
+    },
+}
+
+/// First and later messages from a client.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ClientMessage {
+    /// Must be the first message on a connection.
+    Hello {
+        /// [`PROTOCOL_VERSION`] the client speaks.
+        protocol_version: u32,
+    },
+    /// One command. `id` is copied onto the response.
+    Request {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+        /// Command to apply.
+        command: Command,
+    },
+}
+
+/// Daemon messages after a client connects.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ServerMessage {
+    /// The versions matched. Further messages may be requests.
+    HelloOk {
+        /// [`PROTOCOL_VERSION`] the daemon speaks.
+        protocol_version: u32,
+    },
+    /// The versions differed, or the first message was not a hello.
+    ///
+    /// The daemon closes the connection after this message.
+    HelloRejected {
+        /// Version the client sent, when the first message was a hello.
+        protocol_version: u32,
+        /// Version the daemon speaks.
+        expected: u32,
+        /// Why the connection will close.
+        message: String,
+    },
+    /// Reply to one [`ClientMessage::Request`].
+    Response {
+        /// Id copied from the request.
+        id: u64,
+        /// Status or error.
+        body: ResponseBody,
+    },
+    /// Broadcast while the client is connected.
+    Event {
+        /// What happened.
+        body: Event,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ClientMessage, Command, Event, IpcError, PROTOCOL_VERSION, ResponseBody, ServerMessage,
+        Status, VoiceState,
+    };
+
+    fn assert_round_trip<T>(value: &T)
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
+    {
+        let json = serde_json::to_string(value).expect("encode");
+        assert!(
+            !json.contains('\n'),
+            "one message must stay on one line: {json}"
+        );
+        let decoded: T = serde_json::from_str(&json).expect("decode");
+        assert_eq!(&decoded, value);
+    }
+
+    fn status() -> Status {
+        Status {
+            state: VoiceState::Sleep,
+            capture_running: true,
+            soul_reload_pending: false,
+            message: None,
+            detail: Some("sleep -> hibernate".to_owned()),
+        }
+    }
+
+    #[test]
+    fn commands_round_trip_as_snake_case_strings() {
+        for command in [
+            Command::GetStatus,
+            Command::Hibernate,
+            Command::WakeFromUi,
+            Command::Sleep,
+            Command::ReloadSoul,
+        ] {
+            let message = ClientMessage::Request { id: 7, command };
+            assert_round_trip(&message);
+            let json = serde_json::to_string(&message).expect("encode");
+            assert!(json.contains(&format!("\"command\":\"{}\"", command.as_str())));
+        }
+    }
+
+    #[test]
+    fn responses_and_state_changes_round_trip() {
+        let ok = ServerMessage::Response {
+            id: 3,
+            body: ResponseBody::ok(status()),
+        };
+        assert_round_trip(&ok);
+        assert_eq!(ok_status(&ok).expect("status").state, VoiceState::Sleep);
+
+        let rejected = ServerMessage::Response {
+            id: 4,
+            body: ResponseBody::Err {
+                error: IpcError::IllegalTransition {
+                    from: VoiceState::Sleep,
+                    command: Command::Sleep,
+                    reason: "already asleep".to_owned(),
+                },
+            },
+        };
+        assert_round_trip(&rejected);
+        assert!(rejected_error(&rejected).is_some());
+
+        let changed = ServerMessage::Event {
+            body: Event::StateChanged {
+                state: VoiceState::Hibernate,
+                previous: VoiceState::Awake,
+                capture_running: false,
+                detail: Some("awake -> hibernate".to_owned()),
+            },
+        };
+        assert_round_trip(&changed);
+
+        let cooldown = IpcError::Cooldown {
+            command: Command::WakeFromUi,
+            remaining_ms: 800,
+            detail: Some("phrase gate".to_owned()),
+        };
+        assert_round_trip(&cooldown);
+        assert_eq!(
+            cooldown.to_string(),
+            "cannot apply wake_from_ui during cooldown (800 ms remaining)"
+        );
+    }
+
+    #[test]
+    fn other_events_and_hello_round_trip() {
+        assert_round_trip(&ClientMessage::Hello {
+            protocol_version: PROTOCOL_VERSION,
+        });
+        assert_round_trip(&ServerMessage::HelloOk {
+            protocol_version: PROTOCOL_VERSION,
+        });
+        assert_round_trip(&ServerMessage::HelloRejected {
+            protocol_version: 0,
+            expected: PROTOCOL_VERSION,
+            message: "protocol version 0 is not supported".to_owned(),
+        });
+        assert_round_trip(&Event::PartialTranscript {
+            text: "hello\nsoftwake".to_owned(),
+        });
+        assert_round_trip(&Event::ToolStarted {
+            name: "volume".to_owned(),
+        });
+        assert_round_trip(&Event::ToolFinished {
+            name: "volume".to_owned(),
+            detail: None,
+        });
+        assert_round_trip(&Event::Error {
+            error: IpcError::io("read failed"),
+        });
+        assert_round_trip(&IpcError::protocol("expected hello"));
+    }
+
+    #[test]
+    fn unknown_spellings_are_rejected() {
+        let error = serde_json::from_str::<Command>("\"GetStatus\"").expect_err("capital");
+        assert!(error.to_string().contains("unknown variant"));
+        assert!(serde_json::from_str::<VoiceState>("\"Sleep\"").is_err());
+        assert!(serde_json::from_str::<Command>("\"set_config\"").is_err());
+    }
+
+    #[test]
+    fn omitted_optional_fields_decode_as_absent() {
+        let status: Status = serde_json::from_str(
+            r#"{"state":"awake","capture_running":true,"soul_reload_pending":true}"#,
+        )
+        .expect("status");
+        assert_eq!(status.state, VoiceState::Awake);
+        assert!(status.message.is_none());
+        assert!(status.detail.is_none());
+        assert!(status.soul_reload_pending);
+    }
+
+    fn ok_status(message: &ServerMessage) -> Option<&Status> {
+        match message {
+            ServerMessage::Response { body, .. } => body.status(),
+            _ => None,
+        }
+    }
+
+    fn rejected_error(message: &ServerMessage) -> Option<&IpcError> {
+        match message {
+            ServerMessage::Response {
+                body: ResponseBody::Err { error },
+                ..
+            } => Some(error),
+            _ => None,
+        }
+    }
+}

@@ -25,6 +25,19 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # softwake-ui links WebKitGTK. These are the Tauri Linux prerequisites
+      # that a stock ubuntu-latest image does not already provide.
+      - name: Install UI system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libxdo-dev \
+            libssl-dev
+
       - name: Format
         run: cargo fmt --all -- --check
 

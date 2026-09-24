@@ -18,7 +18,7 @@ On every PR to `main`:
 
 1. `fmt` check
 2. `clippy -D warnings`
-3. `test` on Ubuntu (PipeWire optional; mocks default)
+3. `test` on Ubuntu (PipeWire optional; mocks default). The job installs the WebKitGTK packages the Tauri window needs.
 4. Build daemon + UI (Tauri) on Linux
 
 No deploy pipeline in phase 1. Tag releases later.
