@@ -29,7 +29,7 @@ When memory lands, it must be a **separate module** with clear read/write APIs. 
 4. Render one system instruction document with three sections:
    - Identity (`soul.md`)
    - User profile (`user.md`)
-   - Runtime policy stub (state: awake; tool allowlist: `echo`; confirm-rules placeholder)
+   - Runtime policy stub (state: awake; `echo` safe, `notify` confirm, `shell` deny; `notify` runs only after `confirm_tool`)
 5. A missing or invalid pack **refuses awake**. Hibernate, sleep, and UI resume still run. The machine is not left half-awake.
 
 ## Directory

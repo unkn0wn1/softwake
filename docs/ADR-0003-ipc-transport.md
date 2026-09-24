@@ -24,7 +24,11 @@ A client read waits at most 5 seconds for a frame. Serve accepts more than one c
 
 Status gained an optional `soul` object (`ok`, and `reason` when the pack is not valid) with `serde` default. Omitted on older peers, ignored by older clients. That did not change the meaning of existing fields, so the protocol generation stays `1`. The hello handshake is unchanged. This replaces the earlier note that `reload_soul` only recorded a request and did not parse the pack.
 
-Clients may also send `tool_request` (`id`, `name`, and `args`). `args` defaults to an empty list when it is omitted. The daemon runs the tool only while awake and only when the name is allowlisted, then broadcasts `tool_started` and `tool_finished` before the response. A refusal is a `response` with `status: err` and either `kind: tool_forbidden` or `kind: unknown_tool`. Those error kinds are produced only for `tool_request`. Existing messages are unchanged, so the protocol generation stays `1`. See [ADR 0004](ADR-0004-first-safe-tool.md).
+Clients may also send `tool_request` (`id`, `name`, and `args`). `args` defaults to an empty list when it is omitted. The daemon runs a safe tool only while awake, then broadcasts `tool_started` and `tool_finished` before the response. A confirm-gated tool does not run: the response is `status: ok` with `pending_tool`, and the daemon broadcasts `tool_confirm_pending`. A refusal is a `response` with `status: err` and `kind: tool_forbidden`, `unknown_tool`, `tool_denied`, or `confirmation_pending`.
+
+`confirm_tool` and `cancel_tool` carry `id`, `pending_id`, and an optional `name`. Confirm runs the pending tool once while awake and broadcasts `tool_confirm_resolved` (`accepted: true`), then `tool_started` and `tool_finished`. Cancel clears it in any voice state (`accepted: false`) and does not run the tool. A missing id is `unknown_pending`. A name that does not match is `pending_mismatch`. Confirm while not awake, when the record is still there, is `confirm_forbidden`. Sleep and hibernate clear a pending confirmation first, so a later confirm for that id is `unknown_pending`.
+
+Status may include `pending_tool` and `last_tool`. Both are omitted when absent, so older payloads still decode. These messages are additive. The protocol generation stays `1`. See [ADR 0004](ADR-0004-first-safe-tool.md) and [ADR 0005](ADR-0005-tool-confirmation.md).
 
 Lines longer than 1 MiB, including the newline, are rejected.
 

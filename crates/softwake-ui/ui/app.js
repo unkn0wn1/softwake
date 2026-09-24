@@ -3,7 +3,11 @@ const captureEl = document.querySelector("#capture");
 const soulEl = document.querySelector("#soul");
 const reloadEl = document.querySelector("#reload");
 const detailEl = document.querySelector("#detail");
+const lastToolEl = document.querySelector("#last-tool");
+const pendingEl = document.querySelector("#pending");
 const errorEl = document.querySelector("#error");
+const confirmBtn = document.querySelector("#confirm");
+const cancelBtn = document.querySelector("#cancel");
 
 const commands = {
   hibernate: "hibernate",
@@ -12,12 +16,14 @@ const commands = {
   "reload-soul": "reload_soul",
 };
 
-function invoke(command) {
+let pendingId = null;
+
+function invoke(command, args) {
   const core = window.__TAURI__ && window.__TAURI__.core;
   if (!core) {
     return Promise.reject(new Error("window bridge is not available"));
   }
-  return core.invoke(command);
+  return core.invoke(command, args);
 }
 
 function soulLine(status) {
@@ -25,6 +31,23 @@ function soulLine(status) {
     return "soul: unknown";
   }
   return status.soul.ok ? "soul: ok" : "soul: missing";
+}
+
+function showPending(status) {
+  const pending = status.pending_tool;
+  if (!pending) {
+    pendingId = null;
+    pendingEl.textContent = "pending: none";
+    confirmBtn.disabled = true;
+    cancelBtn.disabled = true;
+    return;
+  }
+  pendingId = pending.pending_id;
+  const args = (pending.args || []).join(" ");
+  const tail = args ? ` ${args}` : "";
+  pendingEl.textContent = `pending ${pending.pending_id}: ${pending.name}${tail} — ${pending.description}`;
+  confirmBtn.disabled = false;
+  cancelBtn.disabled = false;
 }
 
 function show(status, keepError) {
@@ -35,6 +58,8 @@ function show(status, keepError) {
     ? "soul reload: pending — applies on next awake"
     : "soul reload: not pending";
   detailEl.textContent = status.detail || status.message || "";
+  lastToolEl.textContent = status.last_tool ? `last tool: ${status.last_tool}` : "last tool: none";
+  showPending(status);
   if (!keepError) {
     errorEl.textContent = "";
   }
@@ -54,13 +79,18 @@ async function refresh() {
     soulEl.textContent = "";
     reloadEl.textContent = "";
     detailEl.textContent = "";
+    lastToolEl.textContent = "";
+    pendingEl.textContent = "";
+    pendingId = null;
+    confirmBtn.disabled = true;
+    cancelBtn.disabled = true;
     showError(error);
   }
 }
 
-async function send(command) {
+async function send(command, args) {
   try {
-    show(await invoke(command));
+    show(await invoke(command, args));
   } catch (error) {
     showError(error);
     try {
@@ -77,6 +107,20 @@ for (const [id, command] of Object.entries(commands)) {
     send(command);
   });
 }
+
+confirmBtn.addEventListener("click", () => {
+  if (!pendingId) {
+    return;
+  }
+  send("confirm_tool", { pendingId });
+});
+
+cancelBtn.addEventListener("click", () => {
+  if (!pendingId) {
+    return;
+  }
+  send("cancel_tool", { pendingId });
+});
 
 refresh();
 setInterval(refresh, 1000);

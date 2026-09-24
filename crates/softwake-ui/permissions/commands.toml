@@ -22,3 +22,13 @@ commands.allow = ["sleep"]
 identifier = "allow-reload-soul"
 description = "Ask the daemon to record a soul reload."
 commands.allow = ["reload_soul"]
+
+[[permission]]
+identifier = "allow-confirm-tool"
+description = "Confirm a pending tool."
+commands.allow = ["confirm_tool"]
+
+[[permission]]
+identifier = "allow-cancel-tool"
+description = "Cancel a pending tool."
+commands.allow = ["cancel_tool"]

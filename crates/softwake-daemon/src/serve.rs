@@ -304,6 +304,22 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
             let outcome = lock(&shared.runtime).invoke_tool(&name, &args);
             reply(shared, tx, id, outcome)
         }
+        Ok(ClientMessage::ConfirmTool {
+            id,
+            pending_id,
+            name,
+        }) => {
+            let outcome = lock(&shared.runtime).confirm_tool(&pending_id, name.as_deref());
+            reply(shared, tx, id, outcome)
+        }
+        Ok(ClientMessage::CancelTool {
+            id,
+            pending_id,
+            name,
+        }) => {
+            let outcome = lock(&shared.runtime).cancel_tool(&pending_id, name.as_deref());
+            reply(shared, tx, id, outcome)
+        }
         Ok(ClientMessage::Hello { .. }) => false,
         Err(error) if error.is_disconnect() => false,
         Err(error) => {

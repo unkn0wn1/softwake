@@ -205,6 +205,8 @@ mod tests {
                     soul: None,
                     message: None,
                     detail: Some("has\na newline".to_owned()),
+                    pending_tool: None,
+                    last_tool: None,
                 }),
             }),
             line(&ServerMessage::Event {

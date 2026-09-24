@@ -460,7 +460,10 @@ impl ServerConnection {
                     message,
                 })
             }
-            ClientMessage::Request { .. } | ClientMessage::ToolRequest { .. } => {
+            ClientMessage::Request { .. }
+            | ClientMessage::ToolRequest { .. }
+            | ClientMessage::ConfirmTool { .. }
+            | ClientMessage::CancelTool { .. } => {
                 let message = "expected a hello message".to_owned();
                 endpoint.write(&ServerMessage::HelloRejected {
                     protocol_version: PROTOCOL_VERSION,
@@ -644,6 +647,72 @@ impl Client {
                 id,
                 name: name.to_owned(),
                 args: args.to_vec(),
+            },
+            id,
+        )
+    }
+
+    /// Confirm the pending tool and return the status after it runs.
+    ///
+    /// Events that arrive before the matching response are skipped. A refusal
+    /// is [`CallError::Rejected`]. The daemon runs the tool only while awake.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] on transport failure, a mismatched response id,
+    /// or a rejected confirmation.
+    pub fn confirm_tool(&mut self, pending_id: &str) -> Result<Status, CallError> {
+        self.confirm_tool_named(pending_id, None)
+    }
+
+    /// [`Self::confirm_tool`] with an optional name check.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::confirm_tool`]. A name that does not match the pending tool
+    /// is [`CallError::Rejected`].
+    pub fn confirm_tool_named(
+        &mut self,
+        pending_id: &str,
+        name: Option<&str>,
+    ) -> Result<Status, CallError> {
+        let id = self.allocate_id();
+        self.round_trip(
+            &ClientMessage::ConfirmTool {
+                id,
+                pending_id: pending_id.to_owned(),
+                name: name.map(str::to_owned),
+            },
+            id,
+        )
+    }
+
+    /// Clear the pending confirmation without running the tool.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] on transport failure, a mismatched response id,
+    /// or an unknown pending id.
+    pub fn cancel_tool(&mut self, pending_id: &str) -> Result<Status, CallError> {
+        self.cancel_tool_named(pending_id, None)
+    }
+
+    /// [`Self::cancel_tool`] with an optional name check.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::cancel_tool`].
+    pub fn cancel_tool_named(
+        &mut self,
+        pending_id: &str,
+        name: Option<&str>,
+    ) -> Result<Status, CallError> {
+        let id = self.allocate_id();
+        self.round_trip(
+            &ClientMessage::CancelTool {
+                id,
+                pending_id: pending_id.to_owned(),
+                name: name.map(str::to_owned),
             },
             id,
         )
@@ -854,6 +923,8 @@ mod tests {
                         soul: None,
                         message: None,
                         detail: None,
+                        pending_tool: None,
+                        last_tool: None,
                     }),
                 })
                 .expect("response");

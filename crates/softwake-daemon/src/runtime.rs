@@ -6,18 +6,22 @@
 //! the next transition into awake, not in the middle of an awake session.
 //! A wake phrase with a missing or invalid pack leaves the machine where it is.
 //! A successful awake opens a text session with the rendered instructions.
-//! Sleep and hibernate close that session. Tools run only while awake.
+//! Sleep and hibernate close that session and drop a pending confirmation.
+//! Safe tools run only while awake. A confirm-gated tool waits for
+//! `confirm_tool`. `cancel_tool` clears it without running.
 
 use softwake_audio::{AudioCapture, MockAudioCapture};
 use softwake_ipc::VoiceState as WireState;
-use softwake_ipc::{Command, Event as WireEvent, IpcError, ResponseBody, Status};
+use softwake_ipc::{Command, Event as WireEvent, IpcError, PendingTool, ResponseBody, Status};
 #[cfg(test)]
 use softwake_session::SessionPhase;
 use softwake_session::TextStubSession;
 use softwake_soul::SoulDir;
 use softwake_state::{CooldownConfig, Effect, Event, Machine, StateError, VoiceState};
 
-use crate::dispatch::{self, DispatchError};
+use crate::dispatch::{
+    CancelledTool, ConfirmedTool, DispatchError, Hands, PendingToolCall, RanTool, RequestOutcome,
+};
 use crate::soul::LoadedSoul;
 
 #[derive(Debug)]
@@ -31,6 +35,7 @@ pub(crate) struct Runtime {
     capture: MockAudioCapture,
     soul: LoadedSoul,
     session: TextStubSession,
+    hands: Hands,
 }
 
 impl Runtime {
@@ -44,6 +49,7 @@ impl Runtime {
             capture,
             soul: LoadedSoul::open(soul_dir),
             session: TextStubSession::default(),
+            hands: Hands::new(),
         }
     }
 
@@ -99,30 +105,38 @@ impl Runtime {
         self.session.instructions()
     }
 
-    /// Run one tool. Sleep and hibernate refuse the call before the allowlist.
+    /// Run one safe tool, or stage a confirm-gated tool.
     ///
-    /// A successful run emits [`WireEvent::ToolStarted`] and then
-    /// [`WireEvent::ToolFinished`]. A refusal emits neither.
+    /// Sleep and hibernate refuse the call before the registry. A safe run
+    /// emits [`WireEvent::ToolStarted`] and then [`WireEvent::ToolFinished`].
+    /// A confirm-gated tool does not run: the outcome is
+    /// [`WireEvent::ToolConfirmPending`] and [`Status::pending_tool`]. A
+    /// refusal emits neither.
     pub(crate) fn invoke_tool(&mut self, name: &str, args: &[String]) -> Outcome {
-        match dispatch::invoke(&self.machine, name, args) {
-            Ok(result) => {
-                let detail = result.detail;
-                Outcome {
-                    body: ResponseBody::ok(
-                        self.snapshot(Some(detail.clone()), Some(detail.clone())),
-                    ),
-                    events: vec![
-                        WireEvent::ToolStarted {
-                            name: name.to_owned(),
-                        },
-                        WireEvent::ToolFinished {
-                            name: name.to_owned(),
-                            detail: Some(detail),
-                        },
-                    ],
-                }
-            }
-            Err(error) => Self::rejected(tool_ipc_error(name, &error)),
+        let step = self.hands.request(&self.machine, name, args);
+        self.outcome_for_request(step)
+    }
+
+    /// Run the pending tool once when the id matches and the daemon is awake.
+    ///
+    /// `name`, when set, must match the pending tool. A second confirm of the
+    /// same id fails because the first confirm clears the record.
+    pub(crate) fn confirm_tool(&mut self, pending_id: &str, name: Option<&str>) -> Outcome {
+        match self.hands.confirm(&self.machine, pending_id, name) {
+            Ok(confirmed) => self.confirmed_outcome(confirmed),
+            Err(error) => Self::rejected(tool_ipc_error(&error)),
+        }
+    }
+
+    /// Clear a matching pending confirmation without running the tool.
+    ///
+    /// This is allowed when the daemon is not awake, so an operator can drop
+    /// a confirmation that survived a state change. Sleep and hibernate also
+    /// clear it on their own.
+    pub(crate) fn cancel_tool(&mut self, pending_id: &str, name: Option<&str>) -> Outcome {
+        match self.hands.cancel(pending_id, name) {
+            Ok(cancelled) => self.cancelled_outcome(cancelled),
+            Err(error) => Self::rejected(tool_ipc_error(&error)),
         }
     }
 
@@ -149,18 +163,20 @@ impl Runtime {
                 if event == Event::WakePhrase {
                     self.soul.commit_awake();
                 }
-                self.apply_effects(applied.effects);
+                let cleared = self.apply_effects(applied.effects);
                 let state = wire_state(self.machine.state());
                 let capture_running = self.capture.is_running();
                 let detail = Some(format!("{previous} -> {state}"));
+                let mut events = vec![WireEvent::StateChanged {
+                    state,
+                    previous,
+                    capture_running,
+                    detail: detail.clone(),
+                }];
+                events.extend(cleared);
                 Outcome {
-                    body: ResponseBody::ok(self.snapshot(None, detail.clone())),
-                    events: vec![WireEvent::StateChanged {
-                        state,
-                        previous,
-                        capture_running,
-                        detail,
-                    }],
+                    body: ResponseBody::ok(self.snapshot(None, detail)),
+                    events,
                 }
             }
             Err(error) => Self::rejected(map_err(error)),
@@ -181,11 +197,20 @@ impl Runtime {
         }
     }
 
-    fn apply_effects(&mut self, effects: &[Effect]) {
+    fn apply_effects(&mut self, effects: &[Effect]) -> Vec<WireEvent> {
+        let mut extra = Vec::new();
         for effect in effects {
             match effect {
                 Effect::OpenSession => self.open_session(),
-                Effect::ReleaseActingResources => self.session.close(),
+                Effect::ReleaseActingResources => {
+                    self.session.close();
+                    if let Some(cancelled) = self.hands.clear_pending() {
+                        extra.push(WireEvent::ToolConfirmResolved {
+                            pending_id: cancelled.pending_id,
+                            accepted: false,
+                        });
+                    }
+                }
                 Effect::StopCapture => {
                     let Ok(()) = self.capture.stop();
                 }
@@ -194,6 +219,7 @@ impl Runtime {
                 }
             }
         }
+        extra
     }
 
     fn open_session(&mut self) {
@@ -213,6 +239,91 @@ impl Runtime {
             soul: Some(self.soul.report()),
             message,
             detail,
+            pending_tool: self.pending_wire(),
+            last_tool: self.hands.last_tool_line(),
+        }
+    }
+
+    fn pending_wire(&self) -> Option<PendingTool> {
+        self.hands.pending().map(|pending| PendingTool {
+            pending_id: pending.pending_id,
+            name: pending.name,
+            args: pending.args,
+            description: pending.description,
+        })
+    }
+
+    fn outcome_for_request(&self, step: Result<RequestOutcome, DispatchError>) -> Outcome {
+        match step {
+            Ok(RequestOutcome::Ran(ran)) => self.ran_outcome(ran),
+            Ok(RequestOutcome::Pending(pending)) => self.pending_outcome(pending),
+            Err(error) => Self::rejected(tool_ipc_error(&error)),
+        }
+    }
+
+    fn ran_outcome(&self, ran: RanTool) -> Outcome {
+        let RanTool { name, detail } = ran;
+        Outcome {
+            body: ResponseBody::ok(self.snapshot(Some(detail.clone()), Some(detail.clone()))),
+            events: vec![
+                WireEvent::ToolStarted { name: name.clone() },
+                WireEvent::ToolFinished {
+                    name,
+                    detail: Some(detail),
+                },
+            ],
+        }
+    }
+
+    fn pending_outcome(&self, pending: PendingToolCall) -> Outcome {
+        let PendingToolCall {
+            pending_id,
+            name,
+            args,
+            description,
+        } = pending;
+        let message = format!("pending confirmation {pending_id} for {name}");
+        Outcome {
+            body: ResponseBody::ok(self.snapshot(Some(message), Some(description.clone()))),
+            events: vec![WireEvent::ToolConfirmPending {
+                pending_id,
+                name,
+                args,
+                description,
+            }],
+        }
+    }
+
+    fn confirmed_outcome(&self, confirmed: ConfirmedTool) -> Outcome {
+        let ConfirmedTool {
+            pending_id,
+            name,
+            detail,
+        } = confirmed;
+        Outcome {
+            body: ResponseBody::ok(self.snapshot(Some(detail.clone()), Some(detail.clone()))),
+            events: vec![
+                WireEvent::ToolConfirmResolved {
+                    pending_id,
+                    accepted: true,
+                },
+                WireEvent::ToolStarted { name: name.clone() },
+                WireEvent::ToolFinished {
+                    name,
+                    detail: Some(detail),
+                },
+            ],
+        }
+    }
+
+    fn cancelled_outcome(&self, cancelled: CancelledTool) -> Outcome {
+        let message = format!("cancelled {}", cancelled.pending_id);
+        Outcome {
+            body: ResponseBody::ok(self.snapshot(Some(message), None)),
+            events: vec![WireEvent::ToolConfirmResolved {
+                pending_id: cancelled.pending_id,
+                accepted: false,
+            }],
         }
     }
 }
@@ -226,13 +337,28 @@ fn protocol_outcome(message: &str) -> Outcome {
     }
 }
 
-fn tool_ipc_error(name: &str, error: &DispatchError) -> IpcError {
+fn tool_ipc_error(error: &DispatchError) -> IpcError {
     match error {
-        DispatchError::Forbidden { state, .. } => IpcError::ToolForbidden {
-            name: name.to_owned(),
+        DispatchError::Forbidden { name, state } => IpcError::ToolForbidden {
+            name: name.clone(),
             state: wire_state(*state),
         },
         DispatchError::Unknown { name } => IpcError::UnknownTool { name: name.clone() },
+        DispatchError::Denied { name } => IpcError::ToolDenied { name: name.clone() },
+        DispatchError::Busy { pending_id } => IpcError::ConfirmationPending {
+            pending_id: pending_id.clone(),
+        },
+        DispatchError::UnknownPending { pending_id } => IpcError::UnknownPending {
+            pending_id: pending_id.clone(),
+        },
+        DispatchError::PendingMismatch { pending_id, name } => IpcError::PendingMismatch {
+            pending_id: pending_id.clone(),
+            name: name.clone(),
+        },
+        DispatchError::ConfirmForbidden { pending_id, state } => IpcError::ConfirmForbidden {
+            pending_id: pending_id.clone(),
+            state: wire_state(*state),
+        },
     }
 }
 
@@ -654,7 +780,8 @@ mod tests {
             .to_owned();
         assert!(instructions.contains("test soul"));
         assert!(instructions.contains("test user"));
-        assert!(instructions.contains("Tool allowlist: echo."));
+        assert!(instructions.contains("echo (safe)"));
+        assert!(instructions.contains("notify (confirm)"));
         assert_eq!(runtime.applied_instructions(), Some(instructions.as_str()));
 
         soul.write("updated soul\n", "updated user\n");
@@ -676,7 +803,8 @@ mod tests {
         let reopened = runtime.session_instructions().expect("reopened");
         assert!(reopened.contains("updated soul"));
         assert!(reopened.contains("updated user"));
-        assert!(reopened.contains("Tool allowlist: echo."));
+        assert!(reopened.contains("echo (safe)"));
+        assert!(reopened.contains("notify (confirm)"));
 
         runtime.handle(Command::Hibernate);
         assert_eq!(
@@ -685,5 +813,215 @@ mod tests {
         );
         assert_eq!(runtime.session_phase(), SessionPhase::Closed);
         assert!(runtime.session_instructions().is_none());
+    }
+
+    #[test]
+    fn notify_stays_pending_until_confirm_and_runs_once() {
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+
+        let pending = runtime.invoke_tool("notify", &["hello".to_owned()]);
+        let status = pending.body.status().expect("pending");
+        assert_eq!(
+            status.message.as_deref(),
+            Some("pending confirmation 1 for notify")
+        );
+        let waiting = status.pending_tool.clone().expect("pending tool");
+        assert_eq!(waiting.pending_id, "1");
+        assert_eq!(waiting.name, "notify");
+        assert_eq!(waiting.args, ["hello"]);
+        assert!(runtime.hands.notifications().is_empty());
+        assert!(matches!(
+            pending.events.as_slice(),
+            [Event::ToolConfirmPending {
+                pending_id,
+                name,
+                ..
+            }] if pending_id == "1" && name == "notify"
+        ));
+        assert!(pending.events.iter().all(|event| !matches!(
+            event,
+            Event::ToolStarted { .. } | Event::ToolFinished { .. }
+        )));
+
+        let busy = runtime.invoke_tool("notify", &["other".to_owned()]);
+        assert!(matches!(
+            busy.body,
+            ResponseBody::Err {
+                error: IpcError::ConfirmationPending { ref pending_id }
+            } if pending_id == "1"
+        ));
+        assert!(runtime.hands.notifications().is_empty());
+        assert_eq!(runtime.hands.pending_id().as_deref(), Some("1"));
+
+        let confirmed = runtime.confirm_tool("1", Some("notify"));
+        let status = confirmed.body.status().expect("confirmed");
+        assert_eq!(status.message.as_deref(), Some("hello"));
+        assert!(status.pending_tool.is_none());
+        assert_eq!(
+            runtime.hands.notifications().iter().collect::<Vec<_>>(),
+            ["hello"]
+        );
+        assert!(matches!(
+            confirmed.events.as_slice(),
+            [
+                Event::ToolConfirmResolved {
+                    pending_id,
+                    accepted: true,
+                },
+                Event::ToolStarted { name: started },
+                Event::ToolFinished {
+                    name: finished,
+                    detail: Some(detail),
+                },
+            ] if pending_id == "1"
+                && started == "notify"
+                && finished == "notify"
+                && detail == "hello"
+        ));
+
+        let again = runtime.confirm_tool("1", None);
+        assert!(matches!(
+            again.body,
+            ResponseBody::Err {
+                error: IpcError::UnknownPending { ref pending_id }
+            } if pending_id == "1"
+        ));
+        assert_eq!(runtime.hands.notifications().len(), 1);
+    }
+
+    #[test]
+    fn cancel_does_not_append_and_a_name_mismatch_keeps_pending() {
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        runtime.invoke_tool("notify", &["hello".to_owned()]);
+
+        let mismatch = runtime.confirm_tool("1", Some("echo"));
+        assert!(matches!(
+            mismatch.body,
+            ResponseBody::Err {
+                error: IpcError::PendingMismatch { .. }
+            }
+        ));
+        assert!(runtime.hands.notifications().is_empty());
+        assert!(runtime.hands.pending().is_some());
+
+        let cancelled = runtime.cancel_tool("1", None);
+        let status = cancelled.body.status().expect("cancelled");
+        assert_eq!(status.message.as_deref(), Some("cancelled 1"));
+        assert!(status.pending_tool.is_none());
+        assert!(runtime.hands.notifications().is_empty());
+        assert!(matches!(
+            cancelled.events.as_slice(),
+            [Event::ToolConfirmResolved {
+                accepted: false,
+                pending_id,
+            }] if pending_id == "1"
+        ));
+
+        let gone = runtime.cancel_tool("1", None);
+        assert!(matches!(
+            gone.body,
+            ResponseBody::Err {
+                error: IpcError::UnknownPending { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn shell_is_denied_and_unknown_is_rejected_while_awake() {
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        let denied = runtime.invoke_tool("shell", &["echo".to_owned()]);
+        assert!(denied.events.is_empty());
+        assert!(matches!(
+            denied.body,
+            ResponseBody::Err {
+                error: IpcError::ToolDenied { ref name }
+            } if name == "shell"
+        ));
+        assert!(runtime.hands.pending().is_none());
+        assert!(runtime.hands.notifications().is_empty());
+        runtime.confirm_tool("1", None);
+        assert!(runtime.hands.notifications().is_empty());
+
+        let unknown = runtime.invoke_tool("volume", &[]);
+        assert!(matches!(
+            unknown.body,
+            ResponseBody::Err {
+                error: IpcError::UnknownTool { ref name }
+            } if name == "volume"
+        ));
+    }
+
+    #[test]
+    fn sleep_and_hibernate_clear_pending_and_still_refuse_tools() {
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        runtime.invoke_tool("notify", &["hello".to_owned()]);
+        assert!(runtime.hands.notifications().is_empty());
+
+        let slept = runtime.handle(Command::Sleep);
+        assert!(matches!(
+            slept.events.as_slice(),
+            [
+                Event::StateChanged {
+                    state: VoiceState::Sleep,
+                    ..
+                },
+                Event::ToolConfirmResolved {
+                    pending_id,
+                    accepted: false,
+                },
+            ] if pending_id == "1"
+        ));
+        assert!(runtime.hands.pending().is_none());
+        assert!(runtime.hands.notifications().is_empty());
+        assert!(matches!(
+            runtime.confirm_tool("1", None).body,
+            ResponseBody::Err {
+                error: IpcError::UnknownPending { .. }
+            }
+        ));
+        assert!(matches!(
+            runtime.invoke_tool("notify", &["x".to_owned()]).body,
+            ResponseBody::Err {
+                error: IpcError::ToolForbidden {
+                    state: VoiceState::Sleep,
+                    ..
+                }
+            }
+        ));
+        assert!(matches!(
+            runtime.invoke_tool("shell", &[]).body,
+            ResponseBody::Err {
+                error: IpcError::ToolForbidden {
+                    state: VoiceState::Sleep,
+                    ..
+                }
+            }
+        ));
+
+        runtime.machine.advance(Duration::from_millis(800));
+        wake(&mut runtime);
+        runtime.invoke_tool("notify", &["later".to_owned()]);
+        let hibernated = runtime.handle(Command::Hibernate);
+        assert!(hibernated.events.iter().any(|event| matches!(
+            event,
+            Event::ToolConfirmResolved {
+                accepted: false,
+                ..
+            }
+        )));
+        assert!(runtime.hands.notifications().is_empty());
+        assert!(matches!(
+            runtime.invoke_tool("echo", &[]).body,
+            ResponseBody::Err {
+                error: IpcError::ToolForbidden {
+                    state: VoiceState::Hibernate,
+                    ..
+                }
+            }
+        ));
     }
 }

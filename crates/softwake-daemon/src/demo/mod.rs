@@ -13,7 +13,9 @@
 //! A wake phrase is refused when the loaded soul pack is missing or invalid.
 //! `reload-soul` reads the directory again; the new text applies on the next awake.
 //! Entering awake opens a text session with those instructions. Sleep and
-//! hibernate close it. `tool` runs the one allowlisted tool, and only while awake.
+//! hibernate close it and drop a pending confirmation. `tool` runs a safe tool
+//! while awake. A confirm-gated tool waits for `confirm` or `confirm-tool`.
+//! `cancel` clears that pending call without running it.
 
 use std::time::Duration;
 
@@ -27,10 +29,11 @@ use softwake_state::VoiceState;
 use softwake_state::{CooldownConfig, Effect, Event, Machine};
 use softwake_wake::{PhraseHit, PhraseTable, TextWakeDetector};
 
-use crate::dispatch;
+use crate::dispatch::{Hands, RequestOutcome};
 use crate::soul::LoadedSoul;
 
-const COMMANDS: &str = "commands: wake, sleep, hibernate, resume, status, reload-soul, tool, quit";
+const COMMANDS: &str =
+    "commands: wake, sleep, hibernate, resume, status, reload-soul, tool, confirm, cancel, quit";
 const TYPED_ONLY: &str = "typed commands only — mic / PipeWire not wired yet";
 
 /// One step of the demo loop.
@@ -61,6 +64,10 @@ enum Parsed {
     ReloadSoul,
     Tool { name: String, args: Vec<String> },
     ToolMissingName,
+    Confirm { id: Option<String> },
+    Cancel { id: Option<String> },
+    ConfirmExtra,
+    CancelExtra,
     Quit,
     Unknown,
 }
@@ -98,6 +105,8 @@ impl Parsed {
             Self::Status => "status",
             Self::ReloadSoul => "reload-soul",
             Self::Tool { .. } | Self::ToolMissingName => "tool",
+            Self::Confirm { .. } | Self::ConfirmExtra => "confirm",
+            Self::Cancel { .. } | Self::CancelExtra => "cancel",
             Self::Quit => "quit",
             Self::Unknown => "unknown",
         }
@@ -112,6 +121,7 @@ pub(crate) struct Demo {
     detector: TextWakeDetector,
     soul: LoadedSoul,
     session: TextStubSession,
+    hands: Hands,
     verbose: bool,
 }
 
@@ -129,6 +139,7 @@ impl Demo {
             detector: TextWakeDetector::new(table),
             soul: LoadedSoul::open(soul_dir),
             session: TextStubSession::default(),
+            hands: Hands::new(),
             verbose: false,
         }
     }
@@ -167,6 +178,10 @@ impl Demo {
             Parsed::Status => self.status_lines(),
             Parsed::ReloadSoul => self.reload(),
             Parsed::Tool { name, args } => self.tool(&name, &args),
+            Parsed::Confirm { id } => self.confirm_pending(id),
+            Parsed::Cancel { id } => self.cancel_pending(id),
+            Parsed::ConfirmExtra => self.reject_extra("confirm"),
+            Parsed::CancelExtra => self.reject_extra("cancel"),
             Parsed::ToolMissingName => {
                 let mut lines = vec![
                     "rejected: tool needs a name".to_owned(),
@@ -225,6 +240,11 @@ impl Demo {
     #[cfg(test)]
     fn session_instructions(&self) -> Option<&str> {
         self.session.instructions()
+    }
+
+    #[cfg(test)]
+    fn notifications(&self) -> Vec<String> {
+        self.hands.notifications().iter().cloned().collect()
     }
 
     fn voice(&mut self, command: VoiceCommand) -> Vec<String> {
@@ -313,10 +333,16 @@ impl Demo {
         let mut lines = Vec::new();
         self.push_verbose(&mut lines, format!("tool: {name}"));
         self.push_verbose(&mut lines, format!("args: {args:?}"));
-        match dispatch::invoke(&self.machine, name, args) {
-            Ok(result) => {
-                let detail = result.detail;
-                lines.push(format!("tool {name}: {detail}"));
+        match self.hands.request(&self.machine, name, args) {
+            Ok(RequestOutcome::Ran(ran)) => {
+                lines.push(format!("tool {}: {}", ran.name, ran.detail));
+            }
+            Ok(RequestOutcome::Pending(pending)) => {
+                lines.push(format!(
+                    "pending {}: {} — {}",
+                    pending.pending_id, pending.name, pending.description
+                ));
+                lines.push("waiting for confirm".to_owned());
             }
             Err(error) => {
                 let rejected = format!("rejected: {error}");
@@ -325,6 +351,61 @@ impl Demo {
             }
         }
         self.with_status(lines)
+    }
+
+    fn confirm_pending(&mut self, id: Option<String>) -> Vec<String> {
+        let Some(pending_id) = self.chosen_pending_id(id) else {
+            return self.with_status(vec!["rejected: no pending confirmation".to_owned()]);
+        };
+        let mut lines = Vec::new();
+        match self.hands.confirm(&self.machine, &pending_id, None) {
+            Ok(confirmed) => {
+                lines.push(format!(
+                    "confirmed {}: tool {}: {}",
+                    confirmed.pending_id, confirmed.name, confirmed.detail
+                ));
+            }
+            Err(error) => {
+                let rejected = format!("rejected: {error}");
+                self.push_verbose(&mut lines, &rejected);
+                lines.push(rejected);
+            }
+        }
+        self.with_status(lines)
+    }
+
+    fn cancel_pending(&mut self, id: Option<String>) -> Vec<String> {
+        let Some(pending_id) = self.chosen_pending_id(id) else {
+            return self.with_status(vec!["rejected: no pending confirmation".to_owned()]);
+        };
+        let mut lines = Vec::new();
+        match self.hands.cancel(&pending_id, None) {
+            Ok(cancelled) => {
+                lines.push(format!(
+                    "cancelled {}: {}",
+                    cancelled.pending_id, cancelled.name
+                ));
+            }
+            Err(error) => {
+                let rejected = format!("rejected: {error}");
+                self.push_verbose(&mut lines, &rejected);
+                lines.push(rejected);
+            }
+        }
+        self.with_status(lines)
+    }
+
+    fn chosen_pending_id(&self, id: Option<String>) -> Option<String> {
+        id.or_else(|| self.hands.pending_id())
+    }
+
+    fn reject_extra(&mut self, command: &str) -> Vec<String> {
+        let rejected = format!("rejected: {command} takes one pending id");
+        let mut lines = Vec::new();
+        self.push_verbose(&mut lines, &rejected);
+        lines.push(rejected);
+        lines.push(COMMANDS.to_owned());
+        lines
     }
 
     fn transition(&mut self, event: Event) -> Vec<String> {
@@ -347,7 +428,9 @@ impl Demo {
                 self.push_verbose(&mut lines, format!("transition: ok {summary}"));
                 lines.push(format!("transition {summary}"));
                 for &effect in applied.effects {
-                    self.run_effect(effect);
+                    if let Some(note) = self.run_effect(effect) {
+                        lines.push(note);
+                    }
                     lines.push(format!("effect: {}", effect_label(effect)));
                 }
                 lines
@@ -368,15 +451,25 @@ impl Demo {
         }
     }
 
-    fn run_effect(&mut self, effect: Effect) {
+    fn run_effect(&mut self, effect: Effect) -> Option<String> {
         match effect {
-            Effect::OpenSession => self.open_session(),
-            Effect::ReleaseActingResources => self.session.close(),
+            Effect::OpenSession => {
+                self.open_session();
+                None
+            }
+            Effect::ReleaseActingResources => {
+                self.session.close();
+                self.hands.clear_pending().map(|cancelled| {
+                    format!("cancelled {}: {}", cancelled.pending_id, cancelled.name)
+                })
+            }
             Effect::StopCapture => {
                 let Ok(()) = self.capture.stop();
+                None
             }
             Effect::StartCapture => {
                 let Ok(()) = self.capture.start();
+                None
             }
         }
     }
@@ -401,11 +494,29 @@ impl Demo {
         } else {
             "missing"
         };
-        vec![
+        let mut lines = vec![
             format!("state: {}", self.machine.state()),
             format!("capture: {capture}"),
             format!("soul: {soul}"),
-        ]
+        ];
+        if let Some(pending) = self.hands.pending() {
+            let args = pending.args.join(" ");
+            if args.is_empty() {
+                lines.push(format!("pending: {} {}", pending.pending_id, pending.name));
+            } else {
+                lines.push(format!(
+                    "pending: {} {} {args}",
+                    pending.pending_id, pending.name
+                ));
+            }
+        }
+        if let Some(last) = self.hands.last_tool_line() {
+            lines.push(format!("last tool: {last}"));
+        }
+        if let Some(notification) = self.hands.notifications().back() {
+            lines.push(format!("notification: {notification}"));
+        }
+        lines
     }
 
     fn with_status(&self, mut lines: Vec<String>) -> Vec<String> {
@@ -432,6 +543,12 @@ fn parse_line(line: &str) -> Parsed {
             args: parts.map(str::to_owned).collect(),
         };
     }
+    if head.eq_ignore_ascii_case("confirm") || head.eq_ignore_ascii_case("confirm-tool") {
+        return parse_pending_id(parts, true);
+    }
+    if head.eq_ignore_ascii_case("cancel") || head.eq_ignore_ascii_case("cancel-tool") {
+        return parse_pending_id(parts, false);
+    }
     match trimmed.to_ascii_lowercase().as_str() {
         "wake" => Parsed::Wake,
         "sleep" => Parsed::Sleep,
@@ -441,6 +558,22 @@ fn parse_line(line: &str) -> Parsed {
         "reload-soul" => Parsed::ReloadSoul,
         "quit" => Parsed::Quit,
         _ => Parsed::Unknown,
+    }
+}
+
+fn parse_pending_id<'a>(mut parts: impl Iterator<Item = &'a str>, confirm: bool) -> Parsed {
+    let id = parts.next().map(str::to_owned);
+    if parts.next().is_some() {
+        return if confirm {
+            Parsed::ConfirmExtra
+        } else {
+            Parsed::CancelExtra
+        };
+    }
+    if confirm {
+        Parsed::Confirm { id }
+    } else {
+        Parsed::Cancel { id }
     }
 }
 
