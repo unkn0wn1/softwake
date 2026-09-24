@@ -6,7 +6,18 @@ Rust end-to-end (daemon + Tauri UI). Phase 1 nails reliable **wake / sleep / hib
 
 ## Status
 
-Docs-first scaffold. No runtime yet.
+Cargo workspace on stable Rust (edition 2024). `softwake-state` implements sleep / awake / hibernate, including rejected transitions. The other crates are compile-clean boundaries: an audio capture trait (no PipeWire backend), wake, session, tools, soul paths, and IPC types. The Tauri app (`softwake-ui`) is not a workspace member yet.
+
+## Build and test
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo build --workspace --all-targets
+```
+
+`cargo run -p softwake-daemon` builds `softwaked`, prints the initial voice state (`sleep`), and exits.
 
 ## Docs
 

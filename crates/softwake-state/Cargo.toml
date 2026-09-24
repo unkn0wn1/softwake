@@ -1,0 +1,14 @@
+[package]
+name = "softwake-state"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Sleep, awake, and hibernate transitions"
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

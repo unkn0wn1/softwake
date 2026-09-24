@@ -1,0 +1,10 @@
+[package]
+name = "softwake-soul"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Soul-pack paths. Files are not read yet."
+
+[lints]
+workspace = true

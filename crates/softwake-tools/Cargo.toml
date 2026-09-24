@@ -1,0 +1,10 @@
+[package]
+name = "softwake-tools"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Tool allowlist boundary. No runners yet."
+
+[lints]
+workspace = true

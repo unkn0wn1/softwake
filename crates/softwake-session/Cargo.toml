@@ -1,0 +1,10 @@
+[package]
+name = "softwake-session"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Acting-session boundary. No model client yet."
+
+[lints]
+workspace = true
