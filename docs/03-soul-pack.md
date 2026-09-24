@@ -7,7 +7,7 @@ The soul pack is the **versionable personality and context** Softwake loads into
 | File | Role |
 |------|------|
 | `soul.md` | Agent identity, voice, boundaries, how it should behave while awake |
-| `user.md` | Who Spencer (or the operator) is: preferences, timezone, hard nos, how to address them |
+| `user.md` | Who the operator is: preferences, timezone, hard nos, how to address them |
 
 Both are required for a valid pack. Missing files → daemon refuses to enter **awake** (UI can still hibernate/sleep and edit files).
 
@@ -15,7 +15,7 @@ Both are required for a valid pack. Missing files → daemon refuses to enter **
 
 | Piece | Role |
 |-------|------|
-| Long-term memory | Durable facts / conversation memory — **Honcho** (`/www/honcho`) is a candidate; could also be a thin local store |
+| Long-term memory | Durable facts / conversation memory — **Honcho** is an optional example; could also be a thin local store |
 | `tools.md` or policy TOML | Human-readable tool policy mirroring allowlists |
 | `AGENTS.md`-style lane rules | Optional; keep out of phase 1 unless needed |
 
@@ -40,7 +40,6 @@ This repository ships examples under `soul/`:
 
 Operators copy these into their config dir and edit. Do not commit personal secrets into `user.md` in git.
 
-## Inspiration
+## Style note
 
-- `/www/architect-soul-example/SOUL.md` and `AGENTS.md` — tone and structure
-- Keep Softwake’s soul shorter than an architect bot bible; voice agents need tight instructions
+Keep Softwake’s soul shorter than a general architect-bot bible; voice agents need tight instructions.

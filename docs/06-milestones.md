@@ -30,6 +30,6 @@
 
 ## Deferred ideas (do not pull into phase 1)
 
-- Meeting memory / qmd integration (separate product track; may feed Softwake later)
+- Meeting memory / transcript integration (separate product track; may feed Softwake later)
 - Boring coding-agent harness (separate repo)
-- Multi-conductor / named worker routing (agent-desk territory)
+- Multi-conductor / named worker routing (out of scope for Softwake)

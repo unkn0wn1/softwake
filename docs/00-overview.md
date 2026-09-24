@@ -15,15 +15,15 @@ Chat UIs are not how you want to drive a machine when your hands are busy. Softw
 3. **Asleep ≠ deaf.** Sleep stops *acting*; local wake-word listening continues. Hibernate stops the mic.
 4. **Soul on disk.** Personality and user profile are files you can diff and version — not buried in a cloud prompt.
 5. **Least privilege.** Tools are allowlisted; dangerous actions need confirmation. “Full control” is a destination with gates, not day-one scope.
-6. **Steal ideas, not codebases.** `agent-desk` and `xai-voice` are lessons; Softwake is a clean Rust tree.
+6. **Steal ideas, not codebases.** Prior webview-mic and Python-conductor experiments are lessons only; Softwake is a clean Rust tree.
 
 ## Non-goals (phase 1)
 
-- Multi-agent orchestration / Grok Build desk routing
+- Multi-agent orchestration / desk routing
 - Email, Drive, calendar connectors
 - Full desktop automation (window managers, arbitrary shell)
 - Cloud-only wake word (ambient cloud VAD is not “sleep”)
-- Electron as the audio runtime
+- Electron / Capacitor / webview as the audio runtime
 - Long-term memory productization (Honcho etc. — design hook only)
 
 ## Phases (summary)
@@ -42,7 +42,7 @@ See [06-milestones.md](06-milestones.md).
 |-------|--------|
 | Daemon | Rust |
 | UI | Tauri 2 (Rust + small web front-end) |
-| Audio | PipeWire on Linux first (Spencer’s machine); abstract traits for later platforms |
+| Audio | PipeWire on Linux first; abstract traits for later platforms |
 | Wake word | Local (open model / engine TBD in phase 1 spike) |
-| LLM / voice | Pluggable; xAI realtime is a candidate, not a hard dependency in docs |
+| LLM / voice | Pluggable; realtime APIs are candidates, not hard dependencies in docs |
 | Config / soul | Markdown + TOML on disk under XDG paths |

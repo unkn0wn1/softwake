@@ -2,9 +2,7 @@
 
 Voice-first local conductor: asleep until hailed, awake with tools, hibernate when you want silence.
 
-Rust end-to-end (daemon + Tauri UI). Phase 1 nails reliable **wake / sleep / hibernate** and a single safe tool loop. Personality and rules live in a **soul pack** (`soul.md`, `user.md`). Long-term memory (e.g. Honcho) is planned later, not required for phase 1.
-
-> Name check (2026-09-24): `/www/softwake` was free; crates.io `softwake` unused. Prefer `softwake.app` / similar if `softwake.dev` is taken. Not a fork of `agent-desk` or `xai-voice` — those are design references only.
+Rust end-to-end (daemon + Tauri UI). Phase 1 nails reliable **wake / sleep / hibernate** and a single safe tool loop. Personality and rules live in a **soul pack** (`soul.md`, `user.md`). Long-term memory (e.g. Honcho as an optional later example) is planned later, not required for phase 1.
 
 ## Status
 
@@ -21,10 +19,3 @@ Docs-first scaffold. No runtime yet.
 | [docs/04-coding-style.md](docs/04-coding-style.md) | KISS, DRY, SRP, Rust rules |
 | [docs/05-quality-gates.md](docs/05-quality-gates.md) | CI and definition of done |
 | [docs/06-milestones.md](docs/06-milestones.md) | Phase 1 vertical slice |
-
-## Related (reference only)
-
-- `/www/agent-desk` — earlier Python conductor ideas (PipeWire, wake/sleep, Voice 2.0)
-- `/www/xai-voice` — abandoned Ionic/Capacitor scaffold (wrong audio path)
-- `/www/architect-soul-example` — soul.md / AGENTS.md patterns
-- `/www/honcho` — candidate long-term memory later

@@ -17,5 +17,5 @@
 
 ## Context (optional)
 
-- Building Softwake (this project) and MeetRec.
-- Other work includes APOMS and hosting — only use what is needed for the current request.
+- Building Softwake (this project).
+- Only use other personal context when it is needed for the current request.

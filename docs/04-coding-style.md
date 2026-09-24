@@ -11,7 +11,7 @@ Softwake optimises for **changeability and onboarding**, not cleverness. A mid-l
 5. **Boundaries first** — traits at edges (audio, wake, model, tools); keep the state machine boring.
 6. **Errors are values** — `thiserror` for libraries, `anyhow` only at binary edges; never `unwrap()` in library code except documented invariants in tests.
 7. **No speculative frameworks** — add a dependency when a milestone needs it, not before.
-8. **British or American English** — pick American for code/identifiers (`deserialize`, `behavior` in serde); prose in docs can follow Spencer’s preference. Stay consistent within a file.
+8. **British or American English** — pick American for code/identifiers (`deserialize`, `behavior` in serde); stay consistent within a file for prose.
 9. **Comments explain why** — not what the next line obviously does. Public APIs get short rustdoc.
 10. **Security by structure** — allowlists, least privilege, no drive-by `Command::new("sh")`.
 
@@ -36,7 +36,7 @@ Softwake optimises for **changeability and onboarding**, not cleverness. A mid-l
 - God daemon `main.rs` that owns audio + HTTP + tools + UI protocol
 - Sharing a global `Mutex<App>` for everything
 - Electron/webview mic path “just for the prototype”
-- Copy-pasting agent-desk Python into a subprocess and calling it done
+- Copy-pasting a prior Python conductor into a subprocess and calling it done
 - Hidden network calls inside soul markdown loading
 - Wake word implemented only as “ask the cloud model if they said the name”
 
