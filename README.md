@@ -31,7 +31,7 @@ cargo run -p softwake-daemon
 softwaked state: sleep
 ```
 
-The interactive demo starts in sleep with mock capture running. `wake` and `sleep` submit the configured phrases to the text detector, then apply the voice-state machine, including the 800 ms phrase cooldown. `hibernate` stops capture. A voice command is rejected until `resume`, which returns to sleep and starts capture again.
+The interactive demo is typed commands only. The microphone is not open, and PipeWire is not wired yet. It starts in sleep with mock capture running. `wake` and `sleep` submit the configured phrases to the text detector, then apply the voice-state machine, including the 800 ms phrase cooldown. `hibernate` stops capture. A voice command is rejected until `resume`, which returns to sleep and starts capture again.
 
 ```bash
 cargo run -p softwake-daemon -- demo
@@ -39,14 +39,18 @@ cargo run -p softwake-daemon -- demo
 
 ```text
 softwaked demo
+typed commands only — mic / PipeWire not wired yet
 state: sleep
 capture: running
 commands: wake, sleep, hibernate, resume, status, quit
+>
 ```
 
-Type one command per line. `softwaked --demo` is the same mode. `softwaked --help` prints usage.
+A `> ` prompt is printed before each line is read. The same path accepts a pipe (`printf 'wake\nstatus\nquit\n' | cargo run -p softwake-daemon -- demo`). `softwaked --demo` is the same mode.
 
-`sleep` in the 800 ms after `wake` stays awake. `wake` in the 800 ms after `sleep` or `resume` stays asleep. `hibernate` is a UI command and applies on the next line.
+`softwaked demo --verbose` and `softwaked demo -v` (also `--demo -v`) print extra `verbose:` lines for each command: the raw input, the parsed command, and for `wake` / `sleep` the phrase, the detector hit, and whether the transition succeeded or why it was rejected. `SOFTWAKE_LOG=debug` enables that same detail. `softwaked --help` prints usage.
+
+Type one command per line. `sleep` in the 800 ms after `wake` stays awake. `wake` in the 800 ms after `sleep` or `resume` stays asleep. `hibernate` is a UI command and applies on the next line.
 
 ## Docs
 

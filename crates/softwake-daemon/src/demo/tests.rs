@@ -22,10 +22,17 @@ fn new_demo_is_asleep_with_capture_running() {
     assert_eq!(demo.state(), VoiceState::Sleep);
     assert!(demo.capture_running());
     assert!(!demo.permits_tools());
+    let banner = demo.banner_lines();
+    assert!(
+        banner
+            .iter()
+            .any(|line| { line.contains("typed commands only") && line.contains("PipeWire") })
+    );
     assert_eq!(
-        demo.banner_lines(),
+        banner,
         vec![
             "softwaked demo".to_owned(),
+            "typed commands only — mic / PipeWire not wired yet".to_owned(),
             "state: sleep".to_owned(),
             "capture: running".to_owned(),
             COMMANDS.to_owned(),
@@ -299,6 +306,144 @@ fn status_quit_and_unknown_commands() {
     assert_eq!(
         demo.handle_line("quit", Duration::ZERO),
         CommandResult::quit(vec!["quit".to_owned()])
+    );
+    assert_eq!(demo.state(), VoiceState::Sleep);
+}
+
+#[test]
+fn verbose_wake_records_the_phrase_hit_and_transition() {
+    let mut demo = demo_with(no_cooldown()).with_verbose(true);
+    let result = demo.handle_line("wake", Duration::ZERO);
+    assert_eq!(
+        result.lines,
+        vec![
+            "verbose: raw: \"wake\"".to_owned(),
+            "verbose: parsed: wake".to_owned(),
+            "verbose: phrase: \"hey softwake\"".to_owned(),
+            "verbose: hit: wake".to_owned(),
+            "heard: \"hey softwake\" -> wake".to_owned(),
+            "verbose: transition: ok sleep -> awake (wake phrase)".to_owned(),
+            "transition sleep -> awake (wake phrase)".to_owned(),
+            "effect: open session".to_owned(),
+            "state: awake".to_owned(),
+            "capture: running".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn verbose_unknown_names_the_raw_input() {
+    let mut demo = demo_with(CooldownConfig::default()).with_verbose(true);
+    let unknown = demo.handle_line("dance", Duration::ZERO);
+    assert_eq!(
+        unknown.lines,
+        vec![
+            "verbose: raw: \"dance\"".to_owned(),
+            "verbose: parsed: unknown".to_owned(),
+            "unknown command: dance".to_owned(),
+            COMMANDS.to_owned(),
+        ]
+    );
+    assert!(!unknown.quit);
+    assert_eq!(demo.state(), VoiceState::Sleep);
+}
+
+#[test]
+fn verbose_blank_line_stays_silent_and_advances_cooldown() {
+    let mut demo = demo_with(CooldownConfig::default()).with_verbose(true);
+    demo.handle_line("wake", Duration::ZERO);
+    let blank = demo.handle_line("   ", Duration::from_millis(800));
+    assert_eq!(blank, CommandResult::stay(Vec::new()));
+    demo.handle_line("sleep", Duration::ZERO);
+    assert_eq!(demo.state(), VoiceState::Sleep);
+}
+
+#[test]
+fn verbose_cooldown_rejection_names_the_reason() {
+    let mut demo = demo_with(CooldownConfig::default()).with_verbose(true);
+    demo.handle_line("wake", Duration::ZERO);
+    let blocked = demo.handle_line("sleep", Duration::ZERO);
+    assert_eq!(
+        blocked.lines,
+        vec![
+            "verbose: raw: \"sleep\"".to_owned(),
+            "verbose: parsed: sleep".to_owned(),
+            "verbose: phrase: \"softwake sleep\"".to_owned(),
+            "verbose: hit: sleep".to_owned(),
+            "heard: \"softwake sleep\" -> sleep".to_owned(),
+            "verbose: rejected: cannot apply sleep phrase during cooldown (800ms remaining)"
+                .to_owned(),
+            "rejected: cannot apply sleep phrase during cooldown (800ms remaining)".to_owned(),
+            "state: awake".to_owned(),
+            "capture: running".to_owned(),
+        ]
+    );
+    assert_eq!(demo.state(), VoiceState::Awake);
+}
+
+#[test]
+fn verbose_capture_stopped_names_the_reason_without_a_hit() {
+    let mut demo = demo_with(CooldownConfig::default()).with_verbose(true);
+    demo.handle_line("hibernate", Duration::ZERO);
+    let voice = demo.handle_line("wake", Duration::ZERO);
+    assert_eq!(
+        voice.lines,
+        vec![
+            "verbose: raw: \"wake\"".to_owned(),
+            "verbose: parsed: wake".to_owned(),
+            "verbose: phrase: \"hey softwake\"".to_owned(),
+            "verbose: rejected: capture stopped".to_owned(),
+            "rejected: voice input while capture is stopped (hibernate)".to_owned(),
+            "state: hibernate".to_owned(),
+            "capture: stopped".to_owned(),
+        ]
+    );
+    assert!(voice.lines.iter().all(|line| !line.starts_with("heard:")));
+    assert!(
+        voice
+            .lines
+            .iter()
+            .all(|line| !line.starts_with("verbose: hit:"))
+    );
+}
+
+#[test]
+fn verbose_missing_phrase_names_the_reason() {
+    let table = PhraseTable::new(std::iter::empty::<&str>(), ["go to sleep"]).expect("table");
+    let mut demo = Demo::new(table, CooldownConfig::default()).with_verbose(true);
+    let result = demo.handle_line("wake", Duration::ZERO);
+    assert_eq!(
+        result.lines,
+        vec![
+            "verbose: raw: \"wake\"".to_owned(),
+            "verbose: parsed: wake".to_owned(),
+            "verbose: rejected: no wake phrase configured".to_owned(),
+            "rejected: no wake phrase configured".to_owned(),
+            "state: sleep".to_owned(),
+            "capture: running".to_owned(),
+        ]
+    );
+    assert_eq!(demo.state(), VoiceState::Sleep);
+}
+
+#[test]
+fn verbose_hit_mismatch_names_the_reason() {
+    let table = PhraseTable::new(["go to sleep"], ["go to sleep"]).expect("phrases");
+    let mut demo = Demo::new(table, no_cooldown()).with_verbose(true);
+    let result = demo.handle_line("wake", Duration::ZERO);
+    assert_eq!(
+        result.lines,
+        vec![
+            "verbose: raw: \"wake\"".to_owned(),
+            "verbose: parsed: wake".to_owned(),
+            "verbose: phrase: \"go to sleep\"".to_owned(),
+            "verbose: hit: sleep".to_owned(),
+            "heard: \"go to sleep\" -> sleep".to_owned(),
+            "verbose: rejected: hit mismatch (scored sleep, expected wake)".to_owned(),
+            "rejected: phrase scored as sleep, not wake".to_owned(),
+            "state: sleep".to_owned(),
+            "capture: running".to_owned(),
+        ]
     );
     assert_eq!(demo.state(), VoiceState::Sleep);
 }

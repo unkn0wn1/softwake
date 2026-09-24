@@ -1,12 +1,14 @@
-//! Interactive voice-state demo.
+//! Interactive typed-command voice-state demo.
 //!
-//! `wake` and `sleep` submit a configured phrase to [`TextWakeDetector`] and
-//! apply the resulting hit on [`Machine`]. A phrase event is applied only
-//! after mock capture delivers a frame, so hibernate (capture stopped) cannot
-//! take a voice transition. `hibernate` and `resume` are UI events.
+//! There is no microphone in this loop, and `PipeWire` is not wired. `wake` and
+//! `sleep` submit a configured phrase to [`TextWakeDetector`] and apply the
+//! resulting hit on [`Machine`]. A phrase event is applied only after mock
+//! capture delivers a frame, so hibernate (capture stopped) cannot take a
+//! voice transition. `hibernate` and `resume` are UI events.
 //!
 //! The clock is the `elapsed` argument of [`Demo::handle_line`]. Callers pass
-//! wall time; tests pass exact durations. Nothing in here sleeps.
+//! wall time; tests pass exact durations. Nothing in here sleeps. Verbose
+//! mode adds `verbose:` detail beside the same user-facing lines.
 
 use std::time::Duration;
 
@@ -17,6 +19,7 @@ use softwake_state::{CooldownConfig, Effect, Event, Machine};
 use softwake_wake::{PhraseHit, PhraseTable, TextWakeDetector};
 
 const COMMANDS: &str = "commands: wake, sleep, hibernate, resume, status, quit";
+const TYPED_ONLY: &str = "typed commands only — mic / PipeWire not wired yet";
 
 /// One step of the demo loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,16 +72,34 @@ impl VoiceCommand {
     }
 }
 
+impl Parsed {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Wake => "wake",
+            Self::Sleep => "sleep",
+            Self::Hibernate => "hibernate",
+            Self::Resume => "resume",
+            Self::Status => "status",
+            Self::Quit => "quit",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 /// Sleeping daemon with mock capture and the text phrase spike.
 #[derive(Debug)]
 pub(crate) struct Demo {
     machine: Machine,
     capture: MockAudioCapture,
     detector: TextWakeDetector,
+    verbose: bool,
 }
 
 impl Demo {
     /// Start in sleep and start mock capture.
+    ///
+    /// User-facing lines stay short. [`Self::with_verbose`] adds processing detail.
     pub(crate) fn new(table: PhraseTable, cooldown: CooldownConfig) -> Self {
         let mut capture = MockAudioCapture::default();
         // The mock device cannot fail to open.
@@ -87,12 +108,20 @@ impl Demo {
             machine: Machine::new(cooldown),
             capture,
             detector: TextWakeDetector::new(table),
+            verbose: false,
         }
+    }
+
+    /// Add `verbose:` lines for each non-empty command.
+    #[must_use]
+    pub(crate) fn with_verbose(mut self, verbose: bool) -> Self {
+        self.verbose = verbose;
+        self
     }
 
     /// Lines printed before the first command.
     pub(crate) fn banner_lines(&self) -> Vec<String> {
-        let mut lines = vec!["softwaked demo".to_owned()];
+        let mut lines = vec!["softwaked demo".to_owned(), TYPED_ONLY.to_owned()];
         lines.extend(self.status_lines());
         lines.push(COMMANDS.to_owned());
         lines
@@ -101,21 +130,35 @@ impl Demo {
     /// Apply one stdin line.
     ///
     /// `elapsed` is how long passed since the previous call. It advances the
-    /// phrase-cooldown clock before the command is interpreted.
+    /// phrase-cooldown clock before the command is interpreted. Blank lines
+    /// advance that clock and print nothing, including in verbose mode.
     pub(crate) fn handle_line(&mut self, line: &str, elapsed: Duration) -> CommandResult {
         self.machine.advance(elapsed);
-        match parse_line(line) {
-            Parsed::Empty => CommandResult::stay(Vec::new()),
-            Parsed::Wake => CommandResult::stay(self.voice(VoiceCommand::Wake)),
-            Parsed::Sleep => CommandResult::stay(self.voice(VoiceCommand::Sleep)),
-            Parsed::Hibernate => CommandResult::stay(self.ui(Event::UiHibernate)),
-            Parsed::Resume => CommandResult::stay(self.ui(Event::UiResume)),
-            Parsed::Status => CommandResult::stay(self.status_lines()),
-            Parsed::Quit => CommandResult::quit(vec!["quit".to_owned()]),
-            Parsed::Unknown => CommandResult::stay(vec![
+        let parsed = parse_line(line);
+        let mut lines = match parsed {
+            Parsed::Empty => return CommandResult::stay(Vec::new()),
+            Parsed::Wake => self.voice(VoiceCommand::Wake),
+            Parsed::Sleep => self.voice(VoiceCommand::Sleep),
+            Parsed::Hibernate => self.ui(Event::UiHibernate),
+            Parsed::Resume => self.ui(Event::UiResume),
+            Parsed::Status => self.status_lines(),
+            Parsed::Quit => vec!["quit".to_owned()],
+            Parsed::Unknown => vec![
                 format!("unknown command: {}", line.trim()),
                 COMMANDS.to_owned(),
-            ]),
+            ],
+        };
+        if self.verbose {
+            let mut prefixed = Vec::with_capacity(lines.len() + 2);
+            prefixed.push(format!("verbose: raw: {line:?}"));
+            prefixed.push(format!("verbose: parsed: {}", parsed.as_str()));
+            prefixed.append(&mut lines);
+            lines = prefixed;
+        }
+        if parsed == Parsed::Quit {
+            CommandResult::quit(lines)
+        } else {
+            CommandResult::stay(lines)
         }
     }
 
@@ -148,10 +191,11 @@ impl Demo {
                 .map(str::to_owned),
         };
         let Some(phrase) = phrase else {
-            return self.with_status(vec![format!(
-                "rejected: no {} phrase configured",
-                command.as_str()
-            )]);
+            let rejected = format!("rejected: no {} phrase configured", command.as_str());
+            let mut lines = Vec::new();
+            self.push_verbose(&mut lines, &rejected);
+            lines.push(rejected);
+            return self.with_status(lines);
         };
         self.hear(&phrase, Some(command.hit()))
     }
@@ -163,15 +207,26 @@ impl Demo {
     /// non-matching window leaves the machine alone.
     fn hear(&mut self, text: &str, expected: Option<PhraseHit>) -> Vec<String> {
         if !self.deliver_frame() {
-            return self.with_status(vec![format!(
+            let mut lines = Vec::new();
+            self.push_verbose(&mut lines, format!("phrase: {text:?}"));
+            self.push_verbose(&mut lines, "rejected: capture stopped");
+            lines.push(format!(
                 "rejected: voice input while capture is stopped ({})",
                 self.machine.state()
-            )]);
+            ));
+            return self.with_status(lines);
         }
         let hit = self.detector.push_text(text);
-        let mut lines = vec![format!("heard: \"{text}\" -> {hit}")];
+        let mut lines = Vec::new();
+        self.push_verbose(&mut lines, format!("phrase: {text:?}"));
+        self.push_verbose(&mut lines, format!("hit: {hit}"));
+        lines.push(format!("heard: \"{text}\" -> {hit}"));
         if let Some(expected) = expected {
             if hit != expected {
+                self.push_verbose(
+                    &mut lines,
+                    format!("rejected: hit mismatch (scored {hit}, expected {expected})"),
+                );
                 lines.push(format!("rejected: phrase scored as {hit}, not {expected}"));
                 return self.with_status(lines);
             }
@@ -179,7 +234,7 @@ impl Demo {
         match hit {
             PhraseHit::Wake => lines.extend(self.transition(Event::WakePhrase)),
             PhraseHit::Sleep => lines.extend(self.transition(Event::SleepPhrase)),
-            PhraseHit::None => {}
+            PhraseHit::None => self.push_verbose(&mut lines, "transition: none"),
         }
         self.with_status(lines)
     }
@@ -202,17 +257,29 @@ impl Demo {
     fn transition(&mut self, event: Event) -> Vec<String> {
         match self.machine.apply(event) {
             Ok(applied) => {
-                let mut lines = vec![format!(
-                    "transition {} -> {} ({})",
-                    applied.from, applied.to, applied.event
-                )];
+                let summary = format!("{} -> {} ({})", applied.from, applied.to, applied.event);
+                let mut lines = Vec::new();
+                self.push_verbose(&mut lines, format!("transition: ok {summary}"));
+                lines.push(format!("transition {summary}"));
                 for &effect in applied.effects {
                     self.run_effect(effect);
                     lines.push(format!("effect: {}", effect_label(effect)));
                 }
                 lines
             }
-            Err(error) => vec![format!("rejected: {error}")],
+            Err(error) => {
+                let rejected = format!("rejected: {error}");
+                let mut lines = Vec::new();
+                self.push_verbose(&mut lines, &rejected);
+                lines.push(rejected);
+                lines
+            }
+        }
+    }
+
+    fn push_verbose(&self, lines: &mut Vec<String>, detail: impl std::fmt::Display) {
+        if self.verbose {
+            lines.push(format!("verbose: {detail}"));
         }
     }
 
