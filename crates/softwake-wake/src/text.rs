@@ -115,7 +115,7 @@ impl Default for PhraseTable {
 ///
 /// Each [`TextWakeDetector::push_text`] call is independent. This spike does
 /// not keep a rolling audio buffer and does not implement [`crate::WakeDetector`]:
-/// PCM samples belong to a later on-device engine.
+/// PCM samples belong to the on-device engine chosen in ADR 0006.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::module_name_repetitions)] // `TextWakeDetector` is the public name of the text spike.
 pub struct TextWakeDetector {

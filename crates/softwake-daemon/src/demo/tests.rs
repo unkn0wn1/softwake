@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use softwake_session::SessionPhase;
 use softwake_state::{CooldownConfig, VoiceState};
-use softwake_wake::PhraseTable;
+use softwake_wake::{PhraseHit, PhraseTable};
 
 use super::{COMMANDS, CommandResult, Demo};
 use crate::soul::TestSoulDir;
@@ -42,7 +42,7 @@ fn new_demo_is_asleep_with_capture_running() {
         banner,
         vec![
             "softwaked demo".to_owned(),
-            "typed commands only — mic / PipeWire not wired yet".to_owned(),
+            "typed commands only — mock capture; native PipeWire is feature-gated".to_owned(),
             "state: sleep".to_owned(),
             "capture: running".to_owned(),
             "soul: ok".to_owned(),
@@ -68,6 +68,22 @@ fn wake_command_submits_the_configured_phrase() {
     );
     assert!(demo.permits_tools());
     assert!(demo.capture_running());
+    assert_eq!(demo.last_pcm_hit(), Some(PhraseHit::None));
+}
+
+#[test]
+fn hibernate_does_not_score_a_pcm_frame() {
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    demo.handle_line("hibernate", Duration::ZERO);
+    assert!(!demo.capture_running());
+    let result = demo.handle_line("wake", Duration::ZERO);
+    assert!(
+        result
+            .lines
+            .iter()
+            .any(|line| line.contains("capture is stopped"))
+    );
+    assert_eq!(demo.last_pcm_hit(), None);
 }
 
 #[test]

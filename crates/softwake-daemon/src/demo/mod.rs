@@ -1,10 +1,13 @@
 //! Interactive typed-command voice-state demo.
 //!
-//! There is no microphone in this loop, and `PipeWire` is not wired. `wake` and
-//! `sleep` submit a configured phrase to [`TextWakeDetector`] and apply the
-//! resulting hit on [`Machine`]. A phrase event is applied only after mock
-//! capture delivers a frame, so hibernate (capture stopped) cannot take a
-//! voice transition. `hibernate` and `resume` are UI events.
+//! There is no microphone in this loop. `wake` and `sleep` submit a configured
+//! phrase to [`TextWakeDetector`] and apply the resulting hit on [`Machine`].
+//! A phrase event is applied only after mock capture delivers a frame, so
+//! hibernate (capture stopped) cannot take a voice transition. That same frame
+//! is silence at 16 kHz and is scored by [`NullDetector`] through
+//! [`crate::pcm::score_frame`]. The text hit still drives the transition.
+//! Native `PipeWire` is feature-gated and is not opened here. `hibernate` and
+//! `resume` are UI events.
 //!
 //! The clock is the `elapsed` argument of [`Demo::handle_line`]. Callers pass
 //! wall time; tests pass exact durations. Nothing in here sleeps. Verbose
@@ -27,14 +30,15 @@ use softwake_soul::SoulDir;
 #[cfg(test)]
 use softwake_state::VoiceState;
 use softwake_state::{CooldownConfig, Effect, Event, Machine};
-use softwake_wake::{PhraseHit, PhraseTable, TextWakeDetector};
+use softwake_wake::{NullDetector, PhraseHit, PhraseTable, TextWakeDetector};
 
 use crate::dispatch::{Hands, RequestOutcome};
+use crate::pcm::score_frame;
 use crate::soul::LoadedSoul;
 
 const COMMANDS: &str =
     "commands: wake, sleep, hibernate, resume, status, reload-soul, tool, confirm, cancel, quit";
-const TYPED_ONLY: &str = "typed commands only — mic / PipeWire not wired yet";
+const TYPED_ONLY: &str = "typed commands only — mock capture; native PipeWire is feature-gated";
 
 /// One step of the demo loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,6 +123,11 @@ pub(crate) struct Demo {
     machine: Machine,
     capture: MockAudioCapture,
     detector: TextWakeDetector,
+    /// PCM stand-in. Typed commands do not follow its hit.
+    pcm: NullDetector,
+    /// Last PCM score from a delivered frame. `None` means no frame was scored.
+    #[cfg_attr(not(test), allow(dead_code))]
+    last_pcm_hit: Option<PhraseHit>,
     soul: LoadedSoul,
     session: TextStubSession,
     hands: Hands,
@@ -137,6 +146,8 @@ impl Demo {
             machine: Machine::new(cooldown),
             capture,
             detector: TextWakeDetector::new(table),
+            pcm: NullDetector,
+            last_pcm_hit: None,
             soul: LoadedSoul::open(soul_dir),
             session: TextStubSession::default(),
             hands: Hands::new(),
@@ -220,6 +231,12 @@ impl Demo {
     #[cfg(test)]
     fn capture_running(&self) -> bool {
         self.capture.is_running()
+    }
+
+    /// PCM hit from the last frame [`Self::deliver_frame`] scored.
+    #[cfg(test)]
+    fn last_pcm_hit(&self) -> Option<PhraseHit> {
+        self.last_pcm_hit
     }
 
     #[cfg(test)]
@@ -310,12 +327,21 @@ impl Demo {
     }
 
     /// A voice command is a frame plus a transcript. The text spike has no PCM
-    /// encoder, so the frame is the capture token and the transcript is scored
-    /// beside it. `stop` makes [`MockAudioCapture::poll_frame`] return nothing.
+    /// encoder, so the frame is 10 ms of silence (160 samples at 16 kHz) and
+    /// the transcript is scored beside it. The silence still goes through
+    /// [`score_frame`] so the PCM boundary is the one a microphone frame will
+    /// use. `stop` makes [`MockAudioCapture::poll_frame`] return nothing.
     fn deliver_frame(&mut self) -> bool {
-        let accepted = self.capture.push_frame(&[]);
-        let delivered = self.capture.poll_frame().is_some();
-        accepted && delivered
+        // 10 ms at [`softwake_audio::AudioFormat::WAKE`].
+        const SILENCE_10MS: &[i16] = &[0; 160];
+        if !self.capture.push_frame(SILENCE_10MS) {
+            return false;
+        }
+        let Ok(Some(frame)) = AudioCapture::poll_frame(&mut self.capture) else {
+            return false;
+        };
+        self.last_pcm_hit = Some(score_frame(&mut self.pcm, &frame));
+        true
     }
 
     fn ui(&mut self, event: Event) -> Vec<String> {

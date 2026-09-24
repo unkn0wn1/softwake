@@ -178,7 +178,8 @@ Usage:
   softwaked --help          print this help
 
 The demo reads typed commands only and prints "> " before each line.
-Mic and PipeWire are not wired yet.
+It uses mock capture. A microphone is not opened. Native PipeWire is an
+optional feature (pipewire-native) and is not linked in the default build.
 SOFTWAKE_LOG=debug enables the same detail as --verbose and -v.
 
 Demo commands, one per line:

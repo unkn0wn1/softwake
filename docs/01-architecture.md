@@ -29,8 +29,8 @@ Keep crates small and single-purpose. Exact names can shift; responsibilities sh
 |-------|----------------|
 | `softwake-daemon` | Binary: state machine, IPC server, wiring |
 | `softwake-state` | Sleep / awake / hibernate transitions and invariants |
-| `softwake-audio` | Capture trait, mock backend, PipeWire stub |
-| `softwake-wake` | Local wake/sleep phrases. Text table for the spike; PCM engine later |
+| `softwake-audio` | Capture trait, mock backend, PipeWire stub. `pipewire-native` is off unless a developer opts in |
+| `softwake-wake` | Local wake/sleep phrases. Text table for the typed demo. PCM seam for sherpa-onnx keyword spotting ([ADR 0006](ADR-0006-on-device-wake.md)) |
 | `softwake-session` | Text session for one awake period. Stores rendered soul instructions. No model client yet |
 | `softwake-tools` | Tool registry with safe, confirm, and deny metadata. `echo` is safe, `notify` waits for confirmation, `shell` is denied |
 | `softwake-soul` | Load/validate soul pack; render system instructions |
@@ -46,14 +46,18 @@ Do not put PipeWire types into `softwake-soul`. Do not put HTTP clients into `so
 3. **Secrets** stay in OS keychain / env; never in soul markdown committed to git.
 4. **Network** only from session and explicitly allowed tools — not from the wake engine.
 
-## Audio path (phase 1)
+## Audio path
 
-Current spike: `MockAudioCapture` plus a text phrase table ([ADR 0002](ADR-0002-wake-engine-spike.md)). `PipeWireCapture` implements the capture trait and reports that native I/O is not linked yet. The `pipewire` feature does not pull a system library.
+The typed demo and `softwaked serve` use `MockAudioCapture` plus the text phrase table ([ADR 0002](ADR-0002-wake-engine-spike.md)). The production wake engine is sherpa-onnx keyword spotting ([ADR 0006](ADR-0006-on-device-wake.md)). Weights are not in the repo. `NullDetector` is the PCM stand-in and returns no hit. Each captured frame is still passed to `WakeDetector::push_samples`.
 
-- Capture via PipeWire (`pw-record` or native bindings behind a trait).
-- **Hibernate:** tear down capture; no frames to wake engine.
+`AudioFormat::WAKE` is 16 kHz mono `i16`. `AudioCapture::poll_frame` is how both the mock and a future native backend hand over one `AudioFrame`.
+
+`PipeWireCapture` implements the capture trait. The default `pipewire` feature does not pull a system library: `start` returns `PipeWireError::NotLinked`, and `poll_frame` returns `PipeWireError::NotRunning` so the stub is not an idle microphone. `pipewire-native` is the opt-in feature. It does not link `libpipewire` yet (`PipeWireError::StreamUnwired`) and CI does not enable it. A developer can compile that feature with `cargo test -p softwake-audio --features pipewire-native`. A later build that links the library needs `libpipewire-0.3-dev` and must stay out of the default CI job.
+
+- Capture via PipeWire (native bindings behind the trait, feature-gated). The default path is the mock.
+- **Hibernate:** tear down capture; no frames to the wake engine.
 - **Sleep:** capture + wake engine only; no tool dispatch; no model “acting” channel.
-- **Awake:** capture may feed both wake-for-sleep-phrase and the active voice/session path (design detail in spike — must not miss sleep phrase).
+- **Awake:** capture may feed both wake-for-sleep-phrase and the active voice/session path (must not miss the sleep phrase). The typed demo still applies the text detector's hit.
 
 Chromium/Electron/Capacitor WebView audio is **out of scope** for the daemon. Do not put mic capture in a webview — the daemon owns the ear.
 
