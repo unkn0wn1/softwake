@@ -21,6 +21,7 @@
     "allow-provider-oauth-sign-out",
     "allow-provider-test",
     "allow-provider-set-model",
+    "allow-provider-opt-in-plaintext",
     "allow-pack-snapshot",
     "allow-pack-save"
   ]

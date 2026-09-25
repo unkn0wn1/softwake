@@ -31,6 +31,7 @@ const testStatus = document.querySelector("#test-status");
 const modelSelect = document.querySelector("#model-select");
 const providerError = document.querySelector("#provider-error");
 const plaintextWarning = document.querySelector("#plaintext-warning");
+const usePlaintextBtn = document.querySelector("#use-plaintext-file");
 
 const packFiles = ["soul", "user", "rules", "glossary"];
 const packDirEl = document.querySelector("#pack-dir");
@@ -183,7 +184,14 @@ function selectedRow() {
 function renderProviders(snap) {
   providerSnap = snap;
   providerError.textContent = "";
-  plaintextWarning.textContent = snap.plaintext_warning || "";
+  plaintextWarning.textContent = snap.storage_message || "";
+  const showPlaintextOptIn = snap.storage_backend === "unavailable";
+  usePlaintextBtn.classList.toggle("hidden", !showPlaintextOptIn);
+  if (showPlaintextOptIn) {
+    usePlaintextBtn.removeAttribute("hidden");
+  } else {
+    usePlaintextBtn.setAttribute("hidden", "");
+  }
 
   const previous = providerSelect.value;
   providerSelect.innerHTML = "";
@@ -310,6 +318,10 @@ async function providerAction(command, args) {
 
 providerSelect.addEventListener("change", () => {
   providerAction("provider_select", { providerId: providerSelect.value });
+});
+
+usePlaintextBtn.addEventListener("click", () => {
+  providerAction("provider_opt_in_plaintext");
 });
 
 saveKeyBtn.addEventListener("click", () => {

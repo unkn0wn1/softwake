@@ -35,6 +35,7 @@ pub fn run() {
             providers::provider_oauth_sign_out,
             providers::provider_test,
             providers::provider_set_model,
+            providers::provider_opt_in_plaintext,
             pack::pack_snapshot,
             pack::pack_save,
         ])
@@ -62,6 +63,7 @@ mod tests {
         "provider_oauth_sign_out",
         "provider_test",
         "provider_set_model",
+        "provider_opt_in_plaintext",
         "pack_snapshot",
         "pack_save",
     ];
@@ -84,6 +86,7 @@ mod tests {
         "allow-provider-oauth-sign-out",
         "allow-provider-test",
         "allow-provider-set-model",
+        "allow-provider-opt-in-plaintext",
         "allow-pack-snapshot",
         "allow-pack-save",
     ];

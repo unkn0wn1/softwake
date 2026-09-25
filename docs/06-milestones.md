@@ -53,6 +53,7 @@
    - [x] Alias expand and confirm-echo readback are library functions with unit tests. No shell. Protocol generation stays 1.
 2. [x] Provider settings foundation ([ADR 0012](ADR-0012-model-providers.md))
    - [x] `softwake-providers`: xAI device-code OAuth, xAI API key, OpenAI API key, OpenRouter API key, OpenAI-compatible API key + base URL. Secret bag under XDG state (plaintext v1 warning). Settings JSON under XDG config (includes compatible base URL). Model picker empty until Test.
+   - [x] Secret bag prefers the OS keyring; v1 plaintext migrates on first resolved load when Secret Service answers; plaintext remains an opt-in fallback; CI uses a fake client.
    - [x] Mock `Transport` for CI. `live-http` (ureq) is opt-in on the crate; `softwake-ui` enables it by default for Settings Test and sign-in.
    - [x] Thin Settings panel in `softwake-ui`. Protocol generation stays 1. That slice stopped at the `ProviderHandle` stub.
    - [x] OpenRouter and OpenAI-compatible base URL
