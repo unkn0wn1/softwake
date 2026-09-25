@@ -66,3 +66,10 @@ Space and Enter on the capsule toggle expand only when the capsule itself is foc
 - The HUD re-asserts **always-on-top** after layout changes, when Settings is shown from the tray, and when Settings or the HUD gains focus, so the capsule stays above the Settings window on Linux.
 - Press-to-talk release paints the idle mic and a **thinking…** line before the blocking STT/ask/TTS round trip (`spawn_blocking` in the UI commands) so the HUD chrome does not freeze for the duration of the call.
 
+## Amendment (2026-09-25) — bloom during think/speak
+
+After playback and HUD fire-and-forget ([ADR 0007](ADR-0007-awake-stt-tts.md)), bloom could still freeze mid-STT/ask because sync `hud_snapshot` blocked the Tauri main thread on a contended daemon `Mutex<Runtime>`.
+
+- `hud_snapshot` runs on the blocking pool (`spawn_blocking`), same as talk/ask.
+- Serve `GetStatus` uses `try_lock`: when ask/talk_stop holds the runtime lock, the server returns the last cached `Status` (with a thinking line published before the long hold) so HUD polls never wait on the pipeline.
+- The HUD particle loop always uses last-known level; while `talkPending` / thinking it adds a local sine breath so the capsule stays lively even if capture RMS is briefly stale.

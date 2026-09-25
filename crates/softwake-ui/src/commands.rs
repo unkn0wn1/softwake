@@ -165,26 +165,33 @@ pub struct HudSnapshot {
 
 /// Status plus a listening level for the HUD capsule.
 ///
+/// Runs on the blocking pool so a contended daemon lock (STT/ask/TTS holding
+/// `Runtime`) cannot freeze the Tauri main thread and stall bloom rAF.
+///
 /// # Errors
 ///
 /// Returns the daemon or socket error as text.
 #[tauri::command]
-pub fn hud_snapshot() -> Result<HudSnapshot, String> {
-    let status = call(Command::GetStatus)?;
-    let (level, level_mocked) = match status.capture_level {
-        Some(level) => (f64::from(level).clamp(0.0, 1.0), false),
-        None => (mock_level(status.capture_running), true),
-    };
-    Ok(HudSnapshot {
-        state: status.state.as_str().to_owned(),
-        capture_running: status.capture_running,
-        level,
-        level_mocked,
-        message: status.message,
-        detail: status.detail,
-        talking: status.talking,
-        auto_listening: status.auto_listening,
+pub async fn hud_snapshot() -> Result<HudSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let status = call(Command::GetStatus)?;
+        let (level, level_mocked) = match status.capture_level {
+            Some(level) => (f64::from(level).clamp(0.0, 1.0), false),
+            None => (mock_level(status.capture_running), true),
+        };
+        Ok(HudSnapshot {
+            state: status.state.as_str().to_owned(),
+            capture_running: status.capture_running,
+            level,
+            level_mocked,
+            message: status.message,
+            detail: status.detail,
+            talking: status.talking,
+            auto_listening: status.auto_listening,
+        })
     })
+    .await
+    .map_err(|error| format!("hud snapshot task failed: {error}"))?
 }
 
 fn mock_level(capture_running: bool) -> f64 {

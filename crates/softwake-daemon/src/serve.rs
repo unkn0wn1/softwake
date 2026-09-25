@@ -5,6 +5,11 @@
 //! queued per client; a full queue drops that event for that client and the
 //! next `get_status` shows the truth.
 //!
+//! `GetStatus` uses `try_lock` on the runtime mutex: when STT/ask/TTS holds the
+//! lock, the server returns the last cached [`Status`] so the HUD bloom poll
+//! never waits on the voice pipeline. Capture-level may be briefly stale;
+//! particles keep last-known level (and a local breath in the UI).
+//!
 //! The listener is removed when this task drops. A crash skips that drop, and
 //! the next bind deletes the file if nothing answers on it.
 
@@ -17,8 +22,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 
 use softwake_ipc::{
-    ClientMessage, Event as WireEvent, HandshakeError, Listener, PROTOCOL_VERSION, ResponseBody,
-    ServerConnection, ServerMessage, ServerReader, ServerWriter, SocketError, resolve_socket_path,
+    ClientMessage, Command, Event as WireEvent, HandshakeError, Listener, PROTOCOL_VERSION,
+    ResponseBody, ServerConnection, ServerMessage, ServerReader, ServerWriter, SocketError, Status,
+    VoiceState, resolve_socket_path,
 };
 
 use softwake_soul::SoulDir;
@@ -171,6 +177,18 @@ impl ServeHandle {
     pub(crate) fn session_turns_for_test(&self) -> Vec<String> {
         lock(&self.shared.runtime).session_turns().to_vec()
     }
+
+    /// Hold the runtime mutex so tests can prove `GetStatus` uses the cache.
+    #[cfg(test)]
+    pub(crate) fn lock_runtime_for_test(&self) -> MutexGuard<'_, Runtime> {
+        lock(&self.shared.runtime)
+    }
+
+    /// Seed or overwrite the status cache (thinking line during a held lock).
+    #[cfg(test)]
+    pub(crate) fn publish_thinking_for_test(&self, detail: &str) {
+        publish_thinking(&self.shared, detail);
+    }
 }
 
 impl Drop for ServeHandle {
@@ -214,6 +232,9 @@ fn accept_loop(
 
 struct Shared {
     runtime: Mutex<Runtime>,
+    /// Last successful status snapshot. Served when `GetStatus` cannot take the
+    /// runtime lock because `ask` / `talk_stop` is in flight.
+    last_status: Mutex<Option<Status>>,
     subscribers: Mutex<Vec<Subscriber>>,
     clients: Mutex<Vec<ClientSlot>>,
     next_subscriber: AtomicU64,
@@ -238,6 +259,7 @@ impl Shared {
     fn new(soul_dir: SoulDir, capture: CaptureKind) -> Result<Self, crate::capture::CaptureError> {
         Ok(Self {
             runtime: Mutex::new(Runtime::with_capture(soul_dir, capture)?),
+            last_status: Mutex::new(None),
             subscribers: Mutex::new(Vec::new()),
             clients: Mutex::new(Vec::new()),
             next_subscriber: AtomicU64::new(1),
@@ -337,7 +359,9 @@ fn client_loop(stream: UnixStream, shared: &Shared) {
 fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerReader) -> bool {
     match reader.read() {
         Ok(ClientMessage::Request { id, command }) => {
-            let (outcome, pending_auto) = {
+            let (outcome, pending_auto) = if matches!(command, Command::GetStatus) {
+                status_outcome(shared)
+            } else {
                 let mut runtime = lock(&shared.runtime);
                 let outcome = runtime.handle(command);
                 let pending_auto = runtime.take_pending_auto_pcm();
@@ -345,10 +369,12 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
             };
             let ok = reply(shared, tx, id, outcome);
             if let Some(pcm) = pending_auto {
+                publish_thinking(shared, "free speech");
                 let outcome = lock(&shared.runtime).transcribe_and_ask_pub(&pcm);
                 for event in &outcome.events {
                     shared.broadcast(event);
                 }
+                remember_status(shared, &outcome);
             }
             ok
         }
@@ -373,6 +399,7 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
             reply(shared, tx, id, outcome)
         }
         Ok(ClientMessage::Ask { id, text }) => {
+            publish_thinking(shared, "ask");
             let outcome = lock(&shared.runtime).ask(&text);
             reply(shared, tx, id, outcome)
         }
@@ -385,6 +412,7 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
             reply(shared, tx, id, outcome)
         }
         Ok(ClientMessage::TalkStop { id }) => {
+            publish_thinking(shared, "press to talk");
             let outcome = lock(&shared.runtime).talk_stop();
             reply(shared, tx, id, outcome)
         }
@@ -398,6 +426,7 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
 }
 
 fn reply(shared: &Shared, tx: &SyncSender<Outbound>, id: u64, outcome: Outcome) -> bool {
+    remember_status(shared, &outcome);
     for event in &outcome.events {
         shared.broadcast(event);
     }
@@ -406,6 +435,82 @@ fn reply(shared: &Shared, tx: &SyncSender<Outbound>, id: u64, outcome: Outcome) 
         body: outcome.body,
     })
     .is_ok()
+}
+
+fn remember_status(shared: &Shared, outcome: &Outcome) {
+    if let Some(status) = outcome.body.status() {
+        *lock(&shared.last_status) = Some(status.clone());
+    }
+}
+
+/// Push a thinking line into the status cache before a long lock hold so HUD
+/// `GetStatus` `try_lock` misses still show thinking mid-pipeline.
+fn publish_thinking(shared: &Shared, detail: &str) {
+    let mut guard = lock(&shared.last_status);
+    if let Some(status) = guard.as_mut() {
+        status.message = Some("thinking…".to_owned());
+        status.detail = Some(detail.to_owned());
+        status.talking = false;
+        status.auto_listening = false;
+    } else {
+        *guard = Some(Status {
+            state: VoiceState::Awake,
+            capture_running: true,
+            capture_level: None,
+            soul_reload_pending: false,
+            soul: None,
+            message: Some("thinking…".to_owned()),
+            detail: Some(detail.to_owned()),
+            pending_tool: None,
+            last_tool: None,
+            talking: false,
+            auto_listening: false,
+        });
+    }
+}
+
+/// `GetStatus` without waiting on STT/ask/TTS that already hold the runtime lock.
+fn status_outcome(shared: &Shared) -> (Outcome, Option<Vec<i16>>) {
+    match shared.runtime.try_lock() {
+        Ok(mut runtime) => {
+            let outcome = runtime.handle(Command::GetStatus);
+            let pending_auto = runtime.take_pending_auto_pcm();
+            (outcome, pending_auto)
+        }
+        Err(std::sync::TryLockError::WouldBlock) => {
+            let cached = lock(&shared.last_status).clone();
+            let status = cached.unwrap_or_else(placeholder_status);
+            (
+                Outcome {
+                    body: ResponseBody::ok(status),
+                    events: Vec::new(),
+                },
+                None,
+            )
+        }
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+            let mut runtime = poisoned.into_inner();
+            let outcome = runtime.handle(Command::GetStatus);
+            let pending_auto = runtime.take_pending_auto_pcm();
+            (outcome, pending_auto)
+        }
+    }
+}
+
+fn placeholder_status() -> Status {
+    Status {
+        state: VoiceState::Sleep,
+        capture_running: false,
+        capture_level: None,
+        soul_reload_pending: false,
+        soul: None,
+        message: None,
+        detail: Some("status cache warming".to_owned()),
+        pending_tool: None,
+        last_tool: None,
+        talking: false,
+        auto_listening: false,
+    }
 }
 
 fn write_loop(mut writer: ServerWriter, inbound: &Receiver<Outbound>) {
