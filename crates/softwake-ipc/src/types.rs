@@ -273,6 +273,16 @@ pub enum IpcError {
         /// Voice state that refused the confirm.
         state: VoiceState,
     },
+
+    /// One chat turn was refused.
+    ///
+    /// Produced only in reply to [`ClientMessage::Ask`]. `message` is the
+    /// operator sentence from the demo ask path. It does not include a bearer.
+    #[error("{message}")]
+    ChatRejected {
+        /// Operator-facing sentence, with no `rejected:` prefix.
+        message: String,
+    },
 }
 
 impl IpcError {
@@ -517,6 +527,19 @@ pub enum ClientMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
     },
+    /// Send one typed line to the selected provider while the daemon is awake.
+    ///
+    /// `ctl chat` sends this same message. Blank text is rejected. Sleep and
+    /// hibernate refuse the turn before Settings are read. Success puts the
+    /// assistant text on [`Status::message`]. A refusal is
+    /// [`IpcError::ChatRejected`]. No event is broadcast. Additive on protocol
+    /// generation 1: a client that never sends `ask` still speaks this generation.
+    Ask {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+        /// User line.
+        text: String,
+    },
 }
 
 /// Daemon messages after a client connects.
@@ -539,7 +562,7 @@ pub enum ServerMessage {
         /// Why the connection will close.
         message: String,
     },
-    /// Reply to one [`ClientMessage::Request`].
+    /// Reply to one client request, tool call, or ask.
     Response {
         /// Id copied from the request.
         id: u64,
@@ -792,6 +815,26 @@ mod tests {
         let cancel_json = serde_json::to_string(&cancel).expect("encode");
         assert!(cancel_json.contains("\"type\":\"cancel_tool\""));
         assert!(!cancel_json.contains("\"name\""));
+
+        let ask = ClientMessage::Ask {
+            id: 11,
+            text: "hello there".to_owned(),
+        };
+        assert_round_trip(&ask);
+        let ask_json = serde_json::to_string(&ask).expect("encode");
+        assert!(ask_json.contains("\"type\":\"ask\""));
+        assert!(ask_json.contains("\"text\":\"hello there\""));
+
+        let rejected = IpcError::ChatRejected {
+            message: "ask while sleep (chat acts only while awake)".to_owned(),
+        };
+        assert_round_trip(&rejected);
+        assert_eq!(
+            rejected.to_string(),
+            "ask while sleep (chat acts only while awake)"
+        );
+        let rejected_json = serde_json::to_string(&rejected).expect("encode");
+        assert!(rejected_json.contains("\"kind\":\"chat_rejected\""));
 
         let pending = Event::ToolConfirmPending {
             pending_id: "1".to_owned(),

@@ -434,15 +434,8 @@ impl Demo {
     #[cfg(test)]
     fn ask_fixture(&mut self, text: &str) -> Vec<String> {
         let extracted = self.chat_fixture.as_ref().map(|fixture| {
-            let prepared = softwake_providers::prepare_chat(
-                &fixture.handle,
-                fixture.settings_file_present,
-                fixture.env_xai.as_deref(),
-                fixture.env_openai.as_deref(),
-                None,
-                None,
-            );
-            (prepared, std::rc::Rc::clone(&fixture.transport))
+            let prepared = crate::chat::prepare_fixture(fixture);
+            (prepared, std::sync::Arc::clone(&fixture.transport))
         });
         let Some((prepared, transport)) = extracted else {
             return self.ask_disk(text);
@@ -451,17 +444,10 @@ impl Demo {
             Ok((prepared, bearer)) => {
                 let call = prepared.clone();
                 self.complete_ask(text, &prepared, move |system, user| {
-                    softwake_providers::complete_chat(
-                        transport.as_ref(),
-                        &call,
-                        &bearer,
-                        system,
-                        user,
-                    )
-                    .map_err(|error| error.to_string())
+                    crate::chat::complete_fixture(&transport, &call, &bearer, system, user)
                 })
             }
-            Err(error) => self.chat_rejected(&error.to_string(), None),
+            Err(message) => self.chat_rejected(&message, None),
         }
     }
 
@@ -473,25 +459,17 @@ impl Demo {
         self.finish_disk(text, ready)
     }
 
-    #[cfg(not(feature = "live-http"))]
     fn finish_disk(&mut self, text: &str, ready: crate::chat::DiskChat) -> Vec<String> {
         let crate::chat::DiskChat { prepared, bearer } = ready;
-        match crate::chat::finish_prepared_chat(&prepared, &bearer, "", text) {
-            Ok(reply) => self.chat_ok(&prepared, &reply),
-            Err(message) => self.chat_rejected(&message, Some(&prepared)),
+        if let Err(message) = crate::chat::gate_live_http(&prepared, &bearer, text) {
+            return self.chat_rejected(&message, Some(&prepared));
         }
-    }
-
-    #[cfg(feature = "live-http")]
-    fn finish_disk(&mut self, text: &str, ready: crate::chat::DiskChat) -> Vec<String> {
-        let crate::chat::DiskChat { prepared, bearer } = ready;
         let call = prepared.clone();
         self.complete_ask(text, &prepared, move |system, user| {
             crate::chat::finish_prepared_chat(&call, &bearer, system, user)
         })
     }
 
-    #[cfg(any(test, feature = "live-http"))]
     fn complete_ask(
         &mut self,
         text: &str,
@@ -500,36 +478,19 @@ impl Demo {
     ) -> Vec<String> {
         let mut lines = Vec::new();
         self.note_chat(&mut lines, prepared);
-        let appendix = {
-            #[cfg(test)]
-            {
-                if let Some(memory) = self.memory_fixture.as_ref() {
-                    softwake_memory::recall_for_prompt(memory, text)
-                } else {
-                    crate::chat::disk_memory_appendix(text)
-                }
-            }
-            #[cfg(not(test))]
-            {
-                crate::chat::disk_memory_appendix(text)
-            }
-        };
-        match self.session.ask(text, &appendix, complete) {
+        #[cfg(test)]
+        let fixture = self.memory_fixture.as_ref();
+        #[cfg(not(test))]
+        let fixture = Option::<&softwake_memory::MockMemory>::None;
+        let appendix = crate::chat::appendix_for_ask(text, fixture);
+        match crate::chat::perform_ask(&mut self.session, text, &appendix, complete) {
             Ok(reply) => lines.push(format!("assistant: {reply}")),
             Err(error) => {
-                let rejected = format!("rejected: {error}");
+                let rejected = format!("rejected: {}", error.sentence());
                 self.push_verbose(&mut lines, &rejected);
                 lines.push(rejected);
             }
         }
-        self.with_status(lines)
-    }
-
-    #[cfg_attr(feature = "live-http", allow(dead_code))]
-    fn chat_ok(&mut self, prepared: &PreparedChat, reply: &str) -> Vec<String> {
-        let mut lines = Vec::new();
-        self.note_chat(&mut lines, prepared);
-        lines.push(format!("assistant: {reply}"));
         self.with_status(lines)
     }
 

@@ -37,6 +37,16 @@ pub(crate) enum CtlAction {
         /// Id returned with the pending confirmation.
         pending_id: String,
     },
+    /// `ctl ask <text…>`
+    Ask {
+        /// User line. Blank text is rejected before connect.
+        text: String,
+    },
+    /// `ctl chat <text…>` — same socket message as [`Self::Ask`].
+    Chat {
+        /// User line. Blank text is rejected before connect.
+        text: String,
+    },
 }
 
 impl CtlAction {
@@ -69,6 +79,7 @@ pub(crate) fn run(path: &Path, action: &CtlAction) -> Result<String, CallError> 
         CtlAction::Tool { name, args } => call_tool(path, name, args)?,
         CtlAction::ConfirmTool { pending_id } => call_confirm(path, pending_id)?,
         CtlAction::CancelTool { pending_id } => call_cancel(path, pending_id)?,
+        CtlAction::Ask { text } | CtlAction::Chat { text } => call_ask(path, text)?,
     };
     Ok(format_status(&status))
 }
@@ -91,6 +102,18 @@ pub(crate) fn call(path: &Path, command: Command) -> Result<Status, CallError> {
 pub(crate) fn call_tool(path: &Path, name: &str, args: &[String]) -> Result<Status, CallError> {
     let mut client = Client::connect(path)?;
     client.call_tool(name, args)
+}
+
+/// Connect and send one ask.
+///
+/// `ask` and `chat` both use this. The daemon must already be awake.
+///
+/// # Errors
+///
+/// Returns [`CallError`] when the daemon cannot be reached or refuses the turn.
+pub(crate) fn call_ask(path: &Path, text: &str) -> Result<Status, CallError> {
+    let mut client = Client::connect(path)?;
+    client.call_ask(text)
 }
 
 /// Connect and confirm one pending tool.

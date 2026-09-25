@@ -58,6 +58,7 @@
    - [x] OpenRouter and OpenAI-compatible base URL
    - [x] Wire awake session chat to the selected provider ([ADR 0013](ADR-0013-session-provider.md)). While awake, typed `ask` and `chat` send the rendered context pack and the user line to the Settings provider. Tests use `MockTransport`. The daemon `live-http` feature performs the real call. A missing Settings file, a Test that has not succeeded, a missing model, or a missing bearer returns a clear error. Protocol generation stays 1.
    - [x] Budgeted memory snippets after the rendered pack ([ADR 0009](ADR-0009-long-term-memory.md), [ADR 0013](ADR-0013-session-provider.md)). At most 4 snippets / 2048 UTF-8 bytes. Query is the user line. Opens `FileMemory` only when `memory.json` exists. Fail-open. Session takes an appendix string; daemon owns the memory crate. CI key-free / no Redis.
+   - [x] `softwaked ctl ask` and `ctl chat` against `softwaked serve` ([ADR 0013](ADR-0013-session-provider.md)). Same awake completion as the typed demo: context pack, budgeted memory appendix, selected provider. New `ask` message on protocol generation 1. Tests use a mock transport. `live-http` stays opt-in. Serve still starts asleep; this slice does not add a microphone wake.
 3. [ ] Live email, Drive, and calendar connectors (still open from phase 3)
 4. [ ] In-window editors for `soul.md`, `user.md`, `rules.md`, and `glossary.md` (reload stays how a pack is applied)
 

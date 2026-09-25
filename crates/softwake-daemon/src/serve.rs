@@ -131,6 +131,32 @@ impl ServeHandle {
     pub(crate) fn wake_phrase_for_test(&self) -> Outcome {
         lock(&self.shared.runtime).wake_phrase()
     }
+
+    /// Install the in-test provider on the running daemon.
+    #[cfg(test)]
+    pub(crate) fn install_chat_fixture_for_test(&self, fixture: crate::chat::ChatFixture) {
+        lock(&self.shared.runtime).install_chat_fixture(fixture);
+    }
+
+    /// Posts recorded by the in-test transport.
+    #[cfg(test)]
+    pub(crate) fn chat_posts_for_test(&self) -> Vec<crate::chat::RecordedPost> {
+        lock(&self.shared.runtime).chat_posts()
+    }
+
+    /// Instructions stored on the open session, if it is open.
+    #[cfg(test)]
+    pub(crate) fn session_instructions_for_test(&self) -> Option<String> {
+        lock(&self.shared.runtime)
+            .session_instructions()
+            .map(str::to_owned)
+    }
+
+    /// User lines recorded since the session opened.
+    #[cfg(test)]
+    pub(crate) fn session_turns_for_test(&self) -> Vec<String> {
+        lock(&self.shared.runtime).session_turns().to_vec()
+    }
 }
 
 impl Drop for ServeHandle {
@@ -318,6 +344,10 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
             name,
         }) => {
             let outcome = lock(&shared.runtime).cancel_tool(&pending_id, name.as_deref());
+            reply(shared, tx, id, outcome)
+        }
+        Ok(ClientMessage::Ask { id, text }) => {
+            let outcome = lock(&shared.runtime).ask(&text);
             reply(shared, tx, id, outcome)
         }
         Ok(ClientMessage::Hello { .. }) => false,
