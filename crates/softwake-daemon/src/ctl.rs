@@ -16,6 +16,8 @@ pub(crate) enum CtlAction {
     Hibernate,
     /// `ctl resume` — leaves hibernate and lands in sleep.
     Resume,
+    /// `ctl wake` — enters awake from sleep when the soul pack is valid.
+    Wake,
     /// `ctl sleep`
     Sleep,
     /// `ctl reload-soul`
@@ -57,6 +59,7 @@ impl CtlAction {
             "status" => Some(Self::Status),
             "hibernate" => Some(Self::Hibernate),
             "resume" => Some(Self::Resume),
+            "wake" => Some(Self::Wake),
             "sleep" => Some(Self::Sleep),
             "reload-soul" => Some(Self::ReloadSoul),
             _ => None,
@@ -74,6 +77,7 @@ pub(crate) fn run(path: &Path, action: &CtlAction) -> Result<String, CallError> 
         CtlAction::Status => call(path, Command::GetStatus)?,
         CtlAction::Hibernate => call(path, Command::Hibernate)?,
         CtlAction::Resume => call(path, Command::WakeFromUi)?,
+        CtlAction::Wake => call_wake(path)?,
         CtlAction::Sleep => call(path, Command::Sleep)?,
         CtlAction::ReloadSoul => call(path, Command::ReloadSoul)?,
         CtlAction::Tool { name, args } => call_tool(path, name, args)?,
@@ -114,6 +118,18 @@ pub(crate) fn call_tool(path: &Path, name: &str, args: &[String]) -> Result<Stat
 pub(crate) fn call_ask(path: &Path, text: &str) -> Result<Status, CallError> {
     let mut client = Client::connect(path)?;
     client.call_ask(text)
+}
+
+/// Connect and send one wake.
+///
+/// The daemon enters awake only from sleep, and only when the loaded pack is valid.
+///
+/// # Errors
+///
+/// Returns [`CallError`] when the daemon cannot be reached or refuses awake.
+pub(crate) fn call_wake(path: &Path) -> Result<Status, CallError> {
+    let mut client = Client::connect(path)?;
+    client.call_wake()
 }
 
 /// Connect and confirm one pending tool.

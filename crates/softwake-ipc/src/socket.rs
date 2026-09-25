@@ -464,7 +464,8 @@ impl ServerConnection {
             | ClientMessage::ToolRequest { .. }
             | ClientMessage::ConfirmTool { .. }
             | ClientMessage::CancelTool { .. }
-            | ClientMessage::Ask { .. } => {
+            | ClientMessage::Ask { .. }
+            | ClientMessage::Wake { .. } => {
                 let message = "expected a hello message".to_owned();
                 endpoint.write(&ServerMessage::HelloRejected {
                     protocol_version: PROTOCOL_VERSION,
@@ -651,6 +652,21 @@ impl Client {
             },
             id,
         )
+    }
+
+    /// Send one wake and return its status.
+    ///
+    /// Events that arrive before the matching response are skipped. A refusal
+    /// is [`CallError::Rejected`]. The daemon enters awake only through
+    /// `wake_phrase`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] on transport failure, a mismatched response id,
+    /// or a rejected wake.
+    pub fn call_wake(&mut self) -> Result<Status, CallError> {
+        let id = self.allocate_id();
+        self.round_trip(&ClientMessage::Wake { id }, id)
     }
 
     /// Send one ask and return its status.

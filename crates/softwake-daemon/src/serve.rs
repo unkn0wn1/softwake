@@ -123,10 +123,10 @@ impl ServeHandle {
         }
     }
 
-    /// Enter awake from a wake phrase on the running daemon.
+    /// Enter awake by calling [`Runtime::wake_phrase`] directly.
     ///
-    /// Serve has no public wake command yet. Tests use this to reach the
-    /// state where a tool call is legal. The transition is not broadcast.
+    /// The socket uses the same method. This path does not broadcast. A
+    /// watcher that connects afterward still sees the next tool or ask event.
     #[cfg(test)]
     pub(crate) fn wake_phrase_for_test(&self) -> Outcome {
         lock(&self.shared.runtime).wake_phrase()
@@ -348,6 +348,10 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
         }
         Ok(ClientMessage::Ask { id, text }) => {
             let outcome = lock(&shared.runtime).ask(&text);
+            reply(shared, tx, id, outcome)
+        }
+        Ok(ClientMessage::Wake { id }) => {
+            let outcome = lock(&shared.runtime).wake_phrase();
             reply(shared, tx, id, outcome)
         }
         Ok(ClientMessage::Hello { .. }) => false,

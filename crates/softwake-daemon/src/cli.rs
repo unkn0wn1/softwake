@@ -167,6 +167,7 @@ Usage:
   softwaked ctl status      print the running daemon's voice state
   softwaked ctl hibernate   hibernate (stop capture)
   softwaked ctl resume      leave hibernate and land in sleep
+  softwaked ctl wake        enter awake from sleep (valid soul pack required)
   softwaked ctl sleep       sleep from awake
   softwaked ctl reload-soul re-read the soul pack; it applies on the next awake
   softwaked ctl tool NAME [ARG...]
@@ -230,8 +231,9 @@ already applied until the next awake session. Status reports whether that
 read is ok or missing.
 
 `ctl ask TEXT` and `ctl chat TEXT` send one typed line to the running daemon.
-Both use the same socket message. The daemon must already be awake. `ctl resume`
-lands in sleep and does not enter awake. Serve does not wake from the microphone.
+Both use the same socket message. The daemon must already be awake. `ctl wake`
+enters awake when the four-file pack is valid. `ctl resume` lands in sleep and
+does not enter awake. Serve does not wake from the microphone.
 The default build does not call the provider. A live answer needs the daemon
 built with live-http. The assistant text is printed after the status lines.
 A refusal exits non-zero.
@@ -241,8 +243,8 @@ A refusal exits non-zero.
 do not run until `ctl confirm-tool ID`. Confirming `email_send` appends one
 in-memory message. `ctl cancel-tool ID` drops the pending call. `shell` is
 denied. The result is printed after the status lines. A refusal names
-the reason. Serve does not yet enter awake from the microphone; the
-typed demo is the path that does."#
+the reason. `ctl wake` enters awake when the four-file pack is valid.
+`ctl resume` still lands in sleep. Serve does not wake from the microphone."#
 }
 
 fn print_help() {
@@ -344,7 +346,7 @@ fn parse_ctl(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
 fn ctl_command(positional: &[String]) -> Result<CtlAction, String> {
     match positional {
         [] => Err(
-            "ctl needs a command: status, hibernate, resume, sleep, reload-soul, tool, confirm-tool, cancel-tool, ask, chat"
+            "ctl needs a command: status, hibernate, resume, wake, sleep, reload-soul, tool, confirm-tool, cancel-tool, ask, chat"
                 .to_owned(),
         ),
         [name] if name == "tool" => Err("ctl tool needs a tool name".to_owned()),
@@ -510,6 +512,9 @@ mod tests {
         assert!(help.contains("--serve"));
         assert!(help.contains("ctl status"));
         assert!(help.contains("ctl resume"));
+        assert!(help.contains("ctl wake"));
+        assert!(help.contains("valid soul pack"));
+        assert!(help.contains("lands in sleep"));
         assert!(help.contains("reload-soul"));
         assert!(help.contains("SOFTWAKE_SOCKET"));
         assert!(help.contains("XDG_RUNTIME_DIR"));
@@ -580,6 +585,25 @@ mod tests {
             })
         );
         assert_eq!(
+            parse_args(["ctl".to_owned(), "wake".to_owned()]),
+            Ok(Mode::Ctl {
+                socket: None,
+                command: CtlAction::Wake
+            })
+        );
+        assert_eq!(
+            parse_args([
+                "ctl".to_owned(),
+                "--socket".to_owned(),
+                "/tmp/sw.sock".to_owned(),
+                "wake".to_owned()
+            ]),
+            Ok(Mode::Ctl {
+                socket: Some(PathBuf::from("/tmp/sw.sock")),
+                command: CtlAction::Wake
+            })
+        );
+        assert_eq!(
             parse_args([
                 "ctl".to_owned(),
                 "--socket".to_owned(),
@@ -621,9 +645,19 @@ mod tests {
             .is_err()
         );
         assert!(parse_args(["serve".to_owned(), "--verbose".to_owned()]).is_err());
-        assert!(parse_args(["ctl".to_owned()]).is_err());
+        let bare = parse_args(["ctl".to_owned()]).expect_err("bare ctl");
+        assert!(bare.contains("wake"), "{bare}");
         assert!(parse_args(["ctl".to_owned(), "status".to_owned(), "sleep".to_owned()]).is_err());
-        assert!(parse_args(["ctl".to_owned(), "wake".to_owned()]).is_err());
+        assert_eq!(
+            parse_args(["ctl".to_owned(), "wake".to_owned(), "extra".to_owned()])
+                .expect_err("extra"),
+            "unknown ctl argument extra"
+        );
+        assert_eq!(
+            parse_args(["ctl".to_owned(), "wake".to_owned(), "resume".to_owned()])
+                .expect_err("two commands"),
+            "ctl takes one command"
+        );
         assert!(parse_args(["ctl".to_owned(), "tool".to_owned()]).is_err());
         assert!(parse_args(["ctl".to_owned(), "confirm-tool".to_owned()]).is_err());
         assert!(parse_args(["ctl".to_owned(), "cancel-tool".to_owned()]).is_err());

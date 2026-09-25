@@ -540,6 +540,15 @@ pub enum ClientMessage {
         /// User line.
         text: String,
     },
+    /// Enter awake from sleep when the loaded four-file pack is valid.
+    ///
+    /// Additive on protocol generation 1. The daemon runs the same wake-phrase
+    /// path as the typed demo. `wake_from_ui` is a different message and lands
+    /// in sleep. A client that never sends `wake` still speaks this generation.
+    Wake {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+    },
 }
 
 /// Daemon messages after a client connects.
@@ -562,7 +571,7 @@ pub enum ServerMessage {
         /// Why the connection will close.
         message: String,
     },
-    /// Reply to one client request, tool call, or ask.
+    /// Reply to one client request, tool call, ask, or wake.
     Response {
         /// Id copied from the request.
         id: u64,
@@ -824,6 +833,16 @@ mod tests {
         let ask_json = serde_json::to_string(&ask).expect("encode");
         assert!(ask_json.contains("\"type\":\"ask\""));
         assert!(ask_json.contains("\"text\":\"hello there\""));
+
+        let wake = ClientMessage::Wake { id: 1 };
+        assert_round_trip(&wake);
+        let wake_json = serde_json::to_string(&wake).expect("encode");
+        assert!(
+            !wake_json.contains('\n'),
+            "one message must stay on one line"
+        );
+        assert!(wake_json.contains("\"type\":\"wake\""));
+        assert!(wake_json.contains("\"id\":1"));
 
         let rejected = IpcError::ChatRejected {
             message: "ask while sleep (chat acts only while awake)".to_owned(),
