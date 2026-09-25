@@ -32,7 +32,7 @@ Chat UIs are not how you want to drive a machine when your hands are busy. Softw
 |-------|---------|
 | **1** | Local wake word → awake session → one safe tool → sleep phrase; hibernate from UI; soul.md + user.md loaded into session |
 | **2** | Better TTS/STT or realtime voice; confirm flows; richer tool bus |
-| **3** | Connectors + optional long-term memory; stricter policy engine |
+| **3** | Connectors (boundary first) + optional long-term memory; stricter policy engine |
 
 See [06-milestones.md](06-milestones.md).
 

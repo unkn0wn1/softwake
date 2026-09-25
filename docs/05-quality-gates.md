@@ -59,6 +59,7 @@ Phase 1 shipped `echo` only ([ADR 0004](ADR-0004-first-safe-tool.md)). Phase 2 r
 - New dependency justified in the PR text
 - State transitions covered by tests
 - No widen of tool allowlist without docs update
+- A connector action is a separate registry from tools. A network client or a new tool name needs an ADR
 - Docs updated when behaviour changes (especially voice states)
 
 ## Explicit non-gates (phase 1)

@@ -34,6 +34,7 @@ Keep crates small and single-purpose. Exact names can shift; responsibilities sh
 | `softwake-wake` | Local wake/sleep phrases. Text table for the typed demo. PCM seam for sherpa-onnx keyword spotting ([ADR 0006](ADR-0006-on-device-wake.md)) |
 | `softwake-session` | Text session for one awake period. Stores rendered soul instructions. No model client yet |
 | `softwake-tools` | Tool registry with safe, confirm, and deny metadata. `echo` is safe, `notify` waits for confirmation, `shell` is denied |
+| `softwake-connectors` | World I/O boundary. Email trait and in-memory mock. Registry is confirm or deny. No live cloud client in the default build ([ADR 0008](ADR-0008-connector-boundary.md)) |
 | `softwake-soul` | Load/validate soul pack; render system instructions |
 | `softwake-ipc` | Shared protocol: newline-delimited JSON over a Unix socket |
 | `softwake-ui` | Tauri window (thin). Status and buttons call the daemon |
@@ -45,7 +46,7 @@ Do not put PipeWire types into `softwake-soul`. Do not put HTTP clients into `so
 1. **UI is untrusted for action.** It may request hibernate/wake and edit config; the daemon enforces policy.
 2. **Tools run out-of-process** where practical, with explicit argv/env and timeouts. Phase 1's `echo` tool stays in-process because it performs no I/O.
 3. **Secrets** stay in OS keychain / env; never in soul markdown committed to git.
-4. **Network** only from session and explicitly allowed tools — not from the wake engine.
+4. **Network** only from session and explicitly allowed tools — not from the wake engine. A connector backend may use the network only in a future opt-in feature. The default mock does not open a socket.
 
 ## Audio path
 
@@ -87,6 +88,10 @@ Unix domain socket and newline-delimited JSON, protocol version 1. The path, fra
 - Entering awake opens a text session with the rendered soul instructions. Sleep, and hibernate from awake, close that session.
 - Dangerous tools (a real shell, send email, delete files) stay denied until a later ADR gives them a confirm path. Confirmation here does not make `shell` runnable.
 - “Full device control” is a product vision, not an architecture excuse to skip the registry.
+
+## Connectors
+
+World I/O is a library boundary in `softwake-connectors` ([ADR 0008](ADR-0008-connector-boundary.md)). `softwaked` does not call that crate yet. The registry is confirm or deny: `email` / `send` is confirm, and `email` / `delete`, `drive` / `list`, and `calendar` / `list` are deny. `MockEmail` appends to an in-memory outbox when the caller sends after authorization. The registry methods themselves do not send. A live backend, when one exists, is an opt-in feature that CI does not enable. The default mock does not open a socket. Protocol generation stays 1; connector actions are not socket commands.
 
 ## Config layout (draft)
 

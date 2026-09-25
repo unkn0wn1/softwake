@@ -27,9 +27,15 @@
 
 ## Phase 3 — World connectors + memory
 
-- Email / Drive / calendar via explicit connectors
-- Long-term memory module (Honcho or smaller local store) — decision ADR
-- Stricter policy engine
+1. [ ] Email / Drive / calendar via explicit connectors
+   - [x] Connector boundary ([ADR 0008](ADR-0008-connector-boundary.md)): `softwake-connectors`, `EmailConnector`, `MockEmail`, confirm/deny registry, no live cloud client in the default build
+   - [ ] Live email backend (opt-in, not in CI)
+   - [ ] Drive backend
+   - [ ] Calendar backend
+2. [ ] Long-term memory module (Honcho or smaller local store) — decision ADR
+3. [ ] Stricter policy engine
+   - [x] Connector actions are confirm or deny; unknown pairs fail closed ([ADR 0008](ADR-0008-connector-boundary.md)). The tool bus is unchanged.
+   - [ ] Policy beyond the connector registry
 
 ## Deferred ideas (do not pull into phase 1)
 

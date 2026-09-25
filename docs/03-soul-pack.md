@@ -19,6 +19,8 @@ Both are required for a valid pack. Missing files → daemon refuses to enter **
 | `tools.md` or policy TOML | Human-readable tool policy mirroring allowlists |
 | `AGENTS.md`-style lane rules | Optional; keep out of phase 1 unless needed |
 
+Connector policy lives in `softwake-connectors` until a tool name is bound ([ADR 0008](ADR-0008-connector-boundary.md)). The runtime policy stub stays the phase-2 tool line (`echo`, `notify`, `shell`).
+
 When memory lands, it must be a **separate module** with clear read/write APIs. Do not stuff memory retrieval into `softwake-soul` parsing. Soul pack renders instructions; memory supplies retrieved snippets the session layer attaches.
 
 ## Loading rules
