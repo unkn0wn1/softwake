@@ -36,6 +36,8 @@ serde_json.workspace = true
 default = []
 # Real chat completion for typed ask/chat. Off in CI and the default binary.
 live-http = ["softwake-providers/live-http"]
+# Real PipeWire microphone capture for serve. Off in CI.
+pipewire-capture = ["softwake-audio/pipewire-native"]
 
 [lints]
 workspace = true

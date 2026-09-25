@@ -15,7 +15,7 @@
 
 use std::time::Instant;
 
-use softwake_audio::{AudioCapture, MockAudioCapture, rms_level};
+use softwake_audio::rms_level;
 use softwake_ipc::VoiceState as WireState;
 use softwake_ipc::{Command, Event as WireEvent, IpcError, PendingTool, ResponseBody, Status};
 use softwake_session::{SessionPhase, TextStubSession};
@@ -24,6 +24,7 @@ use softwake_state::{CooldownConfig, Effect, Event, Machine, StateError, VoiceSt
 use softwake_voice::{MockStt, MockTts, TextToSpeech, TranscriptEvent};
 use softwake_wake::{NullDetector, PhraseHit};
 
+use crate::capture::{CaptureBackend, CaptureKind};
 use crate::dispatch::{
     CancelledTool, ConfirmedTool, DispatchError, Hands, PendingToolCall, RanTool, RequestOutcome,
 };
@@ -40,13 +41,15 @@ pub(crate) struct Runtime {
     machine: Machine,
     /// Wall clock for [`Self::tick`]. Phrase cooldowns use machine time only.
     last_tick: Instant,
-    capture: MockAudioCapture,
+    capture: CaptureBackend,
     pcm: NullDetector,
     /// Last PCM score from [`Self::drain_pcm`]. `None` means the queue was empty.
     #[cfg_attr(not(test), allow(dead_code))]
     last_pcm_hit: Option<PhraseHit>,
     /// Latest [`rms_level`] from a drained frame. Cleared when capture stops.
     last_capture_level: Option<f32>,
+    /// Rate-limit for mic-energy stderr lines (`PipeWire` path).
+    last_energy_log: Option<Instant>,
     soul: LoadedSoul,
     session: TextStubSession,
     hands: Hands,
@@ -59,17 +62,29 @@ pub(crate) struct Runtime {
 
 impl Runtime {
     /// Sleep, with mock capture already running and the soul directory read.
+    #[cfg(test)]
     pub(crate) fn new(soul_dir: SoulDir) -> Self {
-        let mut capture = MockAudioCapture::default();
-        // The mock device cannot fail to open.
-        let Ok(()) = capture.start();
-        Self {
+        Self::with_capture(soul_dir, CaptureKind::Mock).expect("mock capture cannot fail to open")
+    }
+
+    /// Sleep with the selected capture backend already running.
+    ///
+    /// # Errors
+    ///
+    /// Returns the backend error when `PipeWire` cannot be opened.
+    pub(crate) fn with_capture(
+        soul_dir: SoulDir,
+        kind: CaptureKind,
+    ) -> Result<Self, crate::capture::CaptureError> {
+        let capture = CaptureBackend::open(kind)?;
+        Ok(Self {
             machine: Machine::new(CooldownConfig::default()),
             last_tick: Instant::now(),
             capture,
             pcm: NullDetector,
             last_pcm_hit: None,
             last_capture_level: None,
+            last_energy_log: None,
             soul: LoadedSoul::open(soul_dir),
             session: TextStubSession::default(),
             hands: Hands::from_disk(),
@@ -77,7 +92,7 @@ impl Runtime {
             tts: MockTts::default(),
             #[cfg(test)]
             chat_fixture: None,
-        }
+        })
     }
 
     /// Apply one client command.
@@ -92,7 +107,7 @@ impl Runtime {
         // status replies (and HUD polls) see frame-derived levels without a mic.
         if self.capture.is_running() {
             let phase = self.last_tick.elapsed().as_secs_f32();
-            let _ = self.capture.push_listening_tone(phase);
+            self.capture.push_listening_tone_if_mock(phase);
         }
         self.drain_pcm();
         match command {
@@ -358,6 +373,12 @@ impl Runtime {
         self.tts.spoken()
     }
 
+    /// Mock backend for tests that push frames by hand.
+    #[cfg(test)]
+    fn capture_mock(&mut self) -> &mut softwake_audio::MockAudioCapture {
+        self.capture.mock_mut()
+    }
+
     /// Pull every queued frame into the PCM detector.
     ///
     /// Returns the last hit, or [`PhraseHit::None`] when the queue is empty.
@@ -366,13 +387,35 @@ impl Runtime {
     fn drain_pcm(&mut self) -> PhraseHit {
         let mut hit = PhraseHit::None;
         let mut scored = false;
-        while let Ok(Some(frame)) = AudioCapture::poll_frame(&mut self.capture) {
-            self.last_capture_level = Some(rms_level(frame.samples()));
+        let mut energy_seen = false;
+        while let Ok(Some(frame)) = self.capture.poll_frame() {
+            let level = rms_level(frame.samples());
+            self.last_capture_level = Some(level);
+            if level >= 0.02 {
+                energy_seen = true;
+            }
             hit = score_frame(&mut self.pcm, &frame);
             scored = true;
         }
         if scored {
             self.last_pcm_hit = Some(hit);
+        }
+        if energy_seen
+            && matches!(hit, PhraseHit::None)
+            && self.capture.kind() == CaptureKind::PipeWire
+        {
+            let now = Instant::now();
+            let should_log = self
+                .last_energy_log
+                .is_none_or(|previous| now.duration_since(previous).as_secs() >= 2);
+            if should_log {
+                self.last_energy_log = Some(now);
+                // Best-effort voice path: real PCM reaches the detector, but
+                // NullDetector never matches until sherpa-onnx weights load (ADR 0006).
+                eprintln!(
+                    "softwaked: mic energy heard (capture_level set); wake-from-voice needs KWS weights — see README"
+                );
+            }
         }
         if !self.capture.is_running() {
             self.last_capture_level = None;
@@ -454,11 +497,13 @@ impl Runtime {
                     }
                 }
                 Effect::StopCapture => {
-                    let Ok(()) = self.capture.stop();
+                    let _ = self.capture.stop();
                     self.last_capture_level = None;
                 }
                 Effect::StartCapture => {
-                    let Ok(()) = self.capture.start();
+                    if let Err(error) = self.capture.start() {
+                        eprintln!("softwaked: restart capture failed: {error}");
+                    }
                 }
             }
         }
@@ -681,17 +726,17 @@ mod tests {
     fn queued_silence_is_scored_before_a_command_and_dropped_after_hibernate() {
         let (mut runtime, _soul) = valid_runtime();
         assert_eq!(runtime.last_pcm_hit, None);
-        assert!(runtime.capture.push_frame(&[0; 160]));
+        assert!(runtime.capture_mock().push_frame(&[0; 160]));
         let status = runtime.handle(Command::GetStatus);
         assert_eq!(
             status.body.status().expect("status").state,
             VoiceState::Sleep
         );
         assert_eq!(runtime.last_pcm_hit, Some(PhraseHit::None));
-        assert!(runtime.capture.poll_frame().is_none());
+        assert!(runtime.capture_mock().poll_frame().is_none());
 
         runtime.handle(Command::Hibernate);
-        assert!(!runtime.capture.push_frame(&[0; 160]));
+        assert!(!runtime.capture_mock().push_frame(&[0; 160]));
         runtime.last_pcm_hit = None;
         runtime.handle(Command::GetStatus);
         assert_eq!(runtime.last_pcm_hit, None);

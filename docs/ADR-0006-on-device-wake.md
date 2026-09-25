@@ -69,16 +69,18 @@ cargo test -p softwake-wake --features sherpa-kws
 `AudioCapture::poll_frame` returns `Result<Option<AudioFrame>, Error>`. `AudioFrame::samples` is the `&[i16]` passed to `push_samples`. `score_frame` in the daemon is that one call.
 
 - `MockAudioCapture` is the default for tests, `softwaked demo`, and `softwaked serve`. Its error type is infallible. `stop` still drops queued frames.
-- The default `pipewire` feature compiles `PipeWireCapture` and does not link `libpipewire`. `start` returns `PipeWireError::NotLinked`. `poll_frame` returns `PipeWireError::NotRunning` rather than `Ok(None)`, so the stub is not an idle microphone. `format` is still `AudioFormat::WAKE`, which is the layout a later stream must deliver.
-- `pipewire-native` compiles the same module and returns `PipeWireError::StreamUnwired` from `start`. It does not link `libpipewire` and it does not open a device. CI does not enable the feature and does not need a `PipeWire` daemon or a microphone.
+- The default `pipewire` feature compiles `PipeWireCapture` and does not link `libpipewire`. `start` returns `PipeWireError::NotLinked`. `poll_frame` returns `PipeWireError::NotRunning` rather than `Ok(None)`, so the stub is not an idle microphone. `format` is still `AudioFormat::WAKE`.
+- `pipewire-native` (daemon feature `pipewire-capture`) links the `pipewire` crate, opens the default input, and queues `AudioFrame` values at `AudioFormat::WAKE` (16 kHz mono `S16LE`) for `poll_frame`. CI does not enable the feature and does not need a microphone. Local builds need `libpipewire-0.3-dev` (or the distro equivalent).
 
 ```bash
 cargo test -p softwake-audio --features pipewire-native
+cargo run -p softwake-daemon --features pipewire-capture -- serve --capture pipewire
+# or: SOFTWAKE_CAPTURE=pipewire softwaked serve
 ```
 
-A later change that links `libpipewire` needs the `libpipewire-0.3-dev` package (or the distro's equivalent) and must stay out of the default CI job. The process callback should queue `AudioFrame` values at `AudioFormat::WAKE`. `poll_frame` is already the pull API the daemon uses for the mock.
+Serve still scores every drained frame with `NullDetector` until sherpa-onnx weights are loaded. Speaking into the mic updates `Status.capture_level` (HUD particles). Energy above a small RMS threshold logs a rate-limited stderr line pointing at this ADR / README for KWS weights. Wake-from-voice is the next step after weights land under `$XDG_DATA_HOME/softwake/kws` (or `~/.local/share/softwake/kws`).
 
-The typed demo pushes 10 ms of silence through mock capture and then through `NullDetector` before the text detector's hit is applied. The text hit is what moves the voice state. Serve calls the same PCM score on any frame already queued before it handles a command. With no microphone, that queue is empty.
+The typed demo pushes 10 ms of silence through mock capture and then through `NullDetector` before the text detector's hit is applied. The text hit is what moves the voice state. Default serve uses mock capture; the listening tone still feeds HUD levels without a mic.
 
 ## Context
 
@@ -91,7 +93,7 @@ The typed demo pushes 10 ms of silence through mock capture and then through `Nu
 - Whisper, or any full speech-to-text model, as the wake gate. Rejected. Wrong cost for always-on sleep, and the transcript search repeats the spike's false triggers.
 - Cloud wake. Rejected. Audio would leave the machine.
 - Linking `sherpa-onnx` and downloading weights in this change. Rejected. CI would depend on a native runtime and a checkpoint fetch. The trait and the feature gate are the merge bar.
-- Linking `libpipewire` in the default build. Rejected. CI has no microphone requirement, and the default job must not need a `PipeWire` daemon.
+- Linking `libpipewire` in the default build. Rejected. CI has no microphone requirement, and the default job must not need a `PipeWire` daemon. Opt-in `pipewire-native` / `pipewire-capture` is the approved path.
 
 ## Consequences
 
