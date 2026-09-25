@@ -36,7 +36,7 @@ Keep crates small and single-purpose. Exact names can shift; responsibilities sh
 | `softwake-tools` | Tool registry with safe, confirm, and deny metadata. `echo` is safe, `notify` and `email_send` wait for confirmation, `shell` is denied |
 | `softwake-connectors` | World I/O boundary. Email, Drive, and calendar traits with in-memory mocks. Registry is confirm or deny. No live cloud client in the default build. The daemon calls the email mock only ([ADR 0008](ADR-0008-connector-boundary.md)) |
 | `softwake-policy` | Classifies tool names and connector pairs. Unknown subjects are denied. Overrides may only tighten. The daemon asks it before a tool runs ([ADR 0010](ADR-0010-policy-engine.md)) |
-| `softwake-memory` | Long-term memory boundary. `Memory` trait and in-memory mock, off until enabled. The daemon does not call it ([ADR 0009](ADR-0009-long-term-memory.md)) |
+| `softwake-memory` | Long-term memory boundary. `Memory` trait, in-memory mock, and opt-in JSON file. Off until enabled. The daemon does not call it ([ADR 0009](ADR-0009-long-term-memory.md)) |
 | `softwake-soul` | Load/validate soul pack; render system instructions |
 | `softwake-ipc` | Shared protocol: newline-delimited JSON over a Unix socket |
 | `softwake-ui` | Tauri window (thin). Status and buttons call the daemon |
@@ -104,7 +104,7 @@ Tool and connector classification goes through `softwake-policy` ([ADR 0010](ADR
 
 ## Memory
 
-Long-term memory is a library boundary in `softwake-memory` ([ADR 0009](ADR-0009-long-term-memory.md)). `Memory` is the trait (`remember`, `recall`, `forget`). `MockMemory` is the default backend. It stores snippets on the value only after that value is enabled, and it does not open a socket or write a file. The daemon and `softwake-session` do not call it. Soul rendering stays instruction-only. A durable backend, when one exists, writes under `$XDG_STATE_HOME/softwake` when that variable is set and non-blank, and under `~/.local/state/softwake` otherwise. This change does not create that directory. Honcho is not a dependency.
+Long-term memory is a library boundary in `softwake-memory` ([ADR 0009](ADR-0009-long-term-memory.md)). `Memory` is the trait (`remember`, `recall`, `forget`). `MockMemory` is the default backend. It stores snippets on the value only after that value is enabled, and it does not open a socket or write a file. `FileMemory` is the opt-in file backend. It stays off until `open_enabled`, then writes `memory.json` under `$XDG_STATE_HOME/softwake` when that variable is set and non-blank, and under `~/.local/state/softwake` otherwise. The directory is created on the first successful write. The daemon and `softwake-session` do not call the crate. Soul rendering stays instruction-only. Honcho is not a dependency.
 
 ## Config layout (draft)
 
@@ -116,6 +116,7 @@ Long-term memory is a library boundary in `softwake-memory` ([ADR 0009](ADR-0009
     user.md
 ~/.local/state/softwake/
   runtime.json          # last state, pid hints
+  memory.json           # snippets, only after an enabled FileMemory writes
 ~/.local/share/softwake/
   logs/
 ```

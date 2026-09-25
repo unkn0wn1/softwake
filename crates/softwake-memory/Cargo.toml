@@ -4,9 +4,11 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 rust-version.workspace = true
-description = "Long-term memory boundary. Trait and in-memory mock. Off until enabled."
+description = "Long-term memory boundary. Trait, in-memory mock, and opt-in JSON file. Off until enabled."
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
 [lints]

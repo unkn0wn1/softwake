@@ -49,7 +49,7 @@ impl std::fmt::Display for MemoryId {
 
 /// Failure from [`crate::MockMemory`].
 ///
-/// A later backend uses its own error type on [`Memory::Error`].
+/// [`crate::FileMemory`] reports through [`crate::FileMemoryError`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[allow(clippy::module_name_repetitions)] // `MemoryError` is the public name of this failure.
 pub enum MemoryError {

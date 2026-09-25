@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-25
-- **Amended:** 2026-09-25 (`drive` / `list` and `calendar` / `list` are confirm)
+- **Amended:** 2026-09-25 (`drive` / `list` and `calendar` / `list` are confirm); 2026-09-25 (the durable memory store is the opt-in file in ADR 0009)
 
 ## Decision
 
@@ -72,4 +72,4 @@ The typed demo is unchanged. `echo` runs while awake. `notify` and `email_send` 
 - A future policy file may tighten a known row or be refused. `tighten` keeps the stricter decision even when a caller passes a weaker request.
 - Wiring a non-empty map into the daemon is a follow-up. It must keep an unknown tool distinct from a denied tool, and it must run a confirmed tool whose registry row is still safe through `invoke`.
 - Clients that speak protocol generation 1 see no new message kinds.
-- The stricter-policy milestone line is closed. Live connectors and the durable memory store stay open.
+- The stricter-policy milestone line is closed. Live connectors stay open. The durable memory store is the opt-in file in [ADR 0009](ADR-0009-long-term-memory.md).
