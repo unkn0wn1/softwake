@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-25
+- **Amended:** 2026-09-25 (`drive` / `list` and `calendar` / `list` are confirm)
 
 ## Decision
 
@@ -17,8 +18,10 @@ Classification of a tool name and of a connector pair lives in `softwake-policy`
 | tool `shell` | deny |
 | connector `email` / `send` | confirm |
 | connector `email` / `delete` | deny |
-| connector `drive` / `list` | deny |
-| connector `calendar` / `list` | deny |
+| connector `drive` / `list` | confirm |
+| connector `drive` / `delete` | deny |
+| connector `calendar` / `list` | confirm |
+| connector `calendar` / `delete` | deny |
 | any other tool name | deny |
 | any other connector pair | deny |
 
@@ -36,7 +39,7 @@ While awake, daemon `Hands::request` branches on `evaluate` for the tool name. V
 
 IPC protocol generation stays `1`. Policy is not a status field and not a socket command.
 
-The default build has no OAuth types, no Gmail, Drive, or Calendar client, and no policy feature flag. CI does not set a credential and does not enable a network backend.
+The default build has no OAuth types, no live Gmail, Drive, or Calendar client, and no policy feature flag. The in-memory Drive and calendar mocks are the [ADR 0008](ADR-0008-connector-boundary.md) amendment. This crate still does not list, send, or open a socket. CI does not set a credential and does not enable a network backend.
 
 ## Context
 
@@ -65,7 +68,7 @@ The typed demo is unchanged. `echo` runs while awake. `notify` and `email_send` 
 ## Consequences
 
 - Callers can ask one engine whether a tool or a connector action may run. They cannot add a name or lower a row through this crate.
-- `shell`, `email` / `delete`, `drive` / `list`, and `calendar` / `list` stay deny until a later ADR changes the registry row on purpose.
+- `shell`, `email` / `delete`, `drive` / `delete`, and `calendar` / `delete` stay deny until a later ADR changes the registry row on purpose. `drive` / `list` and `calendar` / `list` are confirm. A connector evaluation is still never safe. The daemon still does not list files or events.
 - A future policy file may tighten a known row or be refused. `tighten` keeps the stricter decision even when a caller passes a weaker request.
 - Wiring a non-empty map into the daemon is a follow-up. It must keep an unknown tool distinct from a denied tool, and it must run a confirmed tool whose registry row is still safe through `invoke`.
 - Clients that speak protocol generation 1 see no new message kinds.

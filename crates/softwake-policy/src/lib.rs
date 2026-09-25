@@ -189,8 +189,8 @@ fn connector_floor(risk: Option<ConnectorRisk>) -> Option<PolicyDecision> {
 #[cfg(test)]
 mod tests {
     use softwake_connectors::{
-        CALENDAR, CALENDAR_LIST, ConnectorRegistry, ConnectorRisk, DRIVE, DRIVE_LIST, EMAIL,
-        EMAIL_DELETE, EMAIL_SEND,
+        CALENDAR, CALENDAR_DELETE, CALENDAR_LIST, ConnectorRegistry, ConnectorRisk, DRIVE,
+        DRIVE_DELETE, DRIVE_LIST, EMAIL, EMAIL_DELETE, EMAIL_SEND,
     };
     use softwake_tools::{
         ECHO_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL, SHELL_TOOL, ToolRegistry, ToolRisk,
@@ -245,10 +245,18 @@ mod tests {
         );
         assert_eq!(
             eval_connector(&engine, DRIVE, DRIVE_LIST),
+            PolicyDecision::Confirm
+        );
+        assert_eq!(
+            eval_connector(&engine, DRIVE, DRIVE_DELETE),
             PolicyDecision::Deny
         );
         assert_eq!(
             eval_connector(&engine, CALENDAR, CALENDAR_LIST),
+            PolicyDecision::Confirm
+        );
+        assert_eq!(
+            eval_connector(&engine, CALENDAR, CALENDAR_DELETE),
             PolicyDecision::Deny
         );
         let empty = PolicyEngine::with_overrides(PolicyOverrides::new(Vec::new(), Vec::new()));
@@ -300,6 +308,10 @@ mod tests {
             ("email", "Send"),
             ("email", ""),
             ("", "send"),
+            ("drive", "upload"),
+            ("calendar", "create"),
+            ("Drive", "list"),
+            ("drive", "List"),
         ] {
             assert_eq!(
                 eval_connector(&engine, connector, action),
@@ -397,13 +409,61 @@ mod tests {
                 DRIVE,
                 DRIVE_LIST
             ),
+            PolicyDecision::Confirm
+        );
+        assert_eq!(
+            eval_connector(
+                &connector_engine(DRIVE, DRIVE_LIST, PolicyDecision::Deny),
+                DRIVE,
+                DRIVE_LIST
+            ),
             PolicyDecision::Deny
+        );
+        assert_eq!(
+            eval_connector(
+                &connector_engine(CALENDAR, CALENDAR_LIST, PolicyDecision::Safe),
+                CALENDAR,
+                CALENDAR_LIST
+            ),
+            PolicyDecision::Confirm
         );
         assert_eq!(
             eval_connector(
                 &connector_engine(CALENDAR, CALENDAR_LIST, PolicyDecision::Confirm),
                 CALENDAR,
                 CALENDAR_LIST
+            ),
+            PolicyDecision::Confirm
+        );
+        assert_eq!(
+            eval_connector(
+                &connector_engine(DRIVE, DRIVE_DELETE, PolicyDecision::Confirm),
+                DRIVE,
+                DRIVE_DELETE
+            ),
+            PolicyDecision::Deny
+        );
+        assert_eq!(
+            eval_connector(
+                &connector_engine(DRIVE, DRIVE_DELETE, PolicyDecision::Safe),
+                DRIVE,
+                DRIVE_DELETE
+            ),
+            PolicyDecision::Deny
+        );
+        assert_eq!(
+            eval_connector(
+                &connector_engine(CALENDAR, CALENDAR_DELETE, PolicyDecision::Confirm),
+                CALENDAR,
+                CALENDAR_DELETE
+            ),
+            PolicyDecision::Deny
+        );
+        assert_eq!(
+            eval_connector(
+                &connector_engine(CALENDAR, CALENDAR_DELETE, PolicyDecision::Safe),
+                CALENDAR,
+                CALENDAR_DELETE
             ),
             PolicyDecision::Deny
         );
@@ -432,6 +492,22 @@ mod tests {
                 &connector_engine("gmail", "send", PolicyDecision::Safe),
                 "gmail",
                 "send"
+            ),
+            PolicyDecision::Deny
+        );
+        assert_eq!(
+            eval_connector(
+                &connector_engine("drive", "upload", PolicyDecision::Confirm),
+                "drive",
+                "upload"
+            ),
+            PolicyDecision::Deny
+        );
+        assert_eq!(
+            eval_connector(
+                &connector_engine("calendar", "create", PolicyDecision::Confirm),
+                "calendar",
+                "create"
             ),
             PolicyDecision::Deny
         );
