@@ -106,8 +106,32 @@ fn spawn_player_detached(bytes: &[u8], suffix: &str, timeout: Duration) -> Resul
             .stderr(Stdio::null())
             .spawn()
         {
-            Ok(child) => {
+            Ok(mut child) => {
                 let pid = child.id();
+                // Surface immediate player failures (bad codec, missing sink)
+                // that would otherwise look like silent TTS after #41 spawn.
+                thread::sleep(Duration::from_millis(120));
+                match child.try_wait() {
+                    Ok(Some(status)) if !status.success() => {
+                        let _ = std::fs::remove_file(&path);
+                        clear_pid_if(pid);
+                        return Err(format!(
+                            "{program} exited immediately ({status}). Softwake could not play the reply."
+                        ));
+                    }
+                    Ok(Some(_)) => {
+                        // Player finished a tiny clip successfully — fine.
+                        let _ = std::fs::remove_file(&path);
+                        clear_pid_if(pid);
+                        return Ok(());
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        let _ = std::fs::remove_file(&path);
+                        clear_pid_if(pid);
+                        return Err(format!("could not check {program}: {error}"));
+                    }
+                }
                 remember_pid(pid);
                 let path_for_reaper = path.clone();
                 let _ = thread::Builder::new()

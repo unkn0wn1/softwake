@@ -267,6 +267,10 @@ impl Shared {
     }
 
     fn spawn_client(self: &Arc<Self>, stream: UnixStream) {
+        // HUD / tray open a fresh socket per status poll. Without reaping, each
+        // finished client leaves its shutdown `UnixStream` clone in `clients`
+        // forever and the process hits EMFILE (os error 24).
+        self.reap_clients();
         let shutdown = match stream.try_clone() {
             Ok(stream) => stream,
             Err(error) => {
@@ -284,7 +288,23 @@ impl Shared {
         }
     }
 
+    /// Drop slots whose handler thread has exited so their socket FDs close.
+    fn reap_clients(&self) {
+        let mut clients = lock(&self.clients);
+        let mut alive = Vec::with_capacity(clients.len());
+        for slot in clients.drain(..) {
+            if slot.thread.is_finished() {
+                let _ = slot.thread.join();
+                // `shutdown` drops here and releases the leaked FD.
+            } else {
+                alive.push(slot);
+            }
+        }
+        *clients = alive;
+    }
+
     fn stop_clients(&self) {
+        self.reap_clients();
         let mut clients = lock(&self.clients);
         for client in clients.iter() {
             let _ = client.shutdown.shutdown(std::net::Shutdown::Both);
