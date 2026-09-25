@@ -72,11 +72,15 @@ pub(crate) fn load_disk_chat() -> Result<DiskChat, String> {
         ProviderHandle::load_paths(&settings, &secrets).map_err(|error| error.to_string())?;
     let env_xai = std::env::var("XAI_API_KEY").ok();
     let env_openai = std::env::var("OPENAI_API_KEY").ok();
+    let env_openrouter = std::env::var("OPENROUTER_API_KEY").ok();
+    let env_openai_compatible = std::env::var("OPENAI_COMPATIBLE_API_KEY").ok();
     let (prepared, bearer) = prepare_chat(
         &handle,
         settings_file_present,
         env_xai.as_deref(),
         env_openai.as_deref(),
+        env_openrouter.as_deref(),
+        env_openai_compatible.as_deref(),
     )
     .map_err(|error| error.to_string())?;
     Ok(DiskChat { prepared, bearer })
@@ -274,7 +278,7 @@ mod tests {
         let (handle, present) = ProviderHandle::load_paths(&settings, &secrets).expect("missing");
         assert!(!present);
         assert!(!secrets.exists());
-        assert!(handle.bearer_token(None, None).is_none());
+        assert!(handle.bearer_token(None, None, None, None).is_none());
         assert!(handle.test_report().is_none());
 
         let mut document = ProviderSettings {
@@ -297,7 +301,7 @@ mod tests {
         let (handle, present) = ProviderHandle::load_paths(&settings, &secrets).expect("load");
         assert!(present);
         assert!(!secrets.exists());
-        assert!(handle.bearer_token(None, None).is_none());
+        assert!(handle.bearer_token(None, None, None, None).is_none());
         assert_eq!(handle.selected_model(), Some("grok-4.5"));
         assert_eq!(handle.selected_provider(), ProviderId::XaiKey);
         let report = handle.test_report().expect("report");
@@ -311,6 +315,7 @@ mod tests {
         let prepared = PreparedChat {
             provider: ProviderId::XaiKey,
             family: ProviderFamily::Xai,
+            api_base: softwake_providers::XAI_API_BASE.to_owned(),
             model: "grok-4.5".to_owned(),
         };
         let error = finish_prepared_chat(&prepared, "sk-test-secret", "system", "user")

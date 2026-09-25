@@ -38,12 +38,17 @@
           <select id="provider-select"></select>
         </label>
         <div id="key-panel" class="stack hidden">
+          <label id="base-url-field" class="field hidden">
+            <span>Base URL</span>
+            <input id="base-url" type="url" placeholder="https://host/v1" autocomplete="off" spellcheck="false" />
+          </label>
           <label class="field">
             <span>API key</span>
             <input id="api-key" type="password" autocomplete="off" spellcheck="false" />
           </label>
           <div class="row">
             <button type="button" id="save-key">Save key</button>
+            <button type="button" id="save-base-url" class="hidden">Save base URL</button>
             <button type="button" id="clear-key">Clear saved</button>
           </div>
         </div>

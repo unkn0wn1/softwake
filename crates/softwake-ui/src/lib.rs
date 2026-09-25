@@ -26,6 +26,7 @@ pub fn run() {
             providers::provider_snapshot,
             providers::provider_select,
             providers::provider_set_key,
+            providers::provider_set_base_url,
             providers::provider_clear_cred,
             providers::provider_oauth_start,
             providers::provider_oauth_poll,

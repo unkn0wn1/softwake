@@ -26,9 +26,10 @@ pub use chat::{
     missing_credential_message, prepare_chat,
 };
 pub use constants::{
-    OPENAI_API_BASE, OPENAI_CHAT_SEED, XAI_API_BASE, XAI_CHAT_SEED, XAI_OAUTH_CLIENT_ID,
-    XAI_OAUTH_DEVICE_URL, XAI_OAUTH_GRANT_DEVICE, XAI_OAUTH_ISSUER, XAI_OAUTH_SCOPE,
-    XAI_OAUTH_TOKEN_URL, XAI_REFRESH_SKEW_MS,
+    OPENAI_API_BASE, OPENAI_CHAT_SEED, OPENAI_COMPATIBLE_CHAT_SEED, OPENROUTER_API_BASE,
+    OPENROUTER_CHAT_SEED, XAI_API_BASE, XAI_CHAT_SEED, XAI_OAUTH_CLIENT_ID, XAI_OAUTH_DEVICE_URL,
+    XAI_OAUTH_GRANT_DEVICE, XAI_OAUTH_ISSUER, XAI_OAUTH_SCOPE, XAI_OAUTH_TOKEN_URL,
+    XAI_REFRESH_SKEW_MS,
 };
 pub use handle::{HandleError, ProviderHandle};
 pub use ids::{ParseProviderIdError, ProviderId};
@@ -43,7 +44,8 @@ pub use probe::{
     resolve_bearer, run_test, start_device_code,
 };
 pub use registry::{
-    CredentialKind, PROVIDER_REGISTRY, ProviderDefinition, ProviderFamily, provider_definition,
+    ApiBaseError, CredentialKind, PROVIDER_REGISTRY, ProviderDefinition, ProviderFamily,
+    normalize_compatible_base, provider_definition, resolve_api_base,
 };
 pub use secrets::{
     FileSecretStore, MAX_SECRETS_BYTES, PLAINTEXT_WARNING, SECRETS_FILE_NAME, SecretBag,

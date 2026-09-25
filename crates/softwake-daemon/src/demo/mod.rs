@@ -439,6 +439,8 @@ impl Demo {
                 fixture.settings_file_present,
                 fixture.env_xai.as_deref(),
                 fixture.env_openai.as_deref(),
+                None,
+                None,
             );
             (prepared, std::rc::Rc::clone(&fixture.transport))
         });

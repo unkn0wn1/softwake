@@ -56,6 +56,9 @@ pub struct ProviderSettings {
     /// Last Test report per provider id string.
     #[serde(default)]
     pub last_test: BTreeMap<String, TestReport>,
+    /// OpenAI-compatible API base URL (non-secret). Empty until the operator sets one.
+    #[serde(default)]
+    pub openai_compatible_base_url: String,
 }
 
 fn one() -> u32 {
@@ -70,6 +73,7 @@ impl Default for ProviderSettings {
             selected_model: String::new(),
             model_cache: BTreeMap::new(),
             last_test: BTreeMap::new(),
+            openai_compatible_base_url: String::new(),
         }
     }
 }
@@ -97,6 +101,19 @@ impl ProviderSettings {
     /// Record a Test outcome without clearing a previous catalog on failure.
     pub fn store_test(&mut self, provider: ProviderId, report: TestReport) {
         self.last_test.insert(provider.as_str().to_owned(), report);
+    }
+
+    /// OpenAI-compatible base URL, trimmed. Empty when unset.
+    #[must_use]
+    pub fn openai_compatible_base_url(&self) -> &str {
+        self.openai_compatible_base_url.trim()
+    }
+
+    /// Store the OpenAI-compatible base URL (trimmed, trailing `/` stripped).
+    pub fn set_openai_compatible_base_url(&mut self, raw: &str) {
+        raw.trim()
+            .trim_end_matches('/')
+            .clone_into(&mut self.openai_compatible_base_url);
     }
 }
 

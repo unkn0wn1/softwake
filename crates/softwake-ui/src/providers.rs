@@ -54,6 +54,10 @@ pub struct ProviderRow {
 
 /// Snapshot returned to the window. No secrets.
 #[derive(Debug, Clone, Serialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "one has_* flag per credential kind; matches the existing Settings snapshot shape"
+)]
 pub struct ProviderSnapshot {
     /// Selected provider id.
     pub selected_provider: String,
@@ -71,6 +75,12 @@ pub struct ProviderSnapshot {
     pub has_xai_key: bool,
     /// Whether an `OpenAI` API key is saved.
     pub has_openai_key: bool,
+    /// Whether an `OpenRouter` API key is saved.
+    pub has_openrouter_key: bool,
+    /// Whether an OpenAI-compatible API key is saved.
+    pub has_openai_compatible_key: bool,
+    /// Configured OpenAI-compatible base URL (may be empty).
+    pub openai_compatible_base_url: String,
     /// Whether xAI OAuth tokens are saved.
     pub has_xai_oauth: bool,
     /// In-progress device-code sign-in, if any.
@@ -100,13 +110,21 @@ fn credential_name(kind: CredentialKind) -> &'static str {
         CredentialKind::XaiOauth => "xai-oauth",
         CredentialKind::XaiKey => "xai-key",
         CredentialKind::OpenaiKey => "openai-key",
+        CredentialKind::OpenrouterKey => "openrouter-key",
+        CredentialKind::OpenaiCompatibleKey => "openai-compatible-key",
     }
 }
 
+#[allow(
+    clippy::fn_params_excessive_bools,
+    reason = "mirrors ProviderSnapshot has_* fields for each credential kind"
+)]
 fn snapshot_from(
     settings: &ProviderSettings,
     has_xai_key: bool,
     has_openai_key: bool,
+    has_openrouter_key: bool,
+    has_openai_compatible_key: bool,
     has_xai_oauth: bool,
 ) -> Result<ProviderSnapshot, String> {
     let pending = PENDING_OAUTH
@@ -132,6 +150,9 @@ fn snapshot_from(
         last_test_message: last.map_or_else(String::new, |report| report.message.clone()),
         has_xai_key,
         has_openai_key,
+        has_openrouter_key,
+        has_openai_compatible_key,
+        openai_compatible_base_url: settings.openai_compatible_base_url.clone(),
         has_xai_oauth,
         oauth_pending: pending,
         plaintext_warning: PLAINTEXT_WARNING.to_owned(),
@@ -147,6 +168,12 @@ fn load_snapshot() -> Result<ProviderSnapshot, String> {
             .as_ref()
             .is_some_and(|k| !k.trim().is_empty()),
         bag.openai_api_key
+            .as_ref()
+            .is_some_and(|k| !k.trim().is_empty()),
+        bag.openrouter_api_key
+            .as_ref()
+            .is_some_and(|k| !k.trim().is_empty()),
+        bag.openai_compatible_api_key
             .as_ref()
             .is_some_and(|k| !k.trim().is_empty()),
         bag.xai_oauth
@@ -200,6 +227,8 @@ pub fn provider_set_key(provider_id: String, key: String) -> Result<ProviderSnap
         .update(|bag| match id {
             ProviderId::XaiKey => bag.xai_api_key = Some(trimmed.clone()),
             ProviderId::Openai => bag.openai_api_key = Some(trimmed.clone()),
+            ProviderId::Openrouter => bag.openrouter_api_key = Some(trimmed.clone()),
+            ProviderId::OpenaiCompatible => bag.openai_compatible_api_key = Some(trimmed.clone()),
             ProviderId::XaiOauth => {}
         })
         .map_err(|e| e.to_string())?;
@@ -220,6 +249,8 @@ pub fn provider_clear_cred(provider_id: String) -> Result<ProviderSnapshot, Stri
         .update(|bag| match id {
             ProviderId::XaiKey => bag.xai_api_key = None,
             ProviderId::Openai => bag.openai_api_key = None,
+            ProviderId::Openrouter => bag.openrouter_api_key = None,
+            ProviderId::OpenaiCompatible => bag.openai_compatible_api_key = None,
             ProviderId::XaiOauth => bag.xai_oauth = None,
         })
         .map_err(|e| e.to_string())?;
@@ -339,14 +370,44 @@ pub fn provider_test() -> Result<ProviderSnapshot, String> {
         let provider = settings.selected_provider;
         let env_xai = std::env::var("XAI_API_KEY").ok();
         let env_openai = std::env::var("OPENAI_API_KEY").ok();
-        let bearer = resolve_bearer(provider, &bag, env_xai.as_deref(), env_openai.as_deref())
-            .unwrap_or_default();
+        let env_openrouter = std::env::var("OPENROUTER_API_KEY").ok();
+        let env_openai_compatible = std::env::var("OPENAI_COMPATIBLE_API_KEY").ok();
+        let bearer = resolve_bearer(
+            provider,
+            &bag,
+            env_xai.as_deref(),
+            env_openai.as_deref(),
+            env_openrouter.as_deref(),
+            env_openai_compatible.as_deref(),
+        )
+        .unwrap_or_default();
+        let api_base =
+            softwake_providers::resolve_api_base(provider, &settings).unwrap_or_default();
         let transport = LiveTransport::new();
-        let outcome = run_test(&transport, provider, &bearer, now_ms());
+        let outcome = run_test(&transport, provider, &bearer, &api_base, now_ms());
         apply_test_outcome(&mut settings, provider, &outcome, now_ms());
         settings_store.save(&settings).map_err(|e| e.to_string())?;
         load_snapshot()
     }
+}
+
+/// Save the OpenAI-compatible base URL (non-secret).
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri deserializes command arguments as owned values"
+)]
+pub fn provider_set_base_url(base_url: String) -> Result<ProviderSnapshot, String> {
+    let trimmed = base_url.trim();
+    if trimmed.is_empty() {
+        return Err("base URL is empty".to_owned());
+    }
+    softwake_providers::normalize_compatible_base(trimmed).map_err(|e| e.to_string())?;
+    let store = open_settings()?;
+    let mut settings = store.load().map_err(|e| e.to_string())?;
+    settings.set_openai_compatible_base_url(trimmed);
+    store.save(&settings).map_err(|e| e.to_string())?;
+    load_snapshot()
 }
 
 /// Pick a chat model from the cached Test catalog.

@@ -13,6 +13,9 @@ const providerSelect = document.querySelector("#provider-select");
 const keyPanel = document.querySelector("#key-panel");
 const oauthPanel = document.querySelector("#oauth-panel");
 const apiKeyInput = document.querySelector("#api-key");
+const baseUrlField = document.querySelector("#base-url-field");
+const baseUrlInput = document.querySelector("#base-url");
+const saveBaseUrlBtn = document.querySelector("#save-base-url");
 const saveKeyBtn = document.querySelector("#save-key");
 const clearKeyBtn = document.querySelector("#clear-key");
 const oauthStatus = document.querySelector("#oauth-status");
@@ -200,11 +203,25 @@ function renderProviders(snap) {
   } else {
     clearOauthPoll();
     apiKeyInput.value = "";
+    const needsBase = row && row.credential === "openai-compatible-key";
+    baseUrlField.classList.toggle("hidden", !needsBase);
+    saveBaseUrlBtn.classList.toggle("hidden", !needsBase);
+    if (needsBase) {
+      baseUrlInput.value = snap.openai_compatible_base_url || "";
+    }
     if (row && row.credential === "xai-key") {
       clearKeyBtn.textContent = snap.has_xai_key ? "Clear saved" : "Clear saved";
     }
     if (row && row.credential === "openai-key") {
       clearKeyBtn.textContent = snap.has_openai_key ? "Clear saved" : "Clear saved";
+    }
+    if (row && row.credential === "openrouter-key") {
+      clearKeyBtn.textContent = snap.has_openrouter_key ? "Clear saved" : "Clear saved";
+    }
+    if (row && row.credential === "openai-compatible-key") {
+      clearKeyBtn.textContent = snap.has_openai_compatible_key
+        ? "Clear saved"
+        : "Clear saved";
     }
   }
 
@@ -283,6 +300,12 @@ saveKeyBtn.addEventListener("click", () => {
     key: apiKeyInput.value,
   }).then(() => {
     apiKeyInput.value = "";
+  });
+});
+
+saveBaseUrlBtn.addEventListener("click", () => {
+  providerAction("provider_set_base_url", {
+    baseUrl: baseUrlInput.value,
   });
 });
 
