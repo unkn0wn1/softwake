@@ -48,3 +48,13 @@ Operators need Softwake present while they work in other apps: a tray for status
 - `softwake-ui` enables Tauri’s `tray-icon` feature and creates a second webview (`hud`).
 - Linux CI already installs AppIndicator packages for the tray.
 - README documents how to run the UI with tray + HUD (`softwaked serve`, then `cargo run -p softwake-ui`).
+
+
+## Amendment — placement and collapsed size (2026-09-25)
+
+Live multi-monitor feedback locked two placement rules:
+
+1. The HUD anchors to the **bottom-right of the primary monitor work area** (not under the cursor, not top-right). Placement uses the monitor origin (`Monitor::position` / `work_area`) so a primary that is not at `(0, 0)` still lands on the main screen.
+2. The capsule stays **tiny when collapsed** (bloom only). A click expands to a **fixed** larger window that shows the type strip and reply. Collapse re-anchors to the same primary bottom-right corner. Always-on-top is unchanged.
+
+Space and Enter on the capsule toggle expand only when the capsule itself is focused. Keys typed in the ask field are never stolen.
