@@ -42,6 +42,19 @@
    - [x] Connector actions are confirm or deny; unknown pairs fail closed ([ADR 0008](ADR-0008-connector-boundary.md)).
    - [x] Policy beyond the connector registry ([ADR 0010](ADR-0010-policy-engine.md)): `softwake-policy` evaluates tool names and connector pairs. Unknown subjects are denied. Overrides may only tighten. The daemon classifies through that engine. No live cloud client.
 
+## Phase 4 — Context pack, then provider access
+
+**Goal:** The acting session loads a four-file context pack. Provider sign-in and live connectors stay later slices.
+
+1. [x] Context pack and confirm-echo foundation ([ADR 0011](ADR-0011-context-pack.md))
+   - [x] `softwake-soul` loads `rules.md` and `glossary.md` with `soul.md` and `user.md`. All four are required. A missing or invalid pack, including an unparseable glossary, refuses awake. `reload_soul` re-reads the pack and applies on the next awake.
+   - [x] Render order: Identity, User profile, Rules, Glossary, runtime policy stub. The rules section states that rules override soul. A glossary alias does not change tool risk.
+   - [x] Repo templates `soul/rules.md` and `soul/glossary.md` use placeholder paths only.
+   - [x] Alias expand and confirm-echo readback are library functions with unit tests. No shell. Protocol generation stays 1.
+2. [ ] Provider OAuth settings (xAI / OpenAI)
+3. [ ] Live email, Drive, and calendar connectors (still open from phase 3)
+4. [ ] In-window editors for `soul.md`, `user.md`, `rules.md`, and `glossary.md` (reload stays how a pack is applied)
+
 ## Deferred ideas (do not pull into phase 1)
 
 - Meeting memory / transcript integration (separate product track; may feed Softwake later)

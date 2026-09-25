@@ -9,6 +9,10 @@ pub enum SoulFile {
     Soul,
     /// `user.md`
     User,
+    /// `rules.md`
+    Rules,
+    /// `glossary.md`
+    Glossary,
 }
 
 impl SoulFile {
@@ -18,6 +22,8 @@ impl SoulFile {
         match self {
             Self::Soul => "soul.md",
             Self::User => "user.md",
+            Self::Rules => "rules.md",
+            Self::Glossary => "glossary.md",
         }
     }
 }
@@ -85,5 +91,14 @@ pub enum SoulError {
         /// Filesystem error.
         #[source]
         source: std::io::Error,
+    },
+
+    /// `glossary.md` passed the file checks and failed the map checks.
+    #[error("invalid glossary ({path}): {detail}")]
+    InvalidGlossary {
+        /// Path that was parsed.
+        path: PathBuf,
+        /// Why the alias map was refused, such as `duplicate alias docs`.
+        detail: String,
     },
 }

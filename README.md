@@ -2,11 +2,11 @@
 
 Voice-first local conductor: asleep until hailed, awake with tools, hibernate when you want silence.
 
-Rust end-to-end (daemon + Tauri UI). Phase 1 nails reliable **wake / sleep / hibernate** and a single safe tool loop. Phase 2 adds a confirmation gate for one risky tool. Personality and rules live in a **soul pack** (`soul.md`, `user.md`). Long-term memory is a separate local trait ([ADR 0009](docs/ADR-0009-long-term-memory.md)), off by default, and not required to run the daemon.
+Rust end-to-end (daemon + Tauri UI). Phase 1 nails reliable **wake / sleep / hibernate** and a single safe tool loop. Phase 2 adds a confirmation gate for one risky tool. Personality and rules live in a **soul pack** (`soul.md`, `user.md`, `rules.md`, `glossary.md`). Long-term memory is a separate local trait ([ADR 0009](docs/ADR-0009-long-term-memory.md)), off by default, and not required to run the daemon.
 
 ## Status
 
-Cargo workspace on stable Rust (edition 2024). `softwake-state` implements sleep / awake / hibernate, including rejected transitions and phrase cooldowns. `softwake-audio` has a mock capture backend (`stop` ends frame delivery) and a trait-shaped PipeWire stub (default `pipewire` feature, no native library). `softwake-wake` scores configured phrases with a local text matcher ([ADR 0002](docs/ADR-0002-wake-engine-spike.md)). The production on-device wake engine is sherpa-onnx keyword spotting ([ADR 0006](docs/ADR-0006-on-device-wake.md)). While awake, STT/TTS use a local streaming boundary ([ADR 0007](docs/ADR-0007-awake-stt-tts.md)): mock inject/record by default, sherpa stubs behind features. Weights are not in the repo, and the demo stays typed. `softwake-soul` loads `soul.md` and `user.md`, checks them, and renders system instructions. `softwaked serve` speaks newline-delimited JSON on a Unix socket ([ADR 0003](docs/ADR-0003-ipc-transport.md)). `softwaked ctl` and the Tauri window `softwake-ui` are clients of that socket. Entering awake opens a text session with the rendered soul instructions. `echo` runs immediately while awake ([ADR 0004](docs/ADR-0004-first-safe-tool.md)). `notify` waits for confirmation and then appends a line to an in-memory sink. `shell` is denied ([ADR 0005](docs/ADR-0005-tool-confirmation.md)). Phase 3 wires the connector boundary to the tool bus ([ADR 0008](docs/ADR-0008-connector-boundary.md)): `email_send` waits for confirmation, and confirming it appends one message to an in-memory outbox. `MockDrive` and `MockCalendar` list files and events stored on that value. In the connector registry, `drive` / `list` and `calendar` / `list` are confirm, and delete actions are denied. Those list mocks are not tools on the bus. The default build has no live cloud client. `softwake-memory` is a `Memory` trait, an in-memory `MockMemory`, and an opt-in `FileMemory` that writes `memory.json` only after `open_enabled`. Both stay off until that value is enabled. The daemon does not call the crate ([ADR 0009](docs/ADR-0009-long-term-memory.md)). `softwake-policy` classifies the existing tool and connector allowlists. Unknown names are denied. The daemon uses that classification, and its override map is empty ([ADR 0010](docs/ADR-0010-policy-engine.md)). A model client and further tools are later work. A missing soul pack refuses awake; `reload-soul` re-reads the files and applies on the next awake.
+Cargo workspace on stable Rust (edition 2024). `softwake-state` implements sleep / awake / hibernate, including rejected transitions and phrase cooldowns. `softwake-audio` has a mock capture backend (`stop` ends frame delivery) and a trait-shaped PipeWire stub (default `pipewire` feature, no native library). `softwake-wake` scores configured phrases with a local text matcher ([ADR 0002](docs/ADR-0002-wake-engine-spike.md)). The production on-device wake engine is sherpa-onnx keyword spotting ([ADR 0006](docs/ADR-0006-on-device-wake.md)). While awake, STT/TTS use a local streaming boundary ([ADR 0007](docs/ADR-0007-awake-stt-tts.md)): mock inject/record by default, sherpa stubs behind features. Weights are not in the repo, and the demo stays typed. `softwake-soul` loads `soul.md`, `user.md`, `rules.md`, and `glossary.md`, checks them, and renders system instructions ([ADR 0011](docs/ADR-0011-context-pack.md)). `softwaked serve` speaks newline-delimited JSON on a Unix socket ([ADR 0003](docs/ADR-0003-ipc-transport.md)). `softwaked ctl` and the Tauri window `softwake-ui` are clients of that socket. Entering awake opens a text session with the rendered soul instructions. `echo` runs immediately while awake ([ADR 0004](docs/ADR-0004-first-safe-tool.md)). `notify` waits for confirmation and then appends a line to an in-memory sink. `shell` is denied ([ADR 0005](docs/ADR-0005-tool-confirmation.md)). Phase 3 wires the connector boundary to the tool bus ([ADR 0008](docs/ADR-0008-connector-boundary.md)): `email_send` waits for confirmation, and confirming it appends one message to an in-memory outbox. `MockDrive` and `MockCalendar` list files and events stored on that value. In the connector registry, `drive` / `list` and `calendar` / `list` are confirm, and delete actions are denied. Those list mocks are not tools on the bus. The default build has no live cloud client. `softwake-memory` is a `Memory` trait, an in-memory `MockMemory`, and an opt-in `FileMemory` that writes `memory.json` only after `open_enabled`. Both stay off until that value is enabled. The daemon does not call the crate ([ADR 0009](docs/ADR-0009-long-term-memory.md)). `softwake-policy` classifies the existing tool and connector allowlists. Unknown names are denied. The daemon uses that classification, and its override map is empty ([ADR 0010](docs/ADR-0010-policy-engine.md)). A model client and further tools are later work. A missing or invalid four-file pack refuses awake; `reload-soul` re-reads that pack and applies on the next awake.
 
 ## Build and test
 
@@ -79,7 +79,7 @@ The interactive demo is typed commands only. The microphone is not opened. Mock 
 
 ```bash
 mkdir -p ~/.config/softwake/soul
-cp soul/soul.md soul/user.md ~/.config/softwake/soul/
+cp soul/*.md ~/.config/softwake/soul/
 cargo run -p softwake-daemon -- demo
 ```
 
@@ -93,7 +93,7 @@ commands: wake, sleep, hibernate, resume, status, reload-soul, tool, confirm, ca
 >
 ```
 
-Without those files the status line is `soul: missing` and `wake` stays in sleep. `hibernate`, `resume`, and `sleep` still run. `reload-soul` reads the directory again. `tool` is refused until a wake succeeds.
+A directory that only has `soul.md` and `user.md` refuses awake until `rules.md` and `glossary.md` are copied too. Without those files the status line is `soul: missing` and `wake` stays in sleep. `hibernate`, `resume`, and `sleep` still run. `reload-soul` reads the directory again. `tool` is refused until a wake succeeds.
 
 Wake, run the tool, sleep, then hibernate:
 
@@ -234,7 +234,7 @@ cargo run -p softwake-daemon -- ctl confirm-tool 1
 cargo run -p softwake-daemon -- ctl cancel-tool 1
 ```
 
-`ctl` prints `state`, `capture`, `soul` (`ok` or `missing`), and `soul reload`, and exits non-zero when the daemon rejects the command or cannot be reached. `resume` is wake-from-hibernate and lands in sleep. `reload-soul` re-reads the soul pack from disk. The new text applies on the next awake session, not in the middle of one that is already awake. `ctl tool` runs one safe tool, or stages a confirm-gated tool. The daemon starts in sleep, so `ctl tool echo hello` is refused until the daemon is awake. The typed demo is the path that enters awake. A successful `echo` prints its result on the line after the status lines (`echo: hello`, or `pong` when `echo` has no arguments). `ctl tool notify hello` prints the pending id and does not append. `ctl tool email_send ada@example.com hello body` does the same, and `ctl confirm-tool <id>` appends one in-memory message. `ctl cancel-tool <id>` drops the pending call.
+`ctl` prints `state`, `capture`, `soul` (`ok` or `missing`), and `soul reload`, and exits non-zero when the daemon rejects the command or cannot be reached. `resume` is wake-from-hibernate and lands in sleep. `reload-soul` re-reads the four-file pack from disk. The new text applies on the next awake, not in the middle of a session that is already awake. `ctl tool` runs one safe tool, or stages a confirm-gated tool. The daemon starts in sleep, so `ctl tool echo hello` is refused until the daemon is awake. The typed demo is the path that enters awake. A successful `echo` prints its result on the line after the status lines (`echo: hello`, or `pong` when `echo` has no arguments). `ctl tool notify hello` prints the pending id and does not append. `ctl tool email_send ada@example.com hello body` does the same, and `ctl confirm-tool <id>` appends one in-memory message. `ctl cancel-tool <id>` drops the pending call.
 
 The socket path is the first match of `--socket PATH`, `SOFTWAKE_SOCKET`, `$XDG_RUNTIME_DIR/softwake/softwaked.sock`, and `/tmp/softwake-$UID/softwaked.sock` when `XDG_RUNTIME_DIR` is unset.
 
@@ -242,7 +242,7 @@ The soul directory is the first match of `--soul-dir PATH` (on `serve` and `demo
 
 ## Window
 
-`softwake-ui` is a small Tauri window: the current state, whether the soul pack is `ok` or `missing`, the latest tool line, and buttons for Hibernate, Wake (leave hibernate into sleep), Sleep, and Reload soul. When a confirm-gated tool is waiting, the window shows that text and enables Confirm and Cancel. It only talks to the socket. Start `softwaked serve` first.
+`softwake-ui` is a small Tauri window: the current state, whether the soul pack is `ok` or `missing`, the latest tool line, and buttons for Hibernate, Wake (leave hibernate into sleep), Sleep, and Reload soul. A line under the status says reload reads `soul.md`, `user.md`, `rules.md`, and `glossary.md`. The window does not edit those files. When the pack is invalid and the daemon sent a reason, the soul line shows that reason. When a confirm-gated tool is waiting, the window shows that text and enables Confirm and Cancel. It only talks to the socket. Start `softwaked serve` first.
 
 ```bash
 cargo run -p softwake-ui
@@ -257,7 +257,7 @@ On Linux the window links WebKitGTK. The packages used in CI are `libwebkit2gtk-
 | [docs/00-overview.md](docs/00-overview.md) | What it is, non-goals, phases |
 | [docs/01-architecture.md](docs/01-architecture.md) | Processes, IPC, audio, tools |
 | [docs/02-voice-states.md](docs/02-voice-states.md) | Sleep / wake / hibernate |
-| [docs/03-soul-pack.md](docs/03-soul-pack.md) | soul.md, user.md; memory is [ADR 0009](docs/ADR-0009-long-term-memory.md) |
+| [docs/03-soul-pack.md](docs/03-soul-pack.md) | Four-file context pack; memory is [ADR 0009](docs/ADR-0009-long-term-memory.md) |
 | [docs/04-coding-style.md](docs/04-coding-style.md) | KISS, DRY, SRP, Rust rules |
 | [docs/05-quality-gates.md](docs/05-quality-gates.md) | CI and definition of done |
 | [docs/06-milestones.md](docs/06-milestones.md) | Phase checklist |
@@ -271,3 +271,4 @@ On Linux the window links WebKitGTK. The packages used in CI are `libwebkit2gtk-
 | [docs/ADR-0008-connector-boundary.md](docs/ADR-0008-connector-boundary.md) | Connector boundary: in-memory email, Drive, and calendar; confirm or deny |
 | [docs/ADR-0009-long-term-memory.md](docs/ADR-0009-long-term-memory.md) | Long-term memory: local trait, in-memory mock, opt-in JSON file |
 | [docs/ADR-0010-policy-engine.md](docs/ADR-0010-policy-engine.md) | Policy engine: one evaluation path, default deny, tighten-only overrides |
+| [docs/ADR-0011-context-pack.md](docs/ADR-0011-context-pack.md) | Context pack and confirm-echo foundation |

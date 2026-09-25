@@ -5,7 +5,7 @@
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  softwake-ui (Tauri)                                   │
-│  settings · status · hibernate/wake · soul editor       │
+│  settings · status · hibernate/wake · soul reload       │
 └───────────────────────────┬─────────────────────────────┘
                             │ Unix socket, newline-delimited JSON
 ┌───────────────────────────▼─────────────────────────────┐
@@ -18,7 +18,7 @@
                             │
                             ▼
                    soul pack on disk
-                   (soul.md, user.md, …)
+                   (soul.md, user.md, rules.md, glossary.md)
 ```
 
 ## Crates (planned monorepo)
@@ -32,12 +32,12 @@ Keep crates small and single-purpose. Exact names can shift; responsibilities sh
 | `softwake-audio` | Capture trait, mock backend, PipeWire stub. `pipewire-native` is off unless a developer opts in |
 | `softwake-voice` | Awake STT/TTS boundary (mock default; sherpa stubs feature-gated; [ADR 0007](ADR-0007-awake-stt-tts.md)) |
 | `softwake-wake` | Local wake/sleep phrases. Text table for the typed demo. PCM seam for sherpa-onnx keyword spotting ([ADR 0006](ADR-0006-on-device-wake.md)) |
-| `softwake-session` | Text session for one awake period. Stores rendered soul instructions. No model client yet |
+| `softwake-session` | Text session for one awake period. Stores that rendered pack. Memory snippets are still not attached. No model client yet |
 | `softwake-tools` | Tool registry with safe, confirm, and deny metadata. `echo` is safe, `notify` and `email_send` wait for confirmation, `shell` is denied |
 | `softwake-connectors` | World I/O boundary. Email, Drive, and calendar traits with in-memory mocks. Registry is confirm or deny. No live cloud client in the default build. The daemon calls the email mock only ([ADR 0008](ADR-0008-connector-boundary.md)) |
 | `softwake-policy` | Classifies tool names and connector pairs. Unknown subjects are denied. Overrides may only tighten. The daemon asks it before a tool runs ([ADR 0010](ADR-0010-policy-engine.md)) |
 | `softwake-memory` | Long-term memory boundary. `Memory` trait, in-memory mock, and opt-in JSON file. Off until enabled. The daemon does not call it ([ADR 0009](ADR-0009-long-term-memory.md)) |
-| `softwake-soul` | Load/validate soul pack; render system instructions |
+| `softwake-soul` | Load four files (`soul.md`, `user.md`, `rules.md`, `glossary.md`), render instructions, and expand glossary aliases ([ADR 0011](ADR-0011-context-pack.md)) |
 | `softwake-ipc` | Shared protocol: newline-delimited JSON over a Unix socket |
 | `softwake-ui` | Tauri window (thin). Status and buttons call the daemon |
 
@@ -76,7 +76,7 @@ Unix domain socket and newline-delimited JSON, protocol version 1. The path, fra
 - `set_config` is intentionally absent until the daemon can validate a configuration document.
 - Events: `state_changed`, `partial_transcript` (awake only; not emitted yet), `tool_started`, `tool_finished`, `tool_confirm_pending`, `tool_confirm_resolved`, `error`.
 - A rejected command is an error response. `state_changed` is broadcast only when the voice state changes.
-- `reload_soul` re-reads `soul.md` and `user.md` from disk. The new text applies on the next awake, not in the middle of an awake session. A missing or invalid pack refuses awake; hibernate, sleep, and UI resume still run.
+- `reload_soul` re-reads `soul.md`, `user.md`, `rules.md`, and `glossary.md` from disk. The new text applies on the next awake, not in the middle of an awake session. A missing or invalid pack, including an unparseable glossary, refuses awake; hibernate, sleep, and UI resume still run.
 - Status may include `soul`: `{ "ok": true }` or `{ "ok": false, "reason": "..." }`. The field is optional on the wire so older payloads still decode. Protocol generation stays 1.
 - Soul directory, first match: `--soul-dir`, `SOFTWAKE_SOUL_DIR`, `$XDG_CONFIG_HOME/softwake/soul`, `~/.config/softwake/soul`.
 - `softwaked serve` listens. `softwaked ctl` and the Tauri window connect to it. Default path: `$XDG_RUNTIME_DIR/softwake/softwaked.sock`, or `/tmp/softwake-$UID/softwaked.sock` when `XDG_RUNTIME_DIR` is unset.
@@ -114,6 +114,8 @@ Long-term memory is a library boundary in `softwake-memory` ([ADR 0009](ADR-0009
   soul/
     soul.md
     user.md
+    rules.md
+    glossary.md
 ~/.local/state/softwake/
   runtime.json          # last state, pid hints
   memory.json           # snippets, only after an enabled FileMemory writes

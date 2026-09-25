@@ -1,4 +1,4 @@
-//! Soul directory and the two file paths inside it.
+//! Soul directory and the four file paths inside it.
 //!
 //! Constructing these types does not read the files. [`SoulDir::load`](crate::SoulDir::load)
 //! and [`crate::load`] do.
@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{SoulError, SoulPack, try_load};
 
-/// Directory that holds `soul.md` and `user.md`.
+/// Directory that holds `soul.md`, `user.md`, `rules.md`, and `glossary.md`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SoulDir {
     path: PathBuf,
@@ -28,7 +28,7 @@ impl SoulDir {
         &self.path
     }
 
-    /// `soul.md` and `user.md` inside this directory.
+    /// The four pack files inside this directory.
     #[must_use]
     pub fn paths(&self) -> SoulPaths {
         SoulPaths::in_dir(&self.path)
@@ -44,24 +44,36 @@ impl SoulDir {
     }
 }
 
-/// Locations of the two phase-1 soul files.
+/// Locations of the four context-pack files.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SoulPaths {
     soul: PathBuf,
     user: PathBuf,
+    rules: PathBuf,
+    glossary: PathBuf,
 }
 
 impl SoulPaths {
-    /// Record the paths. Neither file is opened.
+    /// Record the paths. None of the files are opened.
     #[must_use]
-    pub fn new(soul: PathBuf, user: PathBuf) -> Self {
-        Self { soul, user }
+    pub fn new(soul: PathBuf, user: PathBuf, rules: PathBuf, glossary: PathBuf) -> Self {
+        Self {
+            soul,
+            user,
+            rules,
+            glossary,
+        }
     }
 
-    /// `soul.md` and `user.md` inside `dir`.
+    /// `soul.md`, `user.md`, `rules.md`, and `glossary.md` inside `dir`.
     #[must_use]
     pub fn in_dir(dir: &Path) -> Self {
-        Self::new(dir.join("soul.md"), dir.join("user.md"))
+        Self::new(
+            dir.join("soul.md"),
+            dir.join("user.md"),
+            dir.join("rules.md"),
+            dir.join("glossary.md"),
+        )
     }
 
     /// Path that will be read as `soul.md`.
@@ -74,6 +86,18 @@ impl SoulPaths {
     #[must_use]
     pub fn user(&self) -> &Path {
         &self.user
+    }
+
+    /// Path that will be read as `rules.md`.
+    #[must_use]
+    pub fn rules(&self) -> &Path {
+        &self.rules
+    }
+
+    /// Path that will be read as `glossary.md`.
+    #[must_use]
+    pub fn glossary(&self) -> &Path {
+        &self.glossary
     }
 }
 
@@ -156,9 +180,16 @@ mod tests {
 
     #[test]
     fn stores_paths_without_reading_them() {
-        let paths = SoulPaths::new(PathBuf::from("soul.md"), PathBuf::from("user.md"));
+        let paths = SoulPaths::new(
+            PathBuf::from("soul.md"),
+            PathBuf::from("user.md"),
+            PathBuf::from("rules.md"),
+            PathBuf::from("glossary.md"),
+        );
         assert_eq!(paths.soul(), PathBuf::from("soul.md").as_path());
         assert_eq!(paths.user(), PathBuf::from("user.md").as_path());
+        assert_eq!(paths.rules(), PathBuf::from("rules.md").as_path());
+        assert_eq!(paths.glossary(), PathBuf::from("glossary.md").as_path());
     }
 
     #[test]
@@ -166,6 +197,8 @@ mod tests {
         let paths = SoulPaths::in_dir(Path::new("pack"));
         assert_eq!(paths.soul(), Path::new("pack/soul.md"));
         assert_eq!(paths.user(), Path::new("pack/user.md"));
+        assert_eq!(paths.rules(), Path::new("pack/rules.md"));
+        assert_eq!(paths.glossary(), Path::new("pack/glossary.md"));
         let dir = SoulDir::new(PathBuf::from("pack"));
         assert_eq!(dir.paths(), paths);
         assert_eq!(dir.path(), Path::new("pack"));

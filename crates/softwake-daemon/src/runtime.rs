@@ -594,6 +594,9 @@ mod tests {
         assert!(status.soul_reload_pending);
         assert!(status.soul.as_ref().is_some_and(|soul| soul.ok));
         let expected = reload_message(true, None);
+        assert!(expected.contains("reloaded soul pack; applies on next awake"));
+        assert!(expected.contains("rules.md"));
+        assert!(expected.contains("glossary.md"));
         assert_eq!(status.message.as_deref(), Some(expected.as_str()));
 
         runtime.handle(Command::Hibernate);
@@ -706,8 +709,93 @@ mod tests {
         assert!(applied.contains("fixed soul"));
         assert!(applied.contains("# User profile"));
         assert!(applied.contains("fixed user"));
+        assert!(applied.contains("# Rules"));
+        assert!(applied.contains("# Glossary"));
         assert!(applied.contains("# Runtime policy"));
         assert!(applied.contains("State: awake."));
+    }
+
+    #[test]
+    fn missing_rules_refuses_awake_and_leaves_other_transitions() {
+        let soul = TestSoulDir::valid();
+        std::fs::remove_file(soul.path().join("rules.md")).expect("remove rules");
+        let mut runtime = Runtime::new(soul.soul_dir());
+        let refused = runtime.wake_phrase();
+        assert!(refused.events.is_empty());
+        match refused.body {
+            ResponseBody::Err {
+                error: IpcError::Protocol { message },
+            } => {
+                assert!(message.contains("refusing awake"), "{message}");
+                assert!(message.contains("rules.md"), "{message}");
+            }
+            other => panic!("expected a soul refusal, got {other:?}"),
+        }
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Sleep);
+        assert!(runtime.capture.is_running());
+        assert!(runtime.applied_instructions().is_none());
+
+        let status = runtime
+            .handle(Command::GetStatus)
+            .body
+            .status()
+            .expect("status")
+            .clone();
+        assert_eq!(status.state, VoiceState::Sleep);
+        let report = status.soul.expect("soul report");
+        assert!(!report.ok);
+        assert!(report.reason.unwrap_or_default().contains("rules.md"));
+
+        let hibernated = runtime.handle(Command::Hibernate);
+        assert_eq!(
+            hibernated.body.status().expect("hibernate").state,
+            VoiceState::Hibernate
+        );
+        assert!(!runtime.capture.is_running());
+        let resumed = runtime.handle(Command::WakeFromUi);
+        assert_eq!(
+            resumed.body.status().expect("resume").state,
+            VoiceState::Sleep
+        );
+        assert!(runtime.capture.is_running());
+        let slept = runtime.handle(Command::Sleep);
+        assert!(matches!(
+            slept.body,
+            ResponseBody::Err {
+                error: IpcError::IllegalTransition { .. }
+            }
+        ));
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Sleep);
+    }
+
+    #[test]
+    fn duplicate_glossary_alias_refuses_awake() {
+        let soul = TestSoulDir::valid();
+        std::fs::write(
+            soul.path().join("glossary.md"),
+            "docs → /path/to/docs\ndocs → /path/to/other\n",
+        )
+        .expect("glossary");
+        let mut runtime = Runtime::new(soul.soul_dir());
+        let refused = runtime.wake_phrase();
+        assert!(refused.events.is_empty());
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Sleep);
+        assert!(runtime.applied_instructions().is_none());
+        let status = runtime
+            .handle(Command::GetStatus)
+            .body
+            .status()
+            .expect("status")
+            .clone();
+        assert_eq!(status.state, VoiceState::Sleep);
+        let report = status.soul.expect("soul report");
+        assert!(!report.ok);
+        assert!(
+            report
+                .reason
+                .unwrap_or_default()
+                .contains("duplicate alias docs")
+        );
     }
 
     #[test]

@@ -192,10 +192,11 @@ one in-memory message. `cancel` drops that pending call. `tool shell` is denied.
 Other tool names are rejected. Sleep and hibernate reject every tool
 and drop a pending confirmation. Safe tools run only while awake.
 
-A wake phrase enters awake only when soul.md and user.md are present,
-non-empty, and valid UTF-8. Hibernate, sleep, and resume still run when
-the pack is missing. reload-soul reads the files again; the new text
-applies on the next awake.
+A wake phrase enters awake only when soul.md, user.md, rules.md, and
+glossary.md are present, non-empty, and valid UTF-8. glossary.md must
+parse as an alias map. Each file is at most 1 MiB. Hibernate, sleep,
+and resume still run when the pack is missing. reload-soul reads the
+files again; the new text applies on the next awake.
 
 Serve owns the voice-state machine and mock capture. It speaks
 newline-delimited JSON (protocol 1) on a Unix socket. A stale socket file
@@ -492,6 +493,10 @@ mod tests {
         assert!(help.contains("XDG_CONFIG_HOME"));
         assert!(help.contains("~/.config/softwake/soul"));
         assert!(help.contains("valid UTF-8"));
+        assert!(help.contains("rules.md"));
+        assert!(help.contains("glossary.md"));
+        assert!(help.contains("alias map"));
+        assert!(help.contains("1 MiB"));
         assert!(help.contains("applies on the next awake"));
         assert!(help.contains("ctl tool"));
         assert!(help.contains("tool echo"));

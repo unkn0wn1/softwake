@@ -75,7 +75,7 @@ Copy the soul templates, then run the typed demo:
 
 ```bash
 mkdir -p ~/.config/softwake/soul
-cp soul/soul.md soul/user.md ~/.config/softwake/soul/
+cp soul/*.md ~/.config/softwake/soul/
 cargo run -p softwake-daemon -- demo
 ```
 
