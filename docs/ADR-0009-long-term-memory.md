@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-09-25
 - **Amended:** 2026-09-25 (opt-in `FileMemory` writes `memory.json`)
+- **Amended:** 2026-09-25 (budgeted recall on awake ask/chat)
 
 ## Decision
 
@@ -42,9 +43,11 @@ A write builds the next document, writes a sibling temp file, `sync_all`s it, an
 
 One handle does not share its cache with another. A second handle sees a write only after it is opened again. Two processes can overwrite each other. This backend does not take a file lock.
 
-`softwake-soul` renders instructions only. A later session change may attach `recall` snippets beside those instructions. [`TextStubSession`](../crates/softwake-session/src/lib.rs) does not call this crate. Closing a session must not be how memory is forgotten. `softwake-daemon`, `softwake-session`, and `softwake-soul` do not depend on `softwake-memory`.
+`softwake-soul` renders instructions only. Closing a session must not be how memory is forgotten. `softwake-soul` does not depend on `softwake-memory`. [`TextStubSession`](../crates/softwake-session/src/lib.rs) does not depend on this crate either: it accepts a pre-rendered memory appendix string and appends it after the pack when non-empty ([`assemble_system`](../crates/softwake-session/src/lib.rs)).
 
-The default build has no Honcho client, no HTTP client, and no memory feature flag. CI does not set a memory key and does not start a database. `MockMemory` stays the backend a caller gets when it does not construct `FileMemory`. The daemon does not construct either one.
+`softwake-daemon` depends on this crate for budgeted recall on awake `ask` / `chat` ([ADR 0013](ADR-0013-session-provider.md)). On each ask it resolves `memory.json`, and **only when that file already exists** it opens `FileMemory::open_enabled`. Missing file, resolve failure, open failure, disabled memory, and recall errors are an empty appendix (fail-open). The ask does not fail. Caps: [`MAX_RECALL_SNIPPETS`](../crates/softwake-memory/src/recall.rs) (4) and [`MAX_RECALL_BYTES`](../crates/softwake-memory/src/recall.rs) (2048 UTF-8 bytes of snippet text). Query is the user line. Empty query yields no hits. Assemble order: rendered pack → budgeted memory section → user turn. The memory lead-in states that snippets do not override rules. The runtime policy stub stays last among pack sections.
+
+The default build has no Honcho client, no HTTP client, and no memory feature flag. CI does not set a memory key and does not start a database or Redis. `MockMemory` stays the backend a caller gets when it does not construct `FileMemory`. Tests inject `MockMemory` or a temp-dir `FileMemory`; they do not open the operator home file.
 
 IPC protocol generation stays `1`. Memory is not a status field and not a socket command.
 
@@ -68,7 +71,7 @@ The 8 KiB cap is the snippet-sized form of the soul pack's limit on a huge paste
 - sqlite for the durable store. Rejected. Substring recall is a scan of a short list. A bundled database compiles C into CI for transactions this file does not need.
 - A JSONL log. Rejected. `forget` and the monotonic id still need a rewrite or tombstones plus a header.
 - Delete `memory.json` on `disable`. Rejected. That would make turning a handle off destroy operator data. `forget` removes a snippet.
-- Wire `MockMemory` or `FileMemory` into `TextStubSession` or the daemon. Rejected. Session close drops one awake period. Memory must outlive that period. No IPC change is required to keep protocol generation 1.
+- Wire `MockMemory` or `FileMemory` into `TextStubSession` as a trait dependency. Rejected. Session close drops one awake period. Memory must outlive that period. The session takes an appendix string; the daemon opens `FileMemory` when `memory.json` exists. No IPC change. Protocol generation stays 1.
 - An async trait. Rejected. Library crates stay runtime-agnostic. The daemon is where the runtime is chosen.
 - Embeddings, peer ids, or a dialectic query. Rejected. The record is an id and text until a backend needs more.
 
@@ -76,11 +79,10 @@ The 8 KiB cap is the snippet-sized form of the soul pack's limit on a huge paste
 
 ```bash
 cargo test -p softwake-memory
+cargo test -p softwake-daemon --lib memory
 ```
 
-The daemon does not call the crate. There is no typed-demo step.
-
-A library caller turns the file on like this. `resolve_memory_file` does not create the directory. The first successful `remember` does.
+Enable the file store (creates `memory.json` on the first successful remember). `resolve_memory_file` does not create the directory; the first successful `remember` does:
 
 ```rust
 let path = softwake_memory::resolve_memory_file()?;
@@ -88,14 +90,14 @@ let mut memory = softwake_memory::FileMemory::open_enabled(&path)?;
 memory.remember("the garage code is on the hook")?;
 ```
 
-`FileMemory::new` stays off and writes nothing. There is no CLI flag and no config key.
+`FileMemory::new` stays off and writes nothing. There is no CLI flag and no config key. Once `memory.json` exists, awake typed `ask` / `chat` attach budgeted substring hits for the user line.
 
 ## Consequences
 
 - Callers can keep snippets across processes by holding an enabled `FileMemory`. Callers who use `MockMemory` still lose those snippets when the value is dropped or disabled.
 - Callers still cannot reach Honcho from this build.
 - `disable` on the file backend does not forget. `forget` does, and the next id keeps counting.
-- The daemon still does not load memory. Session close still does not forget it.
+- The daemon loads `FileMemory` for ask/chat only when `memory.json` already exists. Session close still does not forget it.
 - Clients that speak protocol generation 1 see no new message kinds.
-- The decision line and the productized durable store line are closed. The parent long-term memory checkbox stays open because the daemon still does not load memory.
+- The decision line, the productized durable store line, and budgeted ask/chat recall are closed. The parent long-term memory checkbox can close when the remaining phase-3/4 memory product items are done.
 - Honcho, if it ever appears, is another backend behind this trait. It is not a second memory API and not a soul-pack feature.

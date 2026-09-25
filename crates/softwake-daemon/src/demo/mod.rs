@@ -157,6 +157,9 @@ pub(crate) struct Demo {
     /// Test double. Production always uses the disk path.
     #[cfg(test)]
     chat_fixture: Option<crate::chat::ChatFixture>,
+    /// Opt-in memory for tests. Production uses [`crate::chat::disk_memory_appendix`].
+    #[cfg(test)]
+    memory_fixture: Option<softwake_memory::MockMemory>,
 }
 
 impl Demo {
@@ -182,6 +185,8 @@ impl Demo {
             verbose: false,
             #[cfg(test)]
             chat_fixture: None,
+            #[cfg(test)]
+            memory_fixture: None,
         }
     }
 
@@ -321,6 +326,11 @@ impl Demo {
     #[cfg(test)]
     fn install_chat_fixture(&mut self, fixture: crate::chat::ChatFixture) {
         self.chat_fixture = Some(fixture);
+    }
+
+    #[cfg(test)]
+    fn install_memory_fixture(&mut self, memory: softwake_memory::MockMemory) {
+        self.memory_fixture = Some(memory);
     }
 
     #[cfg(test)]
@@ -488,7 +498,21 @@ impl Demo {
     ) -> Vec<String> {
         let mut lines = Vec::new();
         self.note_chat(&mut lines, prepared);
-        match self.session.ask(text, complete) {
+        let appendix = {
+            #[cfg(test)]
+            {
+                if let Some(memory) = self.memory_fixture.as_ref() {
+                    softwake_memory::recall_for_prompt(memory, text)
+                } else {
+                    crate::chat::disk_memory_appendix(text)
+                }
+            }
+            #[cfg(not(test))]
+            {
+                crate::chat::disk_memory_appendix(text)
+            }
+        };
+        match self.session.ask(text, &appendix, complete) {
             Ok(reply) => lines.push(format!("assistant: {reply}")),
             Err(error) => {
                 let rejected = format!("rejected: {error}");

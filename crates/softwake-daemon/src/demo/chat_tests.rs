@@ -325,3 +325,120 @@ fn sleep_after_ask_refuses_the_next_ask_without_a_post() {
     assert_eq!(demo.chat_posts().len(), 1);
     assert_eq!(demo.session_phase(), SessionPhase::Closed);
 }
+
+#[test]
+fn ask_with_mock_memory_appends_budgeted_hits_after_the_pack() {
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    install(
+        &mut demo,
+        xai_handle(
+            "grok-4.5",
+            &["grok-4.5"],
+            Some(true),
+            Some("sk-test-secret"),
+        ),
+        pong_body(),
+    );
+    let mut memory = softwake_memory::MockMemory::enabled();
+    memory
+        .remember("garage code is on the hook")
+        .expect("remember garage");
+    memory
+        .remember("wifi password is secret")
+        .expect("remember wifi");
+    memory
+        .remember("garage door opens at dusk")
+        .expect("remember dusk");
+    demo.install_memory_fixture(memory);
+    wake(&mut demo);
+    let result = demo.handle_line("ask garage", Duration::ZERO);
+    assert_eq!(result.lines[0], "assistant: pong");
+    let body: serde_json::Value = serde_json::from_str(&demo.chat_posts()[0].body).expect("json");
+    let system = body["messages"][0]["content"].as_str().expect("system");
+    let pack = demo.session_instructions().expect("pack");
+    assert!(system.starts_with(pack));
+    assert!(system.contains(softwake_memory::RECALL_LEAD));
+    assert!(system.contains("garage code is on the hook"));
+    assert!(system.contains("garage door opens at dusk"));
+    assert!(!system.contains("wifi password"));
+    assert_eq!(body["messages"][1]["content"].as_str(), Some("garage"));
+}
+
+#[test]
+fn ask_with_empty_query_hits_or_disabled_memory_leaves_pack_alone() {
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    install(
+        &mut demo,
+        xai_handle(
+            "grok-4.5",
+            &["grok-4.5"],
+            Some(true),
+            Some("sk-test-secret"),
+        ),
+        pong_body(),
+    );
+    // Disabled memory: fail-open, pack unchanged.
+    demo.install_memory_fixture(softwake_memory::MockMemory::default());
+    wake(&mut demo);
+    let result = demo.handle_line("ask hello", Duration::ZERO);
+    assert_eq!(result.lines[0], "assistant: pong");
+    let body: serde_json::Value = serde_json::from_str(&demo.chat_posts()[0].body).expect("json");
+    assert_eq!(
+        body["messages"][0]["content"].as_str(),
+        demo.session_instructions()
+    );
+}
+
+#[test]
+fn ask_with_file_memory_temp_dir_attaches_substring_hits() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let dir =
+        std::env::temp_dir().join(format!("softwake-daemon-memory-{}-{n}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join(softwake_memory::MEMORY_FILE_NAME);
+    {
+        let mut memory = softwake_memory::FileMemory::open_enabled(&path).expect("open");
+        memory.remember("alpha token one").expect("a");
+        memory.remember("beta other").expect("b");
+        memory.remember("alpha token two").expect("c");
+    }
+
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    install(
+        &mut demo,
+        xai_handle(
+            "grok-4.5",
+            &["grok-4.5"],
+            Some(true),
+            Some("sk-test-secret"),
+        ),
+        pong_body(),
+    );
+    // Drive the explicit path helper, then install matching MockMemory so ask
+    // sees the same appendix the disk helper would produce for that file.
+    let appendix = crate::chat::memory_appendix_at_path(&path, "alpha");
+    assert!(appendix.contains("alpha token one"));
+    assert!(appendix.contains("alpha token two"));
+    assert!(!appendix.contains("beta other"));
+    assert!(crate::chat::memory_appendix_at_path(&path, "").is_empty());
+    assert!(crate::chat::memory_appendix_at_path(&dir.join("missing.json"), "alpha").is_empty());
+
+    let mut memory = softwake_memory::MockMemory::enabled();
+    memory.remember("alpha token one").expect("a");
+    memory.remember("beta other").expect("b");
+    memory.remember("alpha token two").expect("c");
+    demo.install_memory_fixture(memory);
+    wake(&mut demo);
+    let _ = demo.handle_line("ask alpha", Duration::ZERO);
+    let body: serde_json::Value = serde_json::from_str(&demo.chat_posts()[0].body).expect("json");
+    let system = body["messages"][0]["content"].as_str().expect("system");
+    assert_eq!(
+        system,
+        &softwake_session::assemble_system(demo.session_instructions().expect("pack"), &appendix,)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

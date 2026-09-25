@@ -2821,6 +2821,7 @@ dependencies = [
  "softwake-audio",
  "softwake-connectors",
  "softwake-ipc",
+ "softwake-memory",
  "softwake-policy",
  "softwake-providers",
  "softwake-session",
