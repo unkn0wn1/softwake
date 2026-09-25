@@ -33,7 +33,7 @@ Keep crates small and single-purpose. Exact names can shift; responsibilities sh
 | `softwake-voice` | Awake STT/TTS boundary (mock default; sherpa stubs feature-gated; [ADR 0007](ADR-0007-awake-stt-tts.md)) |
 | `softwake-wake` | Local wake/sleep phrases. Text table for the typed demo. PCM seam for sherpa-onnx keyword spotting ([ADR 0006](ADR-0006-on-device-wake.md)) |
 | `softwake-session` | Text session for one awake period. Stores rendered soul instructions. No model client yet |
-| `softwake-tools` | Tool registry with safe, confirm, and deny metadata. `echo` is safe, `notify` waits for confirmation, `shell` is denied |
+| `softwake-tools` | Tool registry with safe, confirm, and deny metadata. `echo` is safe, `notify` and `email_send` wait for confirmation, `shell` is denied |
 | `softwake-connectors` | World I/O boundary. Email trait and in-memory mock. Registry is confirm or deny. No live cloud client in the default build ([ADR 0008](ADR-0008-connector-boundary.md)) |
 | `softwake-soul` | Load/validate soul pack; render system instructions |
 | `softwake-ipc` | Shared protocol: newline-delimited JSON over a Unix socket |
@@ -84,14 +84,15 @@ Unix domain socket and newline-delimited JSON, protocol version 1. The path, fra
 - Tools are named and carry a risk: safe, confirm, or deny ([ADR 0005](ADR-0005-tool-confirmation.md)). Phase 1's only tool was `echo` ([ADR 0004](ADR-0004-first-safe-tool.md)).
 - `echo` is safe. With no arguments it returns `pong`. With arguments it returns `echo:` plus those arguments joined by spaces. It does not touch a shell, the filesystem, the clipboard, or an audio device.
 - `notify` is confirm-gated. It appends one line to an in-memory sink only after `confirm_tool`. `shell` is denied and never runs.
+- `email_send` is confirm-gated. Arguments are a recipient, a subject, and a body. It appends one message to an in-memory outbox only after `confirm_tool` ([ADR 0008](ADR-0008-connector-boundary.md)).
 - The daemon calls `permit_tool_dispatch` first. Sleep and hibernate refuse every tool and clear a pending confirmation. An unknown name is refused while awake. One confirmation may be pending; a second confirm-gated request is rejected.
 - Entering awake opens a text session with the rendered soul instructions. Sleep, and hibernate from awake, close that session.
-- Dangerous tools (a real shell, send email, delete files) stay denied until a later ADR gives them a confirm path. Confirmation here does not make `shell` runnable.
+- A real shell and deleting files stay denied until a later ADR gives them a confirm path. `email_send` is the confirm path for one in-memory message ([ADR 0008](ADR-0008-connector-boundary.md)). Confirmation here does not make `shell` runnable.
 - “Full device control” is a product vision, not an architecture excuse to skip the registry.
 
 ## Connectors
 
-World I/O is a library boundary in `softwake-connectors` ([ADR 0008](ADR-0008-connector-boundary.md)). `softwaked` does not call that crate yet. The registry is confirm or deny: `email` / `send` is confirm, and `email` / `delete`, `drive` / `list`, and `calendar` / `list` are deny. `MockEmail` appends to an in-memory outbox when the caller sends after authorization. The registry methods themselves do not send. A live backend, when one exists, is an opt-in feature that CI does not enable. The default mock does not open a socket. Protocol generation stays 1; connector actions are not socket commands.
+World I/O is a library boundary in `softwake-connectors` ([ADR 0008](ADR-0008-connector-boundary.md)). The daemon calls that crate from `Hands` when a confirmed `email_send` runs: `authorize_confirmed` for `email` / `send`, then `EmailConnector::send` on a `MockEmail`. The registry is confirm or deny: `email` / `send` is confirm, and `email` / `delete`, `drive` / `list`, and `calendar` / `list` are deny. `MockEmail` appends to an in-memory outbox when the caller sends after authorization. The registry methods themselves do not send. A live backend, when one exists, is an opt-in feature that CI does not enable. The default mock does not open a socket. Protocol generation stays 1; connector actions are not socket commands.
 
 ## Config layout (draft)
 

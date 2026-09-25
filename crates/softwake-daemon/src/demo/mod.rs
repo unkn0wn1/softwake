@@ -18,7 +18,8 @@
 //! Entering awake opens a text session with those instructions. Sleep and
 //! hibernate close it and drop a pending confirmation. `tool` runs a safe tool
 //! while awake. A confirm-gated tool waits for `confirm` or `confirm-tool`.
-//! `cancel` clears that pending call without running it.
+//! `cancel` clears that pending call without running it. `email_send` appends
+//! one in-memory message only after that confirm.
 
 use std::time::Duration;
 
@@ -304,6 +305,11 @@ impl Demo {
     #[cfg(test)]
     fn notifications(&self) -> Vec<String> {
         self.hands.notifications().iter().cloned().collect()
+    }
+
+    #[cfg(test)]
+    fn outbox(&self) -> Vec<softwake_connectors::OutboundEmail> {
+        self.hands.outbox().to_vec()
     }
 
     fn voice(&mut self, command: VoiceCommand) -> Vec<String> {
@@ -642,6 +648,12 @@ impl Demo {
         }
         if let Some(notification) = self.hands.notifications().back() {
             lines.push(format!("notification: {notification}"));
+        }
+        if let Some(message) = self.hands.outbox().last() {
+            lines.push(format!(
+                "email: {} | {} | {}",
+                message.to, message.subject, message.body
+            ));
         }
         if let Some(said) = self.tts.spoken().last() {
             lines.push(format!("last said: {said}"));

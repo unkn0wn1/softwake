@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 rust-version.workspace = true
-description = "Tool registry. echo is safe, notify waits for confirmation, shell is denied."
+description = "Tool registry. echo is safe, notify and email_send wait for confirmation, shell is denied."
 
 [dependencies]
 thiserror.workspace = true

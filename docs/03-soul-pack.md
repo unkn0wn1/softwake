@@ -19,7 +19,7 @@ Both are required for a valid pack. Missing files → daemon refuses to enter **
 | `tools.md` or policy TOML | Human-readable tool policy mirroring allowlists |
 | `AGENTS.md`-style lane rules | Optional; keep out of phase 1 unless needed |
 
-Connector policy lives in `softwake-connectors` until a tool name is bound ([ADR 0008](ADR-0008-connector-boundary.md)). The runtime policy stub stays the phase-2 tool line (`echo`, `notify`, `shell`).
+The runtime policy stub names `echo` (safe), `notify` (confirm), `email_send` (confirm), and `shell` (deny). `email_send` runs only after `confirm_tool` ([ADR 0008](ADR-0008-connector-boundary.md)).
 
 When memory lands, it must be a **separate module** with clear read/write APIs. Do not stuff memory retrieval into `softwake-soul` parsing. Soul pack renders instructions; memory supplies retrieved snippets the session layer attaches.
 
@@ -31,7 +31,7 @@ When memory lands, it must be a **separate module** with clear read/write APIs. 
 4. Render one system instruction document with three sections:
    - Identity (`soul.md`)
    - User profile (`user.md`)
-   - Runtime policy stub (state: awake; `echo` safe, `notify` confirm, `shell` deny; `notify` runs only after `confirm_tool`)
+   - Runtime policy stub (state: awake; `echo` safe, `notify` and `email_send` confirm, `shell` deny; `notify` and `email_send` run only after `confirm_tool`)
 5. A missing or invalid pack **refuses awake**. Hibernate, sleep, and UI resume still run. The machine is not left half-awake.
 
 ## Directory

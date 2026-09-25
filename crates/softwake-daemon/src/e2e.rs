@@ -446,3 +446,96 @@ fn ctl_cancel_and_hibernate_clear_a_pending_notification() {
     drop(watcher);
     drop(server);
 }
+
+#[test]
+fn ctl_email_send_confirms_once() {
+    let temp = TempSocket::new();
+    let soul = TestSoulDir::valid();
+    let server = serve::spawn(temp.path.clone(), soul.soul_dir()).expect("serve");
+    let woke = server.wake_phrase_for_test();
+    assert!(woke.body.status().is_some(), "wake should apply: {woke:?}");
+
+    let mut watcher = Client::connect(temp.path()).expect("watcher");
+    watcher
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("timeout");
+
+    let args = vec![
+        "ada@example.com".to_owned(),
+        "hello".to_owned(),
+        "a short note".to_owned(),
+    ];
+    let pending = ctl::call_tool(temp.path(), "email_send", &args).expect("pending");
+    assert_eq!(
+        pending.message.as_deref(),
+        Some("pending confirmation 1 for email_send")
+    );
+    let waiting = pending.pending_tool.clone().expect("pending tool");
+    assert_eq!(waiting.pending_id, "1");
+    assert_eq!(waiting.name, "email_send");
+    assert_eq!(waiting.args, args);
+    let printed = ctl::format_status(&pending);
+    assert!(
+        printed.contains("pending: 1 email_send ada@example.com hello a short note"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("last tool: email_send confirm pending"),
+        "{printed}"
+    );
+    match watcher.read().expect("pending event") {
+        ServerMessage::Event {
+            body: Event::ToolConfirmPending {
+                pending_id, name, ..
+            },
+        } => {
+            assert_eq!(pending_id, "1");
+            assert_eq!(name, "email_send");
+        }
+        other => panic!("expected tool_confirm_pending, got {other:?}"),
+    }
+
+    let confirmed = ctl::call_confirm(temp.path(), "1").expect("confirm");
+    assert_eq!(confirmed.message.as_deref(), Some("sent 1"));
+    assert!(confirmed.pending_tool.is_none());
+    assert_eq!(
+        confirmed.last_tool.as_deref(),
+        Some("email_send confirm confirmed")
+    );
+    match watcher.read().expect("resolved") {
+        ServerMessage::Event {
+            body:
+                Event::ToolConfirmResolved {
+                    pending_id,
+                    accepted: true,
+                },
+        } => assert_eq!(pending_id, "1"),
+        other => panic!("expected tool_confirm_resolved, got {other:?}"),
+    }
+    match watcher.read().expect("started") {
+        ServerMessage::Event {
+            body: Event::ToolStarted { name },
+        } => assert_eq!(name, "email_send"),
+        other => panic!("expected tool_started, got {other:?}"),
+    }
+    match watcher.read().expect("finished") {
+        ServerMessage::Event {
+            body: Event::ToolFinished { name, detail },
+        } => {
+            assert_eq!(name, "email_send");
+            assert_eq!(detail.as_deref(), Some("sent 1"));
+        }
+        other => panic!("expected tool_finished, got {other:?}"),
+    }
+
+    let spent = ctl::call_confirm(temp.path(), "1").expect_err("spent");
+    assert!(
+        spent
+            .to_string()
+            .contains("unknown pending confirmation: 1"),
+        "{spent}"
+    );
+
+    drop(watcher);
+    drop(server);
+}

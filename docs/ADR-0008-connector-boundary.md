@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-25
+- **Amended:** 2026-09-25 (`email_send` on the tool bus)
 
 ## Decision
 
@@ -28,9 +29,15 @@ Lookup is the pair `(connector, action)`. Matching is case-sensitive. `gmail` / 
 
 The default build has no live Gmail, Drive, or Calendar client, no OAuth types, and no connector feature flag. CI does not set credentials and does not enable a network backend.
 
-The daemon, IPC, typed demo, window, and soul policy string do not change. Protocol generation stays `1`. `softwake-connectors` does not depend on `softwake-tools`, and `softwake-tools` does not depend on `softwake-connectors`.
+`email_send` is the confirm-gated tool on the bus from [ADR 0005](ADR-0005-tool-confirmation.md). Its arguments are `to`, `subject`, and `body`: the first argument, the second argument, and the rest joined by one space. Fewer than three arguments is refused while awake and does not stage a confirmation. The strings are stored unchanged.
 
-A later slice may add a confirm-gated tool whose handler calls `authorize_confirmed` and then `EmailConnector::send`. That slice still runs `permit_tool_dispatch` first, keeps the tool at confirm or deny, and updates the soul policy line. If a deny row in the table above becomes confirm, that slice updates this ADR. `shell` stays deny. `email` / `send` is not a shell and is not a tool name in this slice.
+The handler lives on daemon `Hands`, beside the notification sink. `Hands` holds a `MockEmail` and a `ConnectorRegistry`. `permit_tool_dispatch` runs first. A blind request stages one pending confirmation and does not send. After the operator accepts, the handler parses the stored arguments, calls `invoke_confirmed`, then `authorize_confirmed` for `email` / `send`, then `EmailConnector::send`. The pending record is cleared only after that append. Cancel, and leaving awake, clear the record and do not send.
+
+`softwake-tools` parses those arguments and does not depend on `softwake-connectors`. `softwake-connectors` does not depend on `softwake-tools`. The mock value stays in the daemon.
+
+IPC protocol generation stays `1`. `email_send` uses the existing tool messages. The outbox is not a status field. The window already shows a pending confirmation and the confirm detail.
+
+The soul runtime policy names `email_send` as confirm, beside `notify`. `shell` stays deny. A deny row in the table above stays deny until a later change to this ADR. `email` / `send` is the connector pair. It is not the tool name, and it is not a shell.
 
 ## Context
 
@@ -50,16 +57,31 @@ The same rule as [ADR 0006](ADR-0006-on-device-wake.md) and [ADR 0007](ADR-0007-
 - Honcho, or a memory ADR, in this slice. Rejected. Memory is a different boundary.
 - A permit-token type inside this crate. Rejected. [ADR 0005](ADR-0005-tool-confirmation.md) keeps the token in the daemon. A second token scheme with no daemon caller is extra machinery.
 - Call Gmail from `softwake-tools`. Rejected. The tool crate stays free of world I/O types.
+- Put `MockEmail` inside `softwake-tools` when the tool is wired. Rejected. The notification sink already lives on the daemon, and a tools dependency on connectors would undo this boundary.
 
 ## How to demo
 
-There is no new typed-demo command. The proof is the crate tests:
+Copy the soul templates, then run the typed demo:
+
+```bash
+mkdir -p ~/.config/softwake/soul
+cp soul/soul.md soul/user.md ~/.config/softwake/soul/
+cargo run -p softwake-daemon -- demo
+```
+
+```text
+> wake
+> tool email_send ada@example.com hello a short note
+> confirm
+```
+
+`tool email_send ada@example.com hello a short note` prints a pending id and `waiting for confirm`. The `email:` line appears only after `confirm`. `cancel` prints a cancellation and does not append. The same call while asleep or hibernating is refused.
+
+The registry itself is still proven without the daemon:
 
 ```bash
 cargo test -p softwake-connectors
 ```
-
-The existing `softwaked demo` transcript is unchanged (`echo`, `notify`, `shell`).
 
 ## Consequences
 
@@ -67,4 +89,5 @@ The existing `softwaked demo` transcript is unchanged (`echo`, `notify`, `shell`
 - A live backend, when it exists, is a non-default feature, off in CI, behind a follow-up ADR, and it implements `EmailConnector` rather than a new registry vendor name.
 - `drive` / `list` and `calendar` / `list` stay deny until that follow-up adds a backend and changes the row on purpose.
 - The in-memory outbox dies with the value. This slice does not write a mailbox file.
-- Clients that speak protocol generation 1 see no new messages. Connector actions are not on the socket.
+- Confirming `email_send` appends one message on the daemon's `MockEmail`. A second confirm of that id does not append again.
+- Clients that speak protocol generation 1 see no new message kinds. `email_send` is a name on the existing tool messages. Connector actions are not socket commands.

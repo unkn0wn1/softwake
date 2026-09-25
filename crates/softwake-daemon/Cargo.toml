@@ -16,6 +16,7 @@ path = "src/lib.rs"
 
 [dependencies]
 softwake-audio.workspace = true
+softwake-connectors.workspace = true
 softwake-ipc.workspace = true
 softwake-session.workspace = true
 softwake-soul.workspace = true

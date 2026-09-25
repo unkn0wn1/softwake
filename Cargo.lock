@@ -2758,6 +2758,7 @@ name = "softwake-daemon"
 version = "0.1.0"
 dependencies = [
  "softwake-audio",
+ "softwake-connectors",
  "softwake-ipc",
  "softwake-session",
  "softwake-soul",

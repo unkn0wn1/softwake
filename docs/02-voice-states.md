@@ -22,7 +22,7 @@ Three states. Names are fixed vocabulary for UI, logs, and docs.
 - Acting session starts. Phase 1 opens a text session and stores the rendered soul instructions. It can record a synthetic user turn. It does not call a model.
 - Streaming STT/TTS may act ([ADR 0007](ADR-0007-awake-stt-tts.md)). The default path is mock inject (`hear`) and mock record (`say`). Prefer silence for TTS outside awake.
 - The soul pack last read at startup or by `reload_soul` is applied as system instructions for this session. A reload during awake waits for the next awake entry and does not replace the instructions already stored on the open session.
-- Tools may run only while awake and only when the registry allows them. `echo` is safe and runs immediately. `notify` waits for `confirm_tool`. `shell` is denied and never runs ([ADR 0004](ADR-0004-first-safe-tool.md), [ADR 0005](ADR-0005-tool-confirmation.md)). Sleep and hibernate also drop a pending confirmation.
+- Tools may run only while awake and only when the registry allows them. `echo` is safe and runs immediately. `notify` and `email_send` wait for `confirm_tool`. `shell` is denied and never runs ([ADR 0004](ADR-0004-first-safe-tool.md), [ADR 0005](ADR-0005-tool-confirmation.md), [ADR 0008](ADR-0008-connector-boundary.md)). Sleep and hibernate also drop a pending confirmation.
 - Sleep phrase (or explicit UI control) returns to **sleep**: close the acting session; keep capture + wake engine.
 
 ## Hibernate
