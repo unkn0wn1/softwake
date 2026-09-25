@@ -4,3 +4,7 @@ Short names for paths. A whole token expands before a confirm readback. Put real
 
 docs → /path/to/docs
 notes → /path/to/notes
+
+# Host aliases (optional). Whole-token expand before confirm-echo.
+# aau → ssh -l root aau
+

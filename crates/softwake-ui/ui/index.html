@@ -17,6 +17,7 @@
           <button type="button" class="nav-sub-action btn-compact" id="profile-create" title="Create profile">+ New</button>
         </div>
         <button type="button" class="nav" id="nav-providers" data-pane="providers">Providers</button>
+        <button type="button" class="nav" id="nav-tools" data-pane="tools">Tools</button>
         <button type="button" class="nav" id="nav-email" data-pane="email">Email</button>
         <button type="button" class="nav" id="nav-status" data-pane="status" aria-current="page">Status</button>
       </nav>
@@ -139,6 +140,37 @@
           <p id="provider-error" class="error" role="status"></p>
           <p id="plaintext-warning" class="detail"></p>
           <button type="button" id="use-plaintext-file" class="hidden" hidden>Use plaintext file</button>
+        </section>
+
+        
+        <section id="pane-tools" class="pane glass hidden" hidden aria-labelledby="tools-title">
+          <h2 id="tools-title">Tools</h2>
+          <p class="meta">
+            Softwake is not full machine access. Tools stay off until you enable them here.
+            Shell (including ssh via a glossary alias) always confirm-echoes by default.
+            Add host aliases in the active profile <strong>glossary.md</strong>, then Reload soul.
+          </p>
+          <label class="field row-check">
+            <input id="tools-shell-enabled" type="checkbox" />
+            <span>Enable shell (ssh-capable, confirm-gated)</span>
+          </label>
+          <label class="field">
+            <span>Confirm policy</span>
+            <select id="tools-confirm-policy">
+              <option value="always">Always confirm (default)</option>
+              <option value="mutating_only">Mutating / remote only</option>
+              <option value="allowlisted_quiet">Allowlisted quiet (same as mutating-only in v1)</option>
+            </select>
+          </label>
+          <p class="meta">
+            Glossary format: <code>aau → ssh -l root aau</code> (or ASCII <code>-&gt;</code>).
+            Spoken: “ssh to aau and check swap” expands, then waits for Confirm on Status.
+          </p>
+          <div class="row">
+            <button type="button" class="btn" id="tools-save">Save Tools</button>
+          </div>
+          <p id="tools-status" class="meta" aria-live="polite"></p>
+          <p id="tools-error" class="error" role="alert"></p>
         </section>
 
         <section id="pane-email" class="pane glass hidden" hidden aria-labelledby="email-title">

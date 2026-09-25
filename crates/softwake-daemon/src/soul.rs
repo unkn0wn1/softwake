@@ -118,6 +118,12 @@ impl LoadedSoul {
         self.applied.as_deref()
     }
 
+    /// Last loaded pack, when the read succeeded.
+    #[must_use]
+    pub(crate) fn pack(&self) -> Option<&softwake_soul::SoulPack> {
+        self.pack.as_ref()
+    }
+
     fn read(&mut self) {
         match self.dir.load() {
             Ok(pack) => {

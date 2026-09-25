@@ -249,11 +249,39 @@ impl Runtime {
         if self.session.phase() != SessionPhase::Open {
             return Self::chat_rejected("session is closed");
         }
+        if let Some(outcome) = self.try_shell_ask(text) {
+            return outcome;
+        }
         #[cfg(test)]
         if self.chat_fixture.is_some() {
             return self.ask_fixture(text);
         }
         self.ask_disk(text)
+    }
+
+    /// When Tools→shell is enabled, turn clear shell/ssh ask lines into a gated tool call.
+    fn try_shell_ask(&mut self, text: &str) -> Option<Outcome> {
+        self.sync_shell_glossary();
+        let Ok(settings) = softwake_tools::resolve_tools_file()
+            .and_then(softwake_tools::FileToolsSettings::new)
+            .and_then(|store| store.load())
+        else {
+            return None;
+        };
+        if !settings.shell_enabled {
+            return None;
+        }
+        let command = crate::shell_intent::propose_shell_command(text, self.hands.glossary())?;
+        let step = self
+            .hands
+            .request(&self.machine, softwake_tools::SHELL_TOOL, &[command]);
+        Some(self.outcome_for_request(step))
+    }
+
+    fn sync_shell_glossary(&mut self) {
+        if let Some(pack) = self.soul.pack() {
+            self.hands.set_glossary(pack.aliases().clone());
+        }
     }
 
     fn chat_rejected(message: &str) -> Outcome {
@@ -710,6 +738,7 @@ impl Runtime {
             Ok(applied) => {
                 if event == Event::WakePhrase {
                     self.soul.commit_awake();
+                    self.sync_shell_glossary();
                 }
                 let cleared = self.apply_effects(applied.effects);
                 let state = wire_state(self.machine.state());
@@ -951,9 +980,9 @@ fn tool_ipc_error(error: &DispatchError) -> IpcError {
             pending_id: pending_id.clone(),
             state: wire_state(*state),
         },
-        DispatchError::InvalidArgs { .. } | DispatchError::Connector { .. } => {
-            IpcError::protocol(error.to_string())
-        }
+        DispatchError::InvalidArgs { .. }
+        | DispatchError::Connector { .. }
+        | DispatchError::Shell { .. } => IpcError::protocol(error.to_string()),
     }
 }
 

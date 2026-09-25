@@ -24,6 +24,7 @@ softwake-connectors.workspace = true
 softwake-ipc.workspace = true
 softwake-providers = { workspace = true }
 softwake-soul.workspace = true
+softwake-tools.workspace = true
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "=2.5.5"
 url = "2"

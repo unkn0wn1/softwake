@@ -13,6 +13,7 @@ mod oauth_open;
 mod pack;
 mod profiles;
 mod providers;
+mod tools;
 mod tray;
 
 use tauri::{
@@ -69,6 +70,8 @@ pub fn run() {
             profiles::profile_set_active,
             profiles::pack_snapshot,
             profiles::pack_save,
+            tools::tools_snapshot,
+            tools::tools_save,
         ])
         .setup(|app| {
             tray::install(app.handle())?;
@@ -286,6 +289,8 @@ mod tests {
         "profile_set_active",
         "pack_snapshot",
         "pack_save",
+        "tools_snapshot",
+        "tools_save",
     ];
 
     const PERMISSIONS: &[&str] = &[
@@ -329,6 +334,8 @@ mod tests {
         "allow-profile-set-active",
         "allow-pack-snapshot",
         "allow-pack-save",
+        "allow-tools-snapshot",
+        "allow-tools-save",
     ];
 
     #[test]

@@ -234,7 +234,7 @@ mod tests {
         assert_eq!(eval_tool(&engine, ECHO_TOOL), PolicyDecision::Safe);
         assert_eq!(eval_tool(&engine, NOTIFY_TOOL), PolicyDecision::Confirm);
         assert_eq!(eval_tool(&engine, EMAIL_SEND_TOOL), PolicyDecision::Confirm);
-        assert_eq!(eval_tool(&engine, SHELL_TOOL), PolicyDecision::Deny);
+        assert_eq!(eval_tool(&engine, SHELL_TOOL), PolicyDecision::Confirm);
         assert_eq!(
             eval_connector(&engine, EMAIL, EMAIL_SEND),
             PolicyDecision::Confirm
@@ -358,13 +358,17 @@ mod tests {
         );
         assert_eq!(
             eval_tool(&tool_engine(SHELL_TOOL, PolicyDecision::Safe), SHELL_TOOL),
-            PolicyDecision::Deny
+            PolicyDecision::Confirm
         );
         assert_eq!(
             eval_tool(
                 &tool_engine(SHELL_TOOL, PolicyDecision::Confirm),
                 SHELL_TOOL
             ),
+            PolicyDecision::Confirm
+        );
+        assert_eq!(
+            eval_tool(&tool_engine(SHELL_TOOL, PolicyDecision::Deny), SHELL_TOOL),
             PolicyDecision::Deny
         );
     }
