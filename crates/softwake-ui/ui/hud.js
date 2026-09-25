@@ -7,12 +7,14 @@ const input = document.querySelector("#ask-input");
 const replyEl = document.querySelector("#reply");
 
 const IDLE_MS = 4000;
+const POST_ASK_IDLE_MS = 12000;
 const particles = [];
 let level = 0.02;
 let state = "sleep";
 let captureRunning = false;
 let expanded = false;
 let idleTimer = null;
+let idleMs = IDLE_MS;
 let raf = 0;
 
 function invoke(command, args) {
@@ -104,9 +106,24 @@ function tick() {
   raf = requestAnimationFrame(tick);
 }
 
+async function applyWindowLayout(next) {
+  try {
+    await invoke("hud_set_layout", { expanded: next });
+  } catch (_error) {
+    // Layout still updates in-page if the window bridge rejects.
+  }
+}
+
 function setExpanded(next) {
+  if (expanded === next) {
+    if (next) {
+      bumpIdle();
+    }
+    return;
+  }
   expanded = next;
   capsule.classList.toggle("expanded", next);
+  void applyWindowLayout(next);
   if (next) {
     strip.hidden = false;
     strip.classList.remove("fading");
@@ -114,6 +131,7 @@ function setExpanded(next) {
     bumpIdle();
   } else {
     strip.classList.add("fading");
+    idleMs = IDLE_MS;
     window.setTimeout(() => {
       if (!expanded) {
         strip.hidden = true;
@@ -125,7 +143,10 @@ function setExpanded(next) {
   }
 }
 
-function bumpIdle() {
+function bumpIdle(ms) {
+  if (typeof ms === "number") {
+    idleMs = ms;
+  }
   if (idleTimer) {
     window.clearTimeout(idleTimer);
   }
@@ -135,7 +156,7 @@ function bumpIdle() {
       return;
     }
     setExpanded(false);
-  }, IDLE_MS);
+  }, idleMs);
 }
 
 async function refresh() {
@@ -151,6 +172,13 @@ async function refresh() {
   }
 }
 
+function isTypingTarget(target) {
+  if (!target || !(target instanceof Element)) {
+    return false;
+  }
+  return !!target.closest("input, textarea, button, select, [contenteditable], #ask-form");
+}
+
 capsule.addEventListener("click", (event) => {
   if (event.target.closest("#ask-form") || event.target.closest(".reply")) {
     return;
@@ -159,14 +187,23 @@ capsule.addEventListener("click", (event) => {
 });
 
 capsule.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    setExpanded(!expanded);
+  if (event.key !== "Enter" && event.key !== " ") {
+    return;
   }
+  // Space/Enter on the capsule toggles expand. Never steal keys from the ask field.
+  if (event.target !== capsule || isTypingTarget(event.target)) {
+    return;
+  }
+  event.preventDefault();
+  setExpanded(!expanded);
 });
 
-input.addEventListener("input", bumpIdle);
-input.addEventListener("focus", bumpIdle);
+input.addEventListener("input", () => bumpIdle());
+input.addEventListener("focus", () => bumpIdle());
+input.addEventListener("keydown", (event) => {
+  // Stop capsule handlers from seeing Space/Enter while typing.
+  event.stopPropagation();
+});
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -174,21 +211,27 @@ form.addEventListener("submit", async (event) => {
   if (!text) {
     return;
   }
-  bumpIdle();
+  setExpanded(true);
+  bumpIdle(POST_ASK_IDLE_MS);
   replyEl.classList.remove("error");
   replyEl.textContent = "…";
   try {
     const status = await invoke("hud_ask", { text });
-    const message = (status && (status.message || status.detail)) || "ok";
+    const message =
+      (status && (status.message || status.detail)) || "(no reply text)";
     replyEl.textContent = message;
     input.value = "";
     await refresh();
   } catch (error) {
     replyEl.classList.add("error");
     replyEl.textContent =
-      typeof error === "string" ? error : error && error.message ? error.message : "ask failed";
+      typeof error === "string"
+        ? error
+        : error && error.message
+          ? error.message
+          : "ask failed";
   }
-  bumpIdle();
+  bumpIdle(POST_ASK_IDLE_MS);
 });
 
 refresh();

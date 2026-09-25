@@ -13,7 +13,9 @@ mod pack;
 mod providers;
 mod tray;
 
-use tauri::{WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{
+    AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+};
 
 /// Open the Softwake tray, HUD capsule, and Settings window.
 ///
@@ -36,6 +38,7 @@ pub fn run() {
             commands::ask,
             commands::hud_snapshot,
             commands::hud_ask,
+            commands::hud_set_layout,
             providers::provider_snapshot,
             providers::provider_select,
             providers::provider_set_key,
@@ -74,14 +77,62 @@ pub fn run() {
         .expect("softwake-ui failed to start");
 }
 
-fn open_hud(app: &tauri::AppHandle) -> tauri::Result<()> {
-    const HUD_W: f64 = 320.0;
-    const HUD_H: f64 = 120.0;
-    const MARGIN: f64 = 16.0;
+/// Collapsed HUD: bloom capsule only.
+const HUD_COLLAPSED_W: f64 = 220.0;
+const HUD_COLLAPSED_H: f64 = 96.0;
+/// Expanded HUD: bloom + type strip + reply.
+const HUD_EXPANDED_W: f64 = 320.0;
+const HUD_EXPANDED_H: f64 = 176.0;
+const HUD_MARGIN: f64 = 16.0;
 
+fn hud_logical_size(expanded: bool) -> (f64, f64) {
+    if expanded {
+        (HUD_EXPANDED_W, HUD_EXPANDED_H)
+    } else {
+        (HUD_COLLAPSED_W, HUD_COLLAPSED_H)
+    }
+}
+
+/// Bottom-right of the primary monitor work area (falls back to full monitor).
+///
+/// Uses [`tauri::Monitor::position`] / work area so multi-monitor layouts do not
+/// place the capsule on the wrong screen when primary is not at `(0, 0)`.
+fn primary_bottom_right(app: &AppHandle, width: f64, height: f64) -> Option<(f64, f64)> {
+    let monitor = app.primary_monitor().ok().flatten()?;
+    let scale = monitor.scale_factor();
+    let area = monitor.work_area();
+    let origin_x = f64::from(area.position.x) / scale;
+    let origin_y = f64::from(area.position.y) / scale;
+    let work_w = f64::from(area.size.width) / scale;
+    let work_h = f64::from(area.size.height) / scale;
+    let x = origin_x + work_w - width - HUD_MARGIN;
+    let y = origin_y + work_h - height - HUD_MARGIN;
+    Some((x, y))
+}
+
+/// Resize the HUD and re-anchor to the primary bottom-right corner.
+pub(crate) fn set_hud_layout(app: &AppHandle, expanded: bool) -> Result<(), String> {
+    let (width, height) = hud_logical_size(expanded);
+    let window = app
+        .get_webview_window("hud")
+        .ok_or_else(|| "HUD window is not open".to_owned())?;
+    window
+        .set_size(LogicalSize::new(width, height))
+        .map_err(|error| error.to_string())?;
+    if let Some((x, y)) = primary_bottom_right(app, width, height) {
+        window
+            .set_position(LogicalPosition::new(x, y))
+            .map_err(|error| error.to_string())?;
+    }
+    let _ = window.set_always_on_top(true);
+    Ok(())
+}
+
+fn open_hud(app: &AppHandle) -> tauri::Result<()> {
+    let (width, height) = hud_logical_size(false);
     let mut builder = WebviewWindowBuilder::new(app, "hud", WebviewUrl::App("hud.html".into()))
         .title("Softwake")
-        .inner_size(HUD_W, HUD_H)
+        .inner_size(width, height)
         .resizable(false)
         .decorations(false)
         .always_on_top(true)
@@ -90,12 +141,7 @@ fn open_hud(app: &tauri::AppHandle) -> tauri::Result<()> {
         .visible(true)
         .focused(false);
 
-    if let Ok(Some(monitor)) = app.primary_monitor() {
-        let size = monitor.size();
-        let scale = monitor.scale_factor();
-        let work_w = f64::from(size.width) / scale;
-        let x = work_w - HUD_W - MARGIN;
-        let y = MARGIN;
+    if let Some((x, y)) = primary_bottom_right(app, width, height) {
         builder = builder.position(x, y);
     }
 
@@ -117,6 +163,7 @@ mod tests {
         "ask",
         "hud_snapshot",
         "hud_ask",
+        "hud_set_layout",
         "provider_snapshot",
         "provider_select",
         "provider_set_key",
@@ -149,6 +196,7 @@ mod tests {
         "allow-ask",
         "allow-hud-snapshot",
         "allow-hud-ask",
+        "allow-hud-set-layout",
         "allow-provider-snapshot",
         "allow-provider-select",
         "allow-provider-set-key",

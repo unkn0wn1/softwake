@@ -211,3 +211,17 @@ pub fn hud_ask(text: String) -> Result<Status, String> {
         ),
     }
 }
+
+/// Resize and re-anchor the HUD capsule (collapsed bloom vs expanded ask strip).
+///
+/// # Errors
+///
+/// Returns a sentence when the HUD window is missing or the window API fails.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri injects an owned AppHandle into commands that touch windows"
+)]
+pub fn hud_set_layout(app: tauri::AppHandle, expanded: bool) -> Result<(), String> {
+    crate::set_hud_layout(&app, expanded)
+}

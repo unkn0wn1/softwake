@@ -142,3 +142,8 @@ commands.allow = ["hud_snapshot"]
 identifier = "allow-hud-ask"
 description = "Submit a typed line from the HUD (wake then ask from sleep)."
 commands.allow = ["hud_ask"]
+
+[[permission]]
+identifier = "allow-hud-set-layout"
+description = "Resize and re-anchor the HUD capsule when expanding or collapsing."
+commands.allow = ["hud_set_layout"]
