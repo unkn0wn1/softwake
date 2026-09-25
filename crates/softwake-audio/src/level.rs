@@ -46,10 +46,7 @@ mod tests {
     fn quieter_tone_is_between_zero_and_one() {
         let mut samples = [0_i16; 160];
         for (i, sample) in samples.iter_mut().enumerate() {
-            #[allow(
-                clippy::cast_precision_loss,
-                reason = "index 0..160 is exact in f32"
-            )]
+            #[allow(clippy::cast_precision_loss, reason = "index 0..160 is exact in f32")]
             let phase = (i as f32) * 2.0 * std::f32::consts::PI * 440.0 / 16_000.0;
             #[allow(
                 clippy::cast_possible_truncation,
