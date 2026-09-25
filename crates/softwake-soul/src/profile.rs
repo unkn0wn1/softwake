@@ -521,7 +521,10 @@ fn temp_sibling(path: &Path) -> Result<PathBuf, SoulError> {
     Ok(parent.join(temp_name))
 }
 
-#[allow(clippy::needless_pass_by_value, reason = "callers pass owned io::Error from map_err")]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "callers pass owned io::Error from map_err"
+)]
 fn config_io(path: &Path, source: std::io::Error) -> SoulError {
     SoulError::InvalidConfig {
         path: path.to_owned(),

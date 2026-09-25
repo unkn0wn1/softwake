@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use softwake_soul::{
-    create_profile, ensure_migrated, list_profiles, load_app_config,
-    profile_name_in, profile_pack_dir, rename_profile, resolve_config_dir, resolve_soul_dir,
-    set_active_profile, try_load,
+    create_profile, ensure_migrated, list_profiles, load_app_config, profile_name_in,
+    profile_pack_dir, rename_profile, resolve_config_dir, resolve_soul_dir, set_active_profile,
+    try_load,
 };
 
 use crate::pack::{self, PackSnapshot};
