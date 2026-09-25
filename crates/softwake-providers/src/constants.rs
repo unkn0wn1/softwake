@@ -47,5 +47,19 @@ pub const OPENAI_COMPATIBLE_CHAT_SEED: &str = "gpt-4.1-mini";
 /// Registry seed for xAI voice/STT when Test's catalog omits STT ids after a pass.
 pub const XAI_VOICE_SEED: &str = "grok-voice-transcribe-2.0";
 
+/// Default xAI text-to-speech voice id (`POST /v1/tts`).
+///
+/// Documented built-in on the xAI Voice API. Used only for the xAI family.
+pub const XAI_TTS_VOICE_EVE: &str = "eve";
+
+/// Built-in xAI TTS voice ids from the Voice API docs.
+///
+/// `eve` is the API default. The rest are documented built-ins (case-insensitive
+/// on the wire). This list is not a live `GET /v1/tts/voices` catalog.
+pub const XAI_TTS_VOICES: &[&str] = &[
+    "eve", "ara", "leo", "rex", "sal", "carina", "zagan", "helix", "orion", "luna", "iris",
+    "altair",
+];
+
 /// Registry seed for `OpenAI` voice/STT when Test's catalog omits STT ids after a pass.
 pub const OPENAI_VOICE_SEED: &str = "gpt-4o-transcribe-diarize";

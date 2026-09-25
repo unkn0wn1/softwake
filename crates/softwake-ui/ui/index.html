@@ -129,6 +129,13 @@
               <option value="">Test to load models</option>
             </select>
           </label>
+          <label class="field">
+            <span>TTS voice</span>
+            <select id="tts-voice-select" disabled>
+              <option value="">Eve (xAI default)</option>
+            </select>
+          </label>
+          <p id="tts-note" class="meta">Speech replies use the xAI voice Eve when the selected provider is xAI.</p>
           <p id="provider-error" class="error" role="status"></p>
           <p id="plaintext-warning" class="detail"></p>
           <button type="button" id="use-plaintext-file" class="hidden" hidden>Use plaintext file</button>

@@ -34,6 +34,8 @@ const providerTestBtn = document.querySelector("#provider-test");
 const testStatus = document.querySelector("#test-status");
 const modelSelect = document.querySelector("#model-select");
 const voiceModelSelect = document.querySelector("#voice-model-select");
+const ttsVoiceSelect = document.querySelector("#tts-voice-select");
+const ttsNote = document.querySelector("#tts-note");
 const providerError = document.querySelector("#provider-error");
 const emailLiveEnabled = document.querySelector("#email-live-enabled");
 const emailSmtpHost = document.querySelector("#email-smtp-host");
@@ -333,6 +335,34 @@ function renderProviders(snap) {
       ? snap.selected_voice_model
       : voiceModels[0];
   }
+
+  const ttsVoices = snap.tts_voices || [];
+  ttsVoiceSelect.innerHTML = "";
+  if (!snap.tts_available || ttsVoices.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "xAI only";
+    ttsVoiceSelect.appendChild(option);
+    ttsVoiceSelect.disabled = true;
+    ttsNote.textContent =
+      "TTS voice is for xAI. Eve speaks when the selected provider is xAI sign-in or an xAI API key.";
+  } else {
+    const fallback = document.createElement("option");
+    fallback.value = "";
+    fallback.textContent = "eve (default)";
+    ttsVoiceSelect.appendChild(fallback);
+    for (const id of ttsVoices) {
+      const option = document.createElement("option");
+      option.value = id;
+      option.textContent = id;
+      ttsVoiceSelect.appendChild(option);
+    }
+    ttsVoiceSelect.disabled = false;
+    const selected = snap.selected_tts_voice || "";
+    ttsVoiceSelect.value = ttsVoices.includes(selected) ? selected : "";
+    ttsNote.textContent =
+      "Ask replies are spoken with this xAI voice. Empty uses Eve.";
+  }
 }
 
 function clearOauthLink(snap) {
@@ -440,6 +470,10 @@ voiceModelSelect.addEventListener("change", () => {
     return;
   }
   providerAction("provider_set_voice_model", { modelId: voiceModelSelect.value });
+});
+
+ttsVoiceSelect.addEventListener("change", () => {
+  providerAction("provider_set_tts_voice", { voiceId: ttsVoiceSelect.value });
 });
 
 let profilesLoaded = false;

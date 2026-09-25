@@ -89,6 +89,11 @@ description = "Save the selected voice / STT model id."
 commands.allow = ["provider_set_voice_model"]
 
 [[permission]]
+identifier = "allow-provider-set-tts-voice"
+description = "Save the selected xAI TTS voice id."
+commands.allow = ["provider_set_tts_voice"]
+
+[[permission]]
 identifier = "allow-provider-opt-in-plaintext"
 description = "Opt in to a local plaintext secret file. The command writes no key."
 commands.allow = ["provider_opt_in_plaintext"]
@@ -142,6 +147,16 @@ commands.allow = ["hud_snapshot"]
 identifier = "allow-hud-ask"
 description = "Submit a typed line from the HUD (wake then ask from sleep)."
 commands.allow = ["hud_ask"]
+
+[[permission]]
+identifier = "allow-hud-talk-start"
+description = "Arm press-to-talk on the daemon (wake from sleep; refuse hibernate)."
+commands.allow = ["hud_talk_start"]
+
+[[permission]]
+identifier = "allow-hud-talk-stop"
+description = "Release press-to-talk, transcribe, ask, and speak the reply."
+commands.allow = ["hud_talk_stop"]
 
 [[permission]]
 identifier = "allow-hud-set-layout"

@@ -25,6 +25,7 @@ mod pcm;
 mod runtime;
 mod serve;
 mod soul;
+mod talk;
 
 #[cfg(test)]
 mod e2e;

@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-25
-- **Amended:** 2026-09-25. Session chat is [ADR 0013](ADR-0013-session-provider.md). OpenRouter and OpenAI-compatible (API key + base URL) join the Settings provider list. Provider secrets prefer the OS keyring, with an opt-in plaintext fallback. Settings now keep **two** Test catalogs and selections: chat (the acting session) and voice / STT. Live speech-to-text is not part of this crate. This record stays the Settings, Test, and secret-bag decision.
+- **Amended:** 2026-09-25. Session chat is [ADR 0013](ADR-0013-session-provider.md). OpenRouter and OpenAI-compatible (API key + base URL) join the Settings provider list. Provider secrets prefer the OS keyring, with an opt-in plaintext fallback. Settings keep **two** Test catalogs and selections: chat (the acting session) and voice / STT. A later amendment on the same date adds `selected_tts_voice` (empty means xAI `eve`) and optional `live-http` STT/TTS helpers. Live speech still belongs to [ADR 0007](ADR-0007-awake-stt-tts.md). This record stays the Settings, Test, and secret-bag decision.
 
 ## Decision
 
@@ -18,7 +18,7 @@ Five credential kinds ship in Settings:
 | `openrouter` | OpenRouter | API key |
 | `openai-compatible` | OpenAI-compatible | API key plus a configured base URL |
 
-Softwake has one acting **chat** model role for the session ([ADR 0013](ADR-0013-session-provider.md)). Settings also store a **voice / STT** model id and catalog so the operator can choose a speech-to-text model after Test. That picker is persistence and UI only: this crate does not run live STT or audio. On-device wake and awake STT stay in [ADR 0006](ADR-0006-on-device-wake.md) and [ADR 0007](ADR-0007-awake-stt-tts.md).
+Softwake has one acting **chat** model role for the session ([ADR 0013](ADR-0013-session-provider.md)). Settings also store a **voice / STT** model id and catalog so the operator can choose a speech-to-text model after Test. `selected_tts_voice` stores an xAI TTS voice id (document version stays 1; empty means `eve` when speaking). Live press-to-talk uses those fields only when `live-http` is on ([ADR 0007](ADR-0007-awake-stt-tts.md)). On-device wake stays in [ADR 0006](ADR-0006-on-device-wake.md).
 
 ### Sign-in and Test
 

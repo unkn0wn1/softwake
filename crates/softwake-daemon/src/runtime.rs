@@ -55,9 +55,15 @@ pub(crate) struct Runtime {
     hands: Hands,
     stt: MockStt,
     tts: MockTts,
+    talk: crate::talk::TalkSession,
+    /// Last playback error after a successful ask. Empty when speech played or was skipped.
+    last_speech_note: Option<String>,
     /// In-test provider. Absent in the serve binary, so ask uses the disk path.
     #[cfg(test)]
     chat_fixture: Option<crate::chat::ChatFixture>,
+    /// When set, `talk_stop` skips cloud STT and asks with this text.
+    #[cfg(test)]
+    talk_transcript: Option<String>,
 }
 
 impl Runtime {
@@ -90,8 +96,12 @@ impl Runtime {
             hands: Hands::from_disk(),
             stt: MockStt::default(),
             tts: MockTts::default(),
+            talk: crate::talk::TalkSession::default(),
+            last_speech_note: None,
             #[cfg(test)]
             chat_fixture: None,
+            #[cfg(test)]
+            talk_transcript: None,
         })
     }
 
@@ -220,13 +230,6 @@ impl Runtime {
         })
     }
 
-    fn ask_ok(&self, reply: String) -> Outcome {
-        Outcome {
-            body: ResponseBody::ok(self.snapshot(Some(reply), None)),
-            events: Vec::new(),
-        }
-    }
-
     #[cfg(test)]
     fn ask_fixture(&mut self, text: &str) -> Outcome {
         let extracted = self.chat_fixture.as_ref().map(|fixture| {
@@ -253,7 +256,7 @@ impl Runtime {
                         crate::chat::complete_fixture(&transport, &call, &bearer, system, user)
                     },
                 ) {
-                    Ok(reply) => self.ask_ok(reply),
+                    Ok(reply) => self.finish_ask_reply(reply),
                     Err(error) => Self::chat_rejected(error.sentence()),
                 }
             }
@@ -266,7 +269,12 @@ impl Runtime {
             Ok(ready) => ready,
             Err(message) => return Self::chat_rejected(&message),
         };
-        let crate::chat::DiskChat { prepared, bearer } = ready;
+        let crate::chat::DiskChat {
+            prepared,
+            bearer,
+            tts_voice: _,
+            stt_model: _,
+        } = ready;
         if let Err(message) = crate::chat::gate_live_http(&prepared, &bearer, text) {
             return Self::chat_rejected(&message);
         }
@@ -276,9 +284,162 @@ impl Runtime {
         match crate::chat::perform_ask(&mut self.session, text, &appendix, move |system, user| {
             crate::chat::finish_prepared_chat(&call, &bearer, system, user)
         }) {
-            Ok(reply) => self.ask_ok(reply),
+            Ok(reply) => self.finish_ask_reply(reply),
             Err(error) => Self::chat_rejected(error.sentence()),
         }
+    }
+
+    /// Assistant text on [`Status::message`]. Speaks when xAI TTS is configured.
+    ///
+    /// A playback failure keeps the reply and puts the player sentence on
+    /// [`Status::detail`].
+    fn finish_ask_reply(&mut self, reply: String) -> Outcome {
+        self.speak_if_configured(&reply);
+        let detail = self.last_speech_note.clone();
+        Outcome {
+            body: ResponseBody::ok(self.snapshot(Some(reply), detail)),
+            events: Vec::new(),
+        }
+    }
+
+    fn speak_if_configured(&mut self, reply: &str) {
+        self.last_speech_note = None;
+        // Unit tests must not open a speaker or call TTS. Serve speaks for real.
+        #[cfg(test)]
+        {
+            let _ = reply;
+        }
+        #[cfg(not(test))]
+        {
+            let Ok(ready) = crate::chat::load_disk_chat() else {
+                return;
+            };
+            if let Err(message) = crate::talk::speak_reply(&ready, reply) {
+                self.last_speech_note = Some(message);
+            }
+        }
+    }
+
+    /// Arm press-to-talk. Hibernate refuses. Sleep wakes first when the pack is valid.
+    pub(crate) fn talk_start(&mut self) -> Outcome {
+        if wire_state(self.machine.state()) == WireState::Hibernate {
+            return Self::talk_rejected(crate::talk::TALK_HIBERNATING);
+        }
+        if wire_state(self.machine.state()) == WireState::Sleep {
+            let woke = self.wake_phrase();
+            if woke.body.status().is_none() {
+                return woke;
+            }
+            // Wake already broadcast by the caller when this returns events.
+            self.talk.arm();
+            self.drain_pcm();
+            return Outcome {
+                body: ResponseBody::ok(self.snapshot(
+                    Some("listening".to_owned()),
+                    Some("press and hold to talk".to_owned()),
+                )),
+                events: woke.events,
+            };
+        }
+        if self.machine.permit_tool_dispatch().is_err() {
+            return Self::talk_rejected(&crate::talk::talk_while(
+                wire_state(self.machine.state()).as_str(),
+            ));
+        }
+        self.talk.arm();
+        self.drain_pcm();
+        Self::quiet(self.snapshot(
+            Some("listening".to_owned()),
+            Some("press and hold to talk".to_owned()),
+        ))
+    }
+
+    /// Release press-to-talk, transcribe, and ask.
+    ///
+    /// Tests pass `samples` they already buffered through [`Self::push_talk_samples`].
+    pub(crate) fn talk_stop(&mut self) -> Outcome {
+        if !self.talk.is_armed() && self.talk_buffer_empty() {
+            return Self::talk_rejected("talk is not armed");
+        }
+        if self.machine.permit_tool_dispatch().is_err() {
+            self.talk.clear();
+            return Self::talk_rejected(&crate::talk::talk_while(
+                wire_state(self.machine.state()).as_str(),
+            ));
+        }
+        self.drain_pcm();
+        let samples = match self.talk.finish() {
+            Ok(samples) => samples,
+            Err(message) => return Self::talk_rejected(&message),
+        };
+        self.transcribe_and_ask(&samples)
+    }
+
+    fn talk_buffer_empty(&self) -> bool {
+        !self.talk.is_armed()
+    }
+
+    #[cfg(test)]
+    fn take_talk_transcript_override(&mut self) -> Option<String> {
+        self.talk_transcript.take()
+    }
+
+    /// Next `talk_stop` uses `text` instead of cloud STT. Tests only.
+    #[cfg(test)]
+    pub(crate) fn set_talk_transcript_for_test(&mut self, text: impl Into<String>) {
+        self.talk_transcript = Some(text.into());
+    }
+
+    fn transcribe_and_ask(&mut self, samples: &[i16]) -> Outcome {
+        #[cfg(test)]
+        if let Some(text) = self.take_talk_transcript_override() {
+            let _ = samples;
+            let events = self.emit_final_transcript(&text);
+            let mut outcome = self.ask(&text);
+            outcome.events.splice(0..0, events);
+            return outcome;
+        }
+        let ready = match crate::chat::load_disk_chat() {
+            Ok(ready) => ready,
+            Err(message) => return Self::talk_rejected(&message),
+        };
+        let model = match crate::talk::stt_model_for(ready.prepared.provider, &ready.stt_model) {
+            Ok(model) => model,
+            Err(message) => return Self::talk_rejected(&message),
+        };
+        match crate::talk::transcribe_pcm(&ready, &model, samples) {
+            Ok(text) => {
+                let events = self.emit_final_transcript(&text);
+                let mut outcome = self.ask(&text);
+                outcome.events.splice(0..0, events);
+                outcome
+            }
+            Err(message) => Self::talk_rejected(&message),
+        }
+    }
+
+    fn emit_final_transcript(&mut self, text: &str) -> Vec<WireEvent> {
+        self.stt.inject_final(text);
+        let events = self.stt.drain();
+        events
+            .into_iter()
+            .map(|event| match event {
+                TranscriptEvent::Final { text } => WireEvent::FinalTranscript { text },
+                TranscriptEvent::Partial { text } => WireEvent::PartialTranscript { text },
+            })
+            .collect()
+    }
+
+    fn talk_rejected(message: &str) -> Outcome {
+        Self::rejected(IpcError::TalkRejected {
+            message: message.to_owned(),
+        })
+    }
+
+    /// Queue PCM into the armed talk buffer. No-op when talk is not armed.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn push_talk_samples(&mut self, samples: &[i16]) {
+        self.talk.push(samples);
     }
 
     /// Run one safe tool, or stage a confirm-gated tool.
@@ -389,6 +550,9 @@ impl Runtime {
         let mut scored = false;
         let mut energy_seen = false;
         while let Ok(Some(frame)) = self.capture.poll_frame() {
+            if self.talk.is_armed() {
+                self.talk.push(frame.samples());
+            }
             let level = rms_level(frame.samples());
             self.last_capture_level = Some(level);
             if level >= 0.02 {
@@ -488,6 +652,7 @@ impl Runtime {
                 Effect::OpenSession => self.open_session(),
                 Effect::ReleaseActingResources => {
                     self.session.close();
+                    self.talk.clear();
                     let _ = self.stt.drain();
                     if let Some(cancelled) = self.hands.clear_pending() {
                         extra.push(WireEvent::ToolConfirmResolved {
@@ -534,6 +699,7 @@ impl Runtime {
             detail,
             pending_tool: self.pending_wire(),
             last_tool: self.hands.last_tool_line(),
+            talking: self.talk.is_armed(),
         }
     }
 
@@ -679,6 +845,109 @@ fn map_error(command: Command, error: StateError) -> IpcError {
             detail: Some(error.to_string()),
         },
         StateError::ToolsForbidden { .. } => IpcError::protocol(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod talk_tests {
+    use super::Runtime;
+    use crate::soul::TestSoulDir;
+    use softwake_ipc::{Event, IpcError, ResponseBody, VoiceState};
+    use softwake_voice::TALK_MIN_SAMPLES;
+
+    fn awake() -> (Runtime, TestSoulDir) {
+        let dir = TestSoulDir::valid();
+        let mut runtime = Runtime::new(dir.soul_dir());
+        let outcome = runtime.wake_phrase();
+        assert!(outcome.body.status().is_some());
+        (runtime, dir)
+    }
+
+    #[test]
+    fn talk_start_arms_only_while_awake_and_hibernate_refuses() {
+        let dir = TestSoulDir::valid();
+        let mut runtime = Runtime::new(dir.soul_dir());
+        runtime.handle(softwake_ipc::Command::Hibernate);
+        let refused = runtime.talk_start();
+        assert!(matches!(
+            refused.body,
+            ResponseBody::Err {
+                error: IpcError::TalkRejected { .. }
+            }
+        ));
+        assert!(!runtime.talk.is_armed());
+
+        let started = runtime.talk_start();
+        // Still hibernating; wake is not attempted.
+        assert!(started.body.status().is_none());
+    }
+
+    #[test]
+    fn talk_from_sleep_wakes_then_buffers_and_stop_asks() {
+        let dir = TestSoulDir::valid();
+        let mut runtime = Runtime::new(dir.soul_dir());
+        assert_eq!(
+            runtime
+                .handle(softwake_ipc::Command::GetStatus)
+                .body
+                .status()
+                .expect("status")
+                .state,
+            VoiceState::Sleep
+        );
+        let started = runtime.talk_start();
+        let status = started.body.status().expect("woke");
+        assert_eq!(status.state, VoiceState::Awake);
+        assert!(status.talking);
+        assert!(started.events.iter().any(|event| matches!(
+            event,
+            Event::StateChanged {
+                state: VoiceState::Awake,
+                ..
+            }
+        )));
+
+        runtime.push_talk_samples(&[0; 100]);
+        let short = runtime.talk_stop();
+        assert!(matches!(
+            short.body,
+            ResponseBody::Err {
+                error: IpcError::TalkRejected { ref message }
+            } if message.contains("longer")
+        ));
+
+        runtime.install_chat_fixture(crate::chat::xai_key_fixture(
+            true,
+            Some("test-key"),
+            "she replies",
+        ));
+        runtime.set_talk_transcript_for_test("what time is it");
+        let again = runtime.talk_start();
+        assert!(again.body.status().expect("armed").talking);
+        runtime.push_talk_samples(&vec![1; TALK_MIN_SAMPLES]);
+        let stopped = runtime.talk_stop();
+        let reply = stopped.body.status().expect("asked");
+        assert_eq!(reply.message.as_deref(), Some("she replies"));
+        assert!(stopped.events.iter().any(|event| matches!(
+            event,
+            Event::FinalTranscript { text } if text == "what time is it"
+        )));
+        assert!(!reply.talking);
+    }
+
+    #[test]
+    fn sleep_clears_an_armed_talk_buffer() {
+        let (mut runtime, _dir) = awake();
+        runtime.talk_start();
+        runtime.push_talk_samples(&vec![1; TALK_MIN_SAMPLES]);
+        runtime.handle(softwake_ipc::Command::Sleep);
+        let stopped = runtime.talk_stop();
+        assert!(matches!(
+            stopped.body,
+            ResponseBody::Err {
+                error: IpcError::TalkRejected { .. }
+            }
+        ));
     }
 }
 

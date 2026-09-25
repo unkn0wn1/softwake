@@ -134,6 +134,10 @@ pub(crate) fn gate_live_http(
 pub(crate) struct DiskChat {
     pub(crate) prepared: PreparedChat,
     pub(crate) bearer: String,
+    /// Settings `selected_tts_voice`. Empty means the xAI default when speaking.
+    pub(crate) tts_voice: String,
+    /// Settings `selected_voice_model`. Empty means the xAI STT seed.
+    pub(crate) stt_model: String,
 }
 
 impl std::fmt::Debug for DiskChat {
@@ -142,6 +146,8 @@ impl std::fmt::Debug for DiskChat {
             .debug_struct("DiskChat")
             .field("prepared", &self.prepared)
             .field("bearer", &"<redacted>")
+            .field("tts_voice", &self.tts_voice)
+            .field("stt_model", &self.stt_model)
             .finish()
     }
 }
@@ -169,7 +175,20 @@ pub(crate) fn load_disk_chat() -> Result<DiskChat, String> {
         env_openai_compatible.as_deref(),
     )
     .map_err(|error| error.to_string())?;
-    Ok(DiskChat { prepared, bearer })
+    Ok(DiskChat {
+        tts_voice: handle.selected_tts_voice().unwrap_or("").to_owned(),
+        stt_model: handle.selected_voice_model().unwrap_or("").to_owned(),
+        prepared,
+        bearer,
+    })
+}
+
+impl DiskChat {
+    /// Saved TTS voice id, or empty when Settings left the default.
+    #[must_use]
+    pub(crate) fn prepared_tts_voice(&self) -> &str {
+        &self.tts_voice
+    }
 }
 
 /// Finish a prepared disk chat.
@@ -218,8 +237,8 @@ mod fixture {
     use std::sync::{Arc, Mutex};
 
     use softwake_providers::{
-        HttpResponse, PreparedChat, ProviderHandle, ProviderId, ProviderSettings, SecretBag,
-        TestReport, Transport, TransportError,
+        HttpBytes, HttpResponse, MultipartField, PreparedChat, ProviderHandle, ProviderId,
+        ProviderSettings, SecretBag, TestReport, Transport, TransportError,
     };
 
     /// One recorded JSON POST. The bearer is not stored.
@@ -279,6 +298,33 @@ mod fixture {
                     body: body.to_owned(),
                 });
             Ok(self.response.clone())
+        }
+
+        fn post_multipart_bearer(
+            &self,
+            url: &str,
+            _bearer: &str,
+            _fields: &[MultipartField],
+            _file_name: &str,
+            _file_bytes: &[u8],
+            _file_content_type: &str,
+        ) -> Result<HttpResponse, TransportError> {
+            Err(TransportError::NoRoute {
+                method: "POST".to_owned(),
+                url: url.to_owned(),
+            })
+        }
+
+        fn post_json_bearer_bytes(
+            &self,
+            url: &str,
+            _bearer: &str,
+            _body: &str,
+        ) -> Result<HttpBytes, TransportError> {
+            Err(TransportError::NoRoute {
+                method: "POST".to_owned(),
+                url: url.to_owned(),
+            })
         }
     }
 

@@ -66,6 +66,7 @@
 4. [x] In-window editors for `soul.md`, `user.md`, `rules.md`, and `glossary.md` (reload stays how a pack is applied)
    - [x] Multi-profile packs + agent name in Settings → Profiles ([ADR 0017](ADR-0017-profiles.md))
 5. [x] System tray + always-on-top HUD capsule ([ADR 0015](ADR-0015-tray-hud.md)); capture level on the wire drives particles ([ADR 0016](ADR-0016-capture-level-hud.md))
+   - [x] Optional press-to-talk: mic PCM to xAI `/v1/stt`, existing ask, xAI `/v1/tts` voice `eve` ([ADR 0007](ADR-0007-awake-stt-tts.md)). Mocks and offline CI stay the default. `live-http` is required for the cloud calls.
 
 
 ## Deferred ideas (do not pull into phase 1)
