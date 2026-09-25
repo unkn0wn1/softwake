@@ -987,6 +987,7 @@ mod tests {
                         pending_tool: None,
                         last_tool: None,
                         talking: false,
+                        auto_listening: false,
                     }),
                 })
                 .expect("response");

@@ -3,15 +3,21 @@
 //! Tries `ffplay`, then `mpv`, then `paplay` for WAV. Tests use
 //! [`PlaybackMode::Record`] and do not spawn a player. A missing player is an
 //! error string the HUD can show.
+//!
+//! Spawn mode starts the player and **returns immediately**. Softwake must not
+//! block the daemon, Tauri commands, or the HUD bloom on Eve finishing. A short
+//! reaper thread joins the child (with a timeout) and deletes the temp file.
+//! [`interrupt_playback`] kills the last spawned player so a new ask can cut in.
 
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
-/// Join deadline for one spawned player. Longer than a short reply, shorter
-/// than leaving the serve thread blocked overnight.
+/// Join deadline for the background reaper. Longer than a short reply, shorter
+/// than leaving a zombie player overnight.
 pub const PLAYBACK_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// How [`play_audio`] delivers bytes.
@@ -32,16 +38,19 @@ pub struct PlayedClip {
     pub bytes: Vec<u8>,
 }
 
+/// Pid of the player started by the latest [`PlaybackMode::Spawn`] call.
+static LAST_PLAYER: Mutex<Option<u32>> = Mutex::new(None);
+
 /// Play `bytes` or record them.
 ///
-/// Spawn waits at most `timeout` so a stuck player cannot hold the caller
-/// forever. The player runs in a short-lived child; this function joins that
-/// wait.
+/// Spawn starts a player and returns as soon as the child is running. It does
+/// **not** wait for playback to finish. A stuck or long clip cannot freeze the
+/// HUD. The reaper still bounds how long the child may live.
 ///
 /// # Errors
 ///
 /// A sentence when no player is installed, the temp file cannot be written,
-/// or the player exits non-zero.
+/// or the player cannot be started.
 pub fn play_audio(
     mode: PlaybackMode,
     bytes: &[u8],
@@ -60,11 +69,32 @@ pub fn play_audio(
             });
             Ok(())
         }
-        PlaybackMode::Spawn => spawn_player(bytes, suffix, timeout),
+        PlaybackMode::Spawn => spawn_player_detached(bytes, suffix, timeout),
     }
 }
 
-fn spawn_player(bytes: &[u8], suffix: &str, timeout: Duration) -> Result<(), String> {
+/// Stop the last spawned player, if Softwake still knows its pid.
+///
+/// Best-effort. Used before a new reply so Eve does not overlap herself.
+pub fn interrupt_playback() {
+    let pid = {
+        let mut guard = LAST_PLAYER
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.take()
+    };
+    if let Some(pid) = pid {
+        let _ = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+fn spawn_player_detached(bytes: &[u8], suffix: &str, timeout: Duration) -> Result<(), String> {
+    interrupt_playback();
     let path = write_temp(bytes, suffix)?;
     let players = player_commands(&path, suffix);
     let mut missing = Vec::new();
@@ -76,10 +106,19 @@ fn spawn_player(bytes: &[u8], suffix: &str, timeout: Duration) -> Result<(), Str
             .stderr(Stdio::null())
             .spawn()
         {
-            Ok(mut child) => {
-                let result = wait_child(&mut child, timeout);
-                let _ = std::fs::remove_file(&path);
-                return result;
+            Ok(child) => {
+                let pid = child.id();
+                remember_pid(pid);
+                let path_for_reaper = path.clone();
+                let _ = thread::Builder::new()
+                    .name("softwake-tts-reaper".to_owned())
+                    .spawn(move || {
+                        reap_player(child, timeout);
+                        let _ = std::fs::remove_file(&path_for_reaper);
+                        clear_pid_if(pid);
+                    });
+                // Fire-and-forget: caller returns while Eve is still speaking.
+                return Ok(());
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 missing.push(program);
@@ -95,6 +134,22 @@ fn spawn_player(bytes: &[u8], suffix: &str, timeout: Duration) -> Result<(), Str
         "no audio player found (tried {}). Install ffplay or mpv to hear replies.",
         missing.join(", ")
     ))
+}
+
+fn remember_pid(pid: u32) {
+    let mut guard = LAST_PLAYER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = Some(pid);
+}
+
+fn clear_pid_if(pid: u32) {
+    let mut guard = LAST_PLAYER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if guard.as_ref() == Some(&pid) {
+        *guard = None;
+    }
 }
 
 fn player_commands(path: &Path, suffix: &str) -> Vec<(&'static str, Vec<String>)> {
@@ -125,19 +180,17 @@ fn player_commands(path: &Path, suffix: &str) -> Vec<(&'static str, Vec<String>)
     commands
 }
 
-fn wait_child(child: &mut std::process::Child, timeout: Duration) -> Result<(), String> {
+fn reap_player(mut child: Child, timeout: Duration) {
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => return Err(format!("audio player exited {status}")),
             Ok(None) if start.elapsed() >= timeout => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("audio playback timed out".to_owned());
+                return;
             }
             Ok(None) => thread::sleep(Duration::from_millis(50)),
-            Err(error) => return Err(format!("audio player failed: {error}")),
+            Ok(Some(_)) | Err(_) => return,
         }
     }
 }
@@ -160,37 +213,54 @@ fn write_temp(bytes: &[u8], suffix: &str) -> Result<std::path::PathBuf, String> 
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use super::{PlaybackMode, play_audio};
+    use super::{PLAYBACK_TIMEOUT, PlaybackMode, play_audio};
+    use std::time::Instant;
 
     #[test]
-    fn record_mode_keeps_bytes_and_does_not_spawn() {
+    fn record_mode_keeps_bytes_and_rejects_empty() {
         let mut record = None;
         play_audio(
             PlaybackMode::Record,
-            b"mp3",
+            b"fake-mp3",
             "mp3",
-            Duration::from_secs(1),
+            PLAYBACK_TIMEOUT,
             &mut record,
         )
         .expect("record");
         let clip = record.expect("clip");
         assert_eq!(clip.suffix, "mp3");
-        assert_eq!(clip.bytes, b"mp3");
-    }
+        assert_eq!(clip.bytes, b"fake-mp3");
 
-    #[test]
-    fn empty_audio_is_an_error() {
-        let mut record = None;
         let error = play_audio(
             PlaybackMode::Record,
             b"",
             "mp3",
-            Duration::from_secs(1),
-            &mut record,
+            PLAYBACK_TIMEOUT,
+            &mut None,
         )
         .expect_err("empty");
-        assert!(error.contains("no audio"));
+        assert!(error.contains("no audio"), "{error}");
+    }
+
+    #[test]
+    fn spawn_mode_returns_before_player_timeout_budget() {
+        // Even when every player is missing, spawn must fail fast — never sleep
+        // for PLAYBACK_TIMEOUT. When a player exists, it returns without waiting
+        // for the clip to finish (covered operationally; CI stays player-free).
+        let start = Instant::now();
+        let result = play_audio(
+            PlaybackMode::Spawn,
+            b"not-real-audio",
+            "mp3",
+            PLAYBACK_TIMEOUT,
+            &mut None,
+        );
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "spawn path blocked for {elapsed:?}: {result:?}"
+        );
+        // Missing player or a real spawn both finish under the budget.
+        let _ = result;
     }
 }

@@ -347,6 +347,10 @@ pub struct PendingTool {
 
 /// Voice state returned by a successful command.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "additive wire flags (talking, auto_listening) stay independent bools on protocol 1"
+)]
 pub struct Status {
     /// Current voice state.
     pub state: VoiceState,
@@ -383,6 +387,11 @@ pub struct Status {
     /// Additive on protocol generation 1. Older peers omit it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub talking: bool,
+    /// True while awake free-speech energy gating is armed (not PTT).
+    ///
+    /// Additive on protocol generation 1. Older peers omit it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub auto_listening: bool,
 }
 
 #[allow(
@@ -666,6 +675,7 @@ mod tests {
             pending_tool: None,
             last_tool: None,
             talking: false,
+            auto_listening: false,
         }
     }
 
@@ -951,6 +961,7 @@ mod tests {
             }),
             last_tool: Some("notify confirm pending".to_owned()),
             talking: true,
+            auto_listening: false,
         };
         assert_round_trip(&with_pending);
         let pending_json = serde_json::to_string(&with_pending).expect("encode");
@@ -997,6 +1008,7 @@ mod tests {
             pending_tool: None,
             last_tool: None,
             talking: false,
+            auto_listening: false,
         };
         assert_round_trip(&with_level);
         let json = serde_json::to_string(&with_level).expect("encode");
@@ -1013,6 +1025,7 @@ mod tests {
             pending_tool: None,
             last_tool: None,
             talking: false,
+            auto_listening: false,
         };
         let json = serde_json::to_string(&without).expect("encode");
         assert!(!json.contains("capture_level"));
@@ -1036,6 +1049,7 @@ mod tests {
             pending_tool: None,
             last_tool: None,
             talking: false,
+            auto_listening: false,
         };
         assert_round_trip(&missing);
 
@@ -1053,6 +1067,7 @@ mod tests {
             pending_tool: None,
             last_tool: None,
             talking: false,
+            auto_listening: false,
         };
         let json = serde_json::to_string(&ok).expect("encode");
         assert!(json.contains("\"soul\":{\"ok\":true}"));

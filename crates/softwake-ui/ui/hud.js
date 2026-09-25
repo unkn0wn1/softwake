@@ -19,6 +19,8 @@ let idleMs = IDLE_MS;
 let raf = 0;
 let holding = false;
 let talkPending = false;
+let autoListening = false;
+let lastReplyKey = "";
 
 function invoke(command, args) {
   const core = window.__TAURI__ && window.__TAURI__.core;
@@ -168,7 +170,9 @@ function updateHint() {
     return;
   }
   if (state === "awake") {
-    hint.textContent = "hold to talk · drag to move";
+    hint.textContent = autoListening
+      ? "speak or hold · drag to move"
+      : "hold to talk · drag to move";
   } else if (state === "hibernate") {
     hint.textContent = "wake from Settings";
   } else {
@@ -182,10 +186,33 @@ async function refresh() {
     state = snap.state || "sleep";
     captureRunning = !!snap.capture_running;
     level = typeof snap.level === "number" ? snap.level : 0.02;
+    autoListening = !!snap.auto_listening;
+    const message = (snap && snap.message) || "";
+    const detail = (snap && snap.detail) || "";
+    const key = message + "\0" + detail;
+    // Surface free-speech / async replies without awaiting the pipeline.
+    if (
+      message &&
+      key !== lastReplyKey &&
+      message !== "listening" &&
+      !(talkPending && message === "thinking…")
+    ) {
+      lastReplyKey = key;
+      if (message === "thinking…") {
+        showReply(detail ? "thinking… (" + detail + ")" : "thinking…", false);
+        setExpanded(true);
+        bumpIdle(POST_ASK_IDLE_MS);
+      } else if (!holding) {
+        showReply(detail && detail !== message ? message + " — " + detail : message, false);
+        setExpanded(true);
+        bumpIdle(POST_ASK_IDLE_MS);
+      }
+    }
   } catch (_error) {
     state = "sleep";
     captureRunning = false;
     level = 0.02;
+    autoListening = false;
   }
   updateHint();
 }
@@ -247,26 +274,35 @@ function afterPaint() {
   });
 }
 
-async function endTalk() {
+function endTalk() {
   if (!holding || talkPending) {
     return;
   }
   talkPending = true;
   paintReleasedMic("thinking…");
   bumpIdle(POST_ASK_IDLE_MS);
-  await afterPaint();
-  try {
-    const status = await invoke("hud_talk_stop");
-    const message =
-      (status && (status.message || status.detail)) || "(no reply text)";
-    const speechNote = status && status.detail && status.message ? status.detail : "";
-    showReply(speechNote ? message + " — " + speechNote : message, false);
-    await refresh();
-  } catch (error) {
-    showReply(errorText(error, "talk failed"), true);
-  }
-  talkPending = false;
-  bumpIdle(POST_ASK_IDLE_MS);
+  // Fire-and-forget: never await STT/ask/TTS on the HUD event loop. Bloom rAF
+  // must keep running; the daemon pushes the reply onto status for refresh().
+  afterPaint().then(() =>
+    invoke("hud_talk_stop")
+      .then((status) => {
+        const message =
+          (status && (status.message || status.detail)) || "(no reply text)";
+        const speechNote =
+          status && status.detail && status.message ? status.detail : "";
+        const line = speechNote ? message + " — " + speechNote : message;
+        lastReplyKey = message + "\0" + (status && status.detail ? status.detail : "");
+        showReply(line, false);
+      })
+      .catch((error) => {
+        showReply(errorText(error, "talk failed"), true);
+      })
+      .finally(() => {
+        talkPending = false;
+        bumpIdle(POST_ASK_IDLE_MS);
+        refresh();
+      }),
+  );
 }
 
 talkBtn.addEventListener("pointerdown", (event) => {
@@ -406,33 +442,40 @@ input.addEventListener("keydown", (event) => {
   event.stopPropagation();
 });
 
-form.addEventListener("submit", async (event) => {
+form.addEventListener("submit", (event) => {
   event.preventDefault();
-  const text = input.value.trim();
-  if (!text) {
+  const asked = input.value.trim();
+  if (!asked || talkPending) {
     return;
   }
   setExpanded(true);
   bumpIdle(POST_ASK_IDLE_MS);
   replyEl.classList.remove("error");
-  replyEl.textContent = "…";
-  try {
-    const status = await invoke("hud_ask", { text });
-    const message =
-      (status && (status.message || status.detail)) || "(no reply text)";
-    replyEl.textContent = message;
-    input.value = "";
-    await refresh();
-  } catch (error) {
-    replyEl.classList.add("error");
-    replyEl.textContent =
-      typeof error === "string"
-        ? error
-        : error && error.message
-          ? error.message
-          : "ask failed";
-  }
-  bumpIdle(POST_ASK_IDLE_MS);
+  replyEl.textContent = "thinking…";
+  input.value = "";
+  talkPending = true;
+  // Same as PTT: do not block the particle loop on ask + Eve playback.
+  invoke("hud_ask", { text: asked })
+    .then((status) => {
+      const message =
+        (status && (status.message || status.detail)) || "(no reply text)";
+      lastReplyKey = message + "\0" + (status && status.detail ? status.detail : "");
+      replyEl.textContent = message;
+    })
+    .catch((error) => {
+      replyEl.classList.add("error");
+      replyEl.textContent =
+        typeof error === "string"
+          ? error
+          : error && error.message
+            ? error.message
+            : "ask failed";
+    })
+    .finally(() => {
+      talkPending = false;
+      bumpIdle(POST_ASK_IDLE_MS);
+      refresh();
+    });
 });
 
 refresh();
