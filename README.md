@@ -6,7 +6,7 @@ Rust end-to-end (daemon + Tauri UI). Phase 1 nails reliable **wake / sleep / hib
 
 ## Status
 
-Cargo workspace on stable Rust (edition 2024). `softwake-state` implements sleep / awake / hibernate, including rejected transitions and phrase cooldowns. `softwake-audio` has a mock capture backend (`stop` ends frame delivery) and a trait-shaped PipeWire stub (default `pipewire` feature, no native library). `softwake-wake` scores configured phrases with a local text matcher ([ADR 0002](docs/ADR-0002-wake-engine-spike.md)). The production on-device wake engine is sherpa-onnx keyword spotting ([ADR 0006](docs/ADR-0006-on-device-wake.md)). While awake, STT/TTS use a local streaming boundary ([ADR 0007](docs/ADR-0007-awake-stt-tts.md)): mock inject/record by default, sherpa stubs behind features. Weights are not in the repo, and the demo stays typed. `softwake-soul` loads `soul.md`, `user.md`, `rules.md`, and `glossary.md`, checks them, and renders system instructions ([ADR 0011](docs/ADR-0011-context-pack.md)). `softwaked serve` speaks newline-delimited JSON on a Unix socket ([ADR 0003](docs/ADR-0003-ipc-transport.md)). `softwaked ctl` and the Tauri window `softwake-ui` are clients of that socket. Entering awake opens a text session with the rendered soul instructions. `echo` runs immediately while awake ([ADR 0004](docs/ADR-0004-first-safe-tool.md)). `notify` waits for confirmation and then appends a line to an in-memory sink. `shell` is denied ([ADR 0005](docs/ADR-0005-tool-confirmation.md)). Phase 3 wires the connector boundary to the tool bus ([ADR 0008](docs/ADR-0008-connector-boundary.md)): `email_send` waits for confirmation, and confirming it appends one message to an in-memory outbox. `MockDrive` and `MockCalendar` list files and events stored on that value. In the connector registry, `drive` / `list` and `calendar` / `list` are confirm, and delete actions are denied. Those list mocks are not tools on the bus. The default build has no live cloud client. `softwake-memory` is a `Memory` trait, an in-memory `MockMemory`, and an opt-in `FileMemory` that writes `memory.json` only after `open_enabled`. Both stay off until that value is enabled. The daemon does not call the crate ([ADR 0009](docs/ADR-0009-long-term-memory.md)). `softwake-policy` classifies the existing tool and connector allowlists. Unknown names are denied. The daemon uses that classification, and its override map is empty ([ADR 0010](docs/ADR-0010-policy-engine.md)). A model client and further tools are later work. A missing or invalid four-file pack refuses awake; `reload-soul` re-reads that pack and applies on the next awake.
+Cargo workspace on stable Rust (edition 2024). `softwake-state` implements sleep / awake / hibernate, including rejected transitions and phrase cooldowns. `softwake-audio` has a mock capture backend (`stop` ends frame delivery) and a trait-shaped PipeWire stub (default `pipewire` feature, no native library). `softwake-wake` scores configured phrases with a local text matcher ([ADR 0002](docs/ADR-0002-wake-engine-spike.md)). The production on-device wake engine is sherpa-onnx keyword spotting ([ADR 0006](docs/ADR-0006-on-device-wake.md)). While awake, STT/TTS use a local streaming boundary ([ADR 0007](docs/ADR-0007-awake-stt-tts.md)): mock inject/record by default, sherpa stubs behind features. Weights are not in the repo, and the demo stays typed. `softwake-soul` loads `soul.md`, `user.md`, `rules.md`, and `glossary.md`, checks them, and renders system instructions ([ADR 0011](docs/ADR-0011-context-pack.md)). `softwaked serve` speaks newline-delimited JSON on a Unix socket ([ADR 0003](docs/ADR-0003-ipc-transport.md)). `softwaked ctl` and the Tauri window `softwake-ui` are clients of that socket. Entering awake opens a text session with the rendered soul instructions. `echo` runs immediately while awake ([ADR 0004](docs/ADR-0004-first-safe-tool.md)). `notify` waits for confirmation and then appends a line to an in-memory sink. `shell` is denied ([ADR 0005](docs/ADR-0005-tool-confirmation.md)). Phase 3 wires the connector boundary to the tool bus ([ADR 0008](docs/ADR-0008-connector-boundary.md)): `email_send` waits for confirmation, and confirming it appends one message to an in-memory outbox. `MockDrive` and `MockCalendar` list files and events stored on that value. In the connector registry, `drive` / `list` and `calendar` / `list` are confirm, and delete actions are denied. Those list mocks are not tools on the bus. The default build has no live cloud client. `softwake-memory` is a `Memory` trait, an in-memory `MockMemory`, and an opt-in `FileMemory` that writes `memory.json` only after `open_enabled`. Both stay off until that value is enabled. The daemon does not call the crate ([ADR 0009](docs/ADR-0009-long-term-memory.md)). `softwake-policy` classifies the existing tool and connector allowlists. Unknown names are denied. The daemon uses that classification, and its override map is empty ([ADR 0010](docs/ADR-0010-policy-engine.md)). `softwake-providers` holds xAI device-code OAuth, xAI API key, and OpenAI API key Settings ([ADR 0012](docs/ADR-0012-model-providers.md)). Secrets stay in an XDG state bag (plaintext v1 with a warning). The window Settings panel runs Test, then fills the model picker. Mock transport keeps default tests offline; `live-http` enables real HTTPS. The daemon still does not call a chat model. A wired session client and further tools are later work. A missing or invalid four-file pack refuses awake; `reload-soul` re-reads that pack and applies on the next awake.
 
 ## Build and test
 
@@ -28,6 +28,8 @@ See [Cargo features](#cargo-features) for `pipewire`, `pipewire-native`, and `sh
 | `softwake-wake` | `sherpa-kws` | no | PCM detector stub. No weights and no ONNX download. Not enabled in CI. |
 | `softwake-voice` | `sherpa-asr` | no | Streaming ASR stub. No weights and no ONNX download. Not enabled in CI. |
 | `softwake-voice` | `sherpa-tts` | no | TTS stub. No weights and no synthesizer download. Not enabled in CI. |
+| `softwake-providers` | `live-http` | no | Real HTTPS via `ureq` for OAuth and Test. Unit tests use `MockTransport`. Not required for `cargo test -p softwake-providers`. |
+| `softwake-ui` | `live-http` | yes | Enables `softwake-providers/live-http` so Settings Test and xAI sign-in can reach the network. |
 
 `--no-default-features` on `softwake-audio` omits the `pipewire` stub. The sherpa-onnx keyword-spotting choice is [ADR 0006](docs/ADR-0006-on-device-wake.md).
 
@@ -210,6 +212,23 @@ A `> ` prompt is printed before each line is read. The same path accepts a pipe 
 `softwaked demo --verbose` and `softwaked demo -v` (also `--demo -v`) print extra `verbose:` lines for each command: the raw input, the parsed command, and for `wake` / `sleep` the phrase, the detector hit, and whether the transition succeeded or why it was rejected. `SOFTWAKE_LOG=debug` enables that same detail. `softwaked --help` prints usage.
 
 Type one command per line. `sleep` in the 800 ms after `wake` stays awake. `wake` in the 800 ms after `sleep` or `resume` stays asleep. `hibernate` is a UI command and applies on the next line.
+
+## Model providers
+
+Settings in `softwake-ui` configure one acting provider ([ADR 0012](docs/ADR-0012-model-providers.md)):
+
+1. Choose **xAI sign-in**, **xAI API key**, or **OpenAI**.
+2. For a key provider, paste the key and press **Save key**. For xAI sign-in, press **Start sign-in**, open the verification URL, enter the user code, then **Poll** (or wait for the automatic poll).
+3. Press **Test**. On success, the model dropdown fills from `GET /v1/models` (with a registry seed fallback). The dropdown stays empty until Test succeeds.
+4. Pick a model.
+
+Secrets are stored under `$XDG_STATE_HOME/softwake/secrets.json` (or `~/.local/state/softwake/secrets.json`), mode `0600`, plaintext at rest in v1 — see the warning in Settings. Non-secret selection and the model cache are `$XDG_CONFIG_HOME/softwake/providers.json`. The public xAI device-code client id is safe to commit; refresh tokens and API keys are not. Environment fallbacks: `XAI_API_KEY`, `OPENAI_API_KEY` when no key is saved.
+
+```bash
+cargo test -p softwake-providers
+```
+
+Default workspace tests do not call the network. Live HTTPS is the `live-http` feature.
 
 ## Serve and ctl
 

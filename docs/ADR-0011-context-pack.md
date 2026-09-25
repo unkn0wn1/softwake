@@ -71,4 +71,4 @@ A directory that only has the old two files refuses awake until `rules.md` and `
 - Clients that speak protocol 1 see the same status shape. A failed read can now name `rules.md`, `glossary.md`, or a bad alias map in `soul.reason`.
 - The next path-sensitive tool should call `SoulPack::confirm_echo` before it stages work, and should treat `classify_echo_reply` as the accept check. That tool is not in this change. `Hands` does not call these functions.
 - UI editing of the four files remains open. The window reloads. It does not edit the files.
-- Provider OAuth and live connectors stay later slices.
+- Provider settings are [ADR 0012](ADR-0012-model-providers.md). Live connectors stay later slices.

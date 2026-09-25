@@ -18,12 +18,16 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+serde = { workspace = true }
 softwake-ipc.workspace = true
+softwake-providers = { workspace = true }
 tauri = { version = "2", features = [] }
 
 [features]
-default = ["custom-protocol"]
+default = ["custom-protocol", "live-http"]
 custom-protocol = ["tauri/custom-protocol"]
+# Real HTTPS for Settings Test and xAI device-code. Off only for a no-network UI build.
+live-http = ["softwake-providers/live-http"]
 
 [lints]
 workspace = true
