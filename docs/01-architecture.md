@@ -7,7 +7,7 @@
 │  softwake-ui (Tauri)                                   │
 │  settings · tray · HUD · status · hibernate/wake        │
 └───────────────────────────┬─────────────────────────────┘
-                            │ Unix socket, newline-delimited JSON
+                            │ local IPC (Unix socket on Linux; TCP port file on Windows), newline-delimited JSON
 ┌───────────────────────────▼─────────────────────────────┐
 │  softwaked (Rust daemon)                               │
 │  state machine · wake gate · session · tool dispatcher  │
@@ -33,7 +33,7 @@ Keep crates small and single-purpose. Exact names can shift; responsibilities sh
 | `softwake-voice` | Awake STT/TTS boundary (mock default; sherpa stubs feature-gated; [ADR 0007](ADR-0007-awake-stt-tts.md)) |
 | `softwake-wake` | Local wake/sleep phrases. Text table for the typed demo. PCM seam for sherpa-onnx keyword spotting ([ADR 0006](ADR-0006-on-device-wake.md)) |
 | `softwake-session` | Text session for one awake period. Stores the rendered pack. Completer is injected. No HTTP client. Memory snippets are not attached ([ADR 0013](ADR-0013-session-provider.md)) |
-| `softwake-tools` | Tool registry with safe, confirm, and deny metadata. `echo` is safe; `notify`, `email_send`, and `shell` wait for confirmation. `shell` stays off until Tools Settings enable it ([ADR 0018](ADR-0018-tools-settings-shell.md)) |
+| `softwake-tools` | Tool registry with safe, confirm, and deny metadata. `echo` is safe; `notify`, `email_send`, and `shell` wait for confirmation. `shell` stays off until Tools Settings enable it ([ADR 0018](ADR-0018 / ADR-0019-tools-settings-shell.md)) |
 | `softwake-connectors` | World I/O boundary. Email, Drive, and calendar traits with in-memory mocks. Registry is confirm or deny. No live cloud client in the default build. The daemon calls the email mock only ([ADR 0008](ADR-0008-connector-boundary.md)) |
 | `softwake-policy` | Classifies tool names and connector pairs. Unknown subjects are denied. Overrides may only tighten. The daemon asks it before a tool runs ([ADR 0010](ADR-0010-policy-engine.md)) |
 | `softwake-providers` | Model credentials, xAI device-code OAuth, Test probes, secret bag. Mock transport by default; `live-http` for real HTTPS ([ADR 0012](ADR-0012-model-providers.md)) |
@@ -87,11 +87,11 @@ Unix domain socket and newline-delimited JSON, protocol version 1. The path, fra
 
 - Tools are named and carry a risk: safe, confirm, or deny ([ADR 0005](ADR-0005-tool-confirmation.md)). Phase 1's only tool was `echo` ([ADR 0004](ADR-0004-first-safe-tool.md)).
 - `echo` is safe. With no arguments it returns `pong`. With arguments it returns `echo:` plus those arguments joined by spaces. It does not touch a shell, the filesystem, the clipboard, or an audio device.
-- `notify` is confirm-gated. It appends one line to an in-memory sink only after `confirm_tool`. `shell` is confirm-gated and off until Settings → Tools enables it ([ADR 0018](ADR-0018-tools-settings-shell.md)).
+- `notify` is confirm-gated. It appends one line to an in-memory sink only after `confirm_tool`. `shell` is confirm-gated and off until Settings → Tools enables it ([ADR 0018](ADR-0018 / ADR-0019-tools-settings-shell.md)).
 - `email_send` is confirm-gated. Arguments are a recipient, a subject, and a body. It appends one message to an in-memory outbox only after `confirm_tool` ([ADR 0008](ADR-0008-connector-boundary.md)).
 - The daemon calls `permit_tool_dispatch` first. Sleep and hibernate refuse every tool and clear a pending confirmation. An unknown name is refused while awake. One confirmation may be pending; a second confirm-gated request is rejected.
 - Entering awake opens a text session with the rendered soul instructions. Sleep, and hibernate from awake, close that session.
-- Deleting files stays denied. `email_send` is the confirm path for one in-memory message ([ADR 0008](ADR-0008-connector-boundary.md)). Gated shell is [ADR 0018](ADR-0018-tools-settings-shell.md).
+- Deleting files stays denied. `email_send` is the confirm path for one in-memory message ([ADR 0008](ADR-0008-connector-boundary.md)). Gated shell is [ADR 0018](ADR-0018 / ADR-0019-tools-settings-shell.md).
 - “Full device control” is a product vision, not an architecture excuse to skip the registry.
 
 ## Connectors

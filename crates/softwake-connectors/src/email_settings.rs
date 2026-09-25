@@ -7,6 +7,7 @@
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
@@ -301,21 +302,36 @@ fn decode(path: &Path, bytes: &[u8]) -> Result<EmailSettings, EmailSettingsError
 fn atomic_write(path: &Path, body: &[u8]) -> Result<(), EmailSettingsError> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() && !parent.exists() {
-            fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(parent)
-                .map_err(|error| io_err(path, error))?;
+            #[cfg(unix)]
+            {
+                fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(0o700)
+                    .create(parent)
+                    .map_err(|error| io_err(path, error))?;
+            }
+            #[cfg(not(unix))]
+            {
+                fs::create_dir_all(parent).map_err(|error| io_err(path, error))?;
+            }
             let _ = set_mode(parent, 0o700);
         }
     }
     let temp = path.with_extension("json.tmp");
     {
+        #[cfg(unix)]
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .mode(0o600)
+            .open(&temp)
+            .map_err(|error| io_err(path, error))?;
+        #[cfg(not(unix))]
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
             .open(&temp)
             .map_err(|error| io_err(path, error))?;
         file.write_all(body).map_err(|error| io_err(path, error))?;
@@ -328,10 +344,18 @@ fn atomic_write(path: &Path, body: &[u8]) -> Result<(), EmailSettingsError> {
 }
 
 fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let mut permissions = fs::metadata(path)?.permissions();
-    permissions.set_mode(mode);
-    fs::set_permissions(path, permissions)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(path)?.permissions();
+        permissions.set_mode(mode);
+        fs::set_permissions(path, permissions)?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, mode);
+    }
+    Ok(())
 }
 
 fn io_err(path: &Path, source: io::Error) -> EmailSettingsError {

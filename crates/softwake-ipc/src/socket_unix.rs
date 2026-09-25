@@ -1,10 +1,9 @@
-//! Unix socket path, version handshake, and blocking reads.
+//! Unix domain socket path, version handshake, and blocking reads (Linux).
 //!
 //! The default path is `$XDG_RUNTIME_DIR/softwake/softwaked.sock`. When
 //! `XDG_RUNTIME_DIR` is unset, the fallback is `/tmp/softwake-$UID/softwaked.sock`.
-//! The uid is the owner of `/proc/self`, which is how Linux reports the
-//! process owner without a libc binding. macOS and Windows parity is out of
-//! scope for this phase. `SOFTWAKE_SOCKET` and an explicit path override both.
+//! The uid is the owner of `/proc/self`. `SOFTWAKE_SOCKET` and an explicit path
+//! override both. Windows uses TCP localhost; see `socket_windows`.
 //!
 //! A hello message is the first frame on every connection. A version other
 //! than [`PROTOCOL_VERSION`](crate::PROTOCOL_VERSION) is rejected and the
@@ -14,6 +13,18 @@ use std::fs::{self, Permissions};
 use std::io::{self, BufReader, ErrorKind};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
+
+/// Stream type for this platform (Unix domain socket).
+pub type IpcStream = UnixStream;
+
+/// Connect a raw stream used to unblock `accept` on shutdown.
+///
+/// # Errors
+///
+/// Returns the OS connect error when the listener is gone or unreachable.
+pub fn connect_stream(path: &Path) -> io::Result<IpcStream> {
+    UnixStream::connect(path)
+}
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
@@ -61,7 +72,7 @@ pub enum SocketError {
     },
 
     /// The path exists and is not a socket, so it is left untouched.
-    #[error("refusing to replace {path}; it is not a unix socket")]
+    #[error("refusing to replace {path}; it is not a Softwake IPC endpoint")]
     NotASocket {
         /// Path that was not removed.
         path: PathBuf,
@@ -284,7 +295,7 @@ impl Listener {
     ///
     /// Returns [`SocketError::Io`] when accept fails for a reason the caller
     /// should see.
-    pub fn accept(&self) -> Result<UnixStream, SocketError> {
+    pub fn accept(&self) -> Result<IpcStream, SocketError> {
         loop {
             match self.accept_once() {
                 Err(error) if error.is_transient_accept() => {}
@@ -293,7 +304,7 @@ impl Listener {
         }
     }
 
-    fn accept_once(&self) -> Result<UnixStream, SocketError> {
+    fn accept_once(&self) -> Result<IpcStream, SocketError> {
         self.inner
             .accept()
             .map(|(stream, _address)| stream)
@@ -438,7 +449,7 @@ impl ServerConnection {
     /// # Errors
     ///
     /// Returns [`HandshakeError`] when the first frame is not a matching hello.
-    pub fn begin(stream: UnixStream) -> Result<PendingHello, HandshakeError> {
+    pub fn begin(stream: IpcStream) -> Result<PendingHello, HandshakeError> {
         let mut endpoint = Endpoint::new(stream)?;
         let message = endpoint.read::<ClientMessage>()?;
         match message {
@@ -484,7 +495,7 @@ impl ServerConnection {
     /// # Errors
     ///
     /// Returns [`HandshakeError`] when the first frame is not a matching hello.
-    pub fn handshake(stream: UnixStream) -> Result<Self, HandshakeError> {
+    pub fn handshake(stream: IpcStream) -> Result<Self, HandshakeError> {
         Self::begin(stream)?.accept()
     }
 

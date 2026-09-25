@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-24
+- **Amended:** 2026-09-26 — Windows uses TCP localhost + port file; see [ADR 0019](ADR-0019-multiplatform-releases.md). Unix socket path rules below remain for Linux.
 - **Amended:** 2026-09-25 — `reload_soul` re-reads the four-file pack from [ADR 0011](ADR-0011-context-pack.md). Clients may send `ask`. Clients may send `wake`. Protocol generation stays 1.
 
 ## Decision
@@ -15,7 +16,7 @@ Socket path, first match wins:
 3. `$XDG_RUNTIME_DIR/softwake/softwaked.sock` when `XDG_RUNTIME_DIR` is set and not blank
 4. `/tmp/softwake-$UID/softwaked.sock` when that variable is unset
 
-The uid is the owner of `/proc/self` (Linux). If that cannot be read and `XDG_RUNTIME_DIR` is unset, startup fails and asks for `SOFTWAKE_SOCKET`. macOS and Windows socket paths are out of scope for this phase.
+The uid is the owner of `/proc/self` (Linux). If that cannot be read and `XDG_RUNTIME_DIR` is unset, startup fails and asks for `SOFTWAKE_SOCKET`. macOS remains out of scope. Windows IPC is specified in [ADR 0019](ADR-0019-multiplatform-releases.md) (TCP localhost + port file).
 
 `softwaked serve` removes a socket file whose peer refuses a connection. If a peer accepts, or does not answer a short probe, startup fails and leaves the file in place. The parent directory is mode `0700` when serve creates it. The socket is mode `0600`.
 

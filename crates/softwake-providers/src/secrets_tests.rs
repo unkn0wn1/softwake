@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -454,8 +455,11 @@ fn opt_in_writes_a_marker_without_secret_keys() {
     assert!(value.get("openrouter_api_key").is_none());
     assert!(value.get("openai_compatible_api_key").is_none());
     assert!(value.get("xai_oauth").is_none());
-    let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600);
+    #[cfg(unix)]
+    {
+        let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
 }
 
 #[test]

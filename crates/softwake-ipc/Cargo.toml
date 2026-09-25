@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 rust-version.workspace = true
-description = "Daemon and UI protocol: newline-delimited JSON over a Unix socket."
+description = "Daemon and UI protocol: newline-delimited JSON over a local IPC transport."
 
 [dependencies]
 serde.workspace = true

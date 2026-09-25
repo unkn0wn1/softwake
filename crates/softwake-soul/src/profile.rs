@@ -14,6 +14,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -433,11 +434,14 @@ fn copy_pack_files(from: &Path, to: &Path) -> Result<(), SoulError> {
             path: src.clone(),
             source,
         })?;
-        let mut perms = fs::metadata(&dest)
-            .map_err(|source| config_io(&dest, source))?
-            .permissions();
-        perms.set_mode(0o600);
-        fs::set_permissions(&dest, perms).map_err(|source| config_io(&dest, source))?;
+        #[cfg(unix)]
+        {
+            let mut perms = fs::metadata(&dest)
+                .map_err(|source| config_io(&dest, source))?
+                .permissions();
+            perms.set_mode(0o600);
+            fs::set_permissions(&dest, perms).map_err(|source| config_io(&dest, source))?;
+        }
     }
     Ok(())
 }
@@ -481,26 +485,40 @@ fn ensure_dir(dir: &Path) -> Result<(), SoulError> {
             detail: "path exists and is not a directory".to_owned(),
         });
     }
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(dir)
-        .map_err(|source| config_io(dir, source))?;
-    let mut perms = fs::metadata(dir)
-        .map_err(|source| config_io(dir, source))?
-        .permissions();
-    perms.set_mode(0o700);
-    fs::set_permissions(dir, perms).map_err(|source| config_io(dir, source))?;
+    #[cfg(unix)]
+    {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .map_err(|source| config_io(dir, source))?;
+        let mut perms = fs::metadata(dir)
+            .map_err(|source| config_io(dir, source))?
+            .permissions();
+        perms.set_mode(0o700);
+        fs::set_permissions(dir, perms).map_err(|source| config_io(dir, source))?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(dir).map_err(|source| config_io(dir, source))?;
+    }
     Ok(())
 }
 
 fn atomic_write(path: &Path, body: &[u8]) -> Result<(), SoulError> {
     let temp = temp_sibling(path)?;
     let wrote = (|| {
+        #[cfg(unix)]
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
+            .open(&temp)
+            .map_err(|source| config_io(&temp, source))?;
+        #[cfg(not(unix))]
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
             .open(&temp)
             .map_err(|source| config_io(&temp, source))?;
         file.write_all(body)
@@ -516,11 +534,14 @@ fn atomic_write(path: &Path, body: &[u8]) -> Result<(), SoulError> {
         let _ = fs::remove_file(&temp);
         return Err(config_io(path, source));
     }
-    let mut perms = fs::metadata(path)
-        .map_err(|source| config_io(path, source))?
-        .permissions();
-    perms.set_mode(0o600);
-    fs::set_permissions(path, perms).map_err(|source| config_io(path, source))?;
+    #[cfg(unix)]
+    {
+        let mut perms = fs::metadata(path)
+            .map_err(|source| config_io(path, source))?
+            .permissions();
+        perms.set_mode(0o600);
+        fs::set_permissions(path, perms).map_err(|source| config_io(path, source))?;
+    }
     Ok(())
 }
 

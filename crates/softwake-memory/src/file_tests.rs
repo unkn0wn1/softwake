@@ -1,4 +1,5 @@
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -477,6 +478,7 @@ fn resolver_does_not_create() {
     assert!(!root.exists());
 }
 
+#[cfg(unix)]
 #[test]
 fn permissions_on_created_files() {
     let dir = TempDir::new();

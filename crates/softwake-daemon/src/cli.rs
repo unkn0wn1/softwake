@@ -216,16 +216,19 @@ files again; the new text applies on the next awake.
 
 Serve owns the voice-state machine and capture. Default capture is mock.
 `--capture pipewire` (or SOFTWAKE_CAPTURE=pipewire) opens the default
-microphone when the binary was built with `--features pipewire-capture`.
-It speaks newline-delimited JSON (protocol 1) on a Unix socket. A stale socket
-file is removed on startup. If another serve is already listening, startup
-fails and leaves that socket in place.
+microphone when the binary was built with `--features pipewire-capture`
+(Linux). `--capture wasapi` selects the WASAPI stub when built with
+`wasapi-capture` (Windows; no device yet).
+It speaks newline-delimited JSON (protocol 1) on local IPC. A stale socket
+file (or Windows port file) is removed on startup. If another serve is already listening, startup
+fails and leaves that endpoint in place.
 
-Socket path, first match wins:
+IPC path, first match wins (Linux Unix socket / Windows port file):
   --socket PATH
   SOFTWAKE_SOCKET
-  $XDG_RUNTIME_DIR/softwake/softwaked.sock
-  /tmp/softwake-$UID/softwaked.sock when XDG_RUNTIME_DIR is unset
+  Linux: $XDG_RUNTIME_DIR/softwake/softwaked.sock
+  Linux: /tmp/softwake-$UID/softwaked.sock when XDG_RUNTIME_DIR is unset
+  Windows: %LOCALAPPDATA%\softwake\softwaked.port
 
 Soul directory, first match wins:
   --soul-dir PATH

@@ -2,14 +2,13 @@
 
 use std::fs;
 use std::io::BufReader;
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use softwake_ipc::{
     Client, ClientMessage, Command, Event, PROTOCOL_VERSION, ServerMessage, VoiceState,
-    read_message, write_message,
+    connect_stream, read_message, write_message,
 };
 
 use crate::capture::CaptureKind;
@@ -145,7 +144,7 @@ fn a_live_socket_is_kept_and_a_bad_hello_does_not_stop_serve() {
         serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock).expect_err("second");
     assert!(error.to_string().contains("is listening"), "{error}");
 
-    let stream = UnixStream::connect(temp.path()).expect("connect");
+    let stream = connect_stream(temp.path()).expect("connect");
     let mut writer = stream.try_clone().expect("clone");
     let mut reader = BufReader::new(stream);
     write_message(

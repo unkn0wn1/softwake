@@ -5,7 +5,8 @@
 //! the default `pipewire` feature: without `pipewire-native` it is a stub that
 //! reports that native I/O is not linked. With `pipewire-native` it links
 //! `libpipewire` and opens the default input at [`AudioFormat::WAKE`]. CI does
-//! not enable `pipewire-native` and does not need a microphone.
+//! not enable `pipewire-native` and does not need a microphone. A WASAPI stub
+//! (`wasapi` feature) keeps the Windows target compiling; real WASAPI is deferred.
 //!
 //! [`AudioFormat::WAKE`] is 16 kHz mono `i16`. [`AudioCapture::poll_frame`]
 //! pulls one [`AudioFrame`] for the mock and for the native stream.
@@ -19,6 +20,8 @@ mod pipewire;
 #[cfg(all(feature = "pipewire", feature = "pipewire-native"))]
 mod pipewire_native;
 mod traits;
+#[cfg(feature = "wasapi")]
+mod wasapi;
 
 pub use frame::{AudioFormat, AudioFrame};
 pub use level::rms_level;
@@ -26,6 +29,8 @@ pub use mock::MockAudioCapture;
 #[cfg(feature = "pipewire")]
 pub use pipewire::{PipeWireCapture, PipeWireError};
 pub use traits::AudioCapture;
+#[cfg(feature = "wasapi")]
+pub use wasapi::{WasapiCapture, WasapiError};
 
 #[cfg(all(test, feature = "pipewire"))]
 mod tests {

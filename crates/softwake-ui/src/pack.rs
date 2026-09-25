@@ -11,6 +11,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -134,17 +135,25 @@ fn ensure_dir(dir: &Path) -> Result<(), String> {
     if dir.exists() {
         return Err(format!("{} is not a directory", dir.display()));
     }
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(dir)
-        .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
-    let mut perms = fs::metadata(dir)
-        .map_err(|error| format!("cannot set mode on {}: {error}", dir.display()))?
-        .permissions();
-    perms.set_mode(0o700);
-    fs::set_permissions(dir, perms)
-        .map_err(|error| format!("cannot set mode on {}: {error}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
+        let mut perms = fs::metadata(dir)
+            .map_err(|error| format!("cannot set mode on {}: {error}", dir.display()))?
+            .permissions();
+        perms.set_mode(0o700);
+        fs::set_permissions(dir, perms)
+            .map_err(|error| format!("cannot set mode on {}: {error}", dir.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(dir)
+            .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
+    }
     Ok(())
 }
 
@@ -160,21 +169,32 @@ fn atomic_write(path: &Path, body: &[u8]) -> Result<(), String> {
         return Err(format!("cannot replace {}: {error}", path.display()));
     }
     // Rename can keep the previous inode's mode. Force the mode providers use.
-    let mut perms = fs::metadata(path)
-        .map_err(|error| format!("cannot set mode on {}: {error}", path.display()))?
-        .permissions();
-    perms.set_mode(0o600);
-    fs::set_permissions(path, perms)
-        .map_err(|error| format!("cannot set mode on {}: {error}", path.display()))?;
+    #[cfg(unix)]
+    {
+        let mut perms = fs::metadata(path)
+            .map_err(|error| format!("cannot set mode on {}: {error}", path.display()))?
+            .permissions();
+        perms.set_mode(0o600);
+        fs::set_permissions(path, perms)
+            .map_err(|error| format!("cannot set mode on {}: {error}", path.display()))?;
+    }
     Ok(())
 }
 
 fn write_temp(temp: &Path, dest: &Path, body: &[u8]) -> Result<(), String> {
+    #[cfg(unix)]
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .mode(0o600)
+        .open(temp)
+        .map_err(|error| format!("cannot write {}: {error}", dest.display()))?;
+    #[cfg(not(unix))]
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
         .open(temp)
         .map_err(|error| format!("cannot write {}: {error}", dest.display()))?;
     file.write_all(body)
@@ -199,6 +219,7 @@ fn temp_sibling(path: &Path) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -227,12 +248,14 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn mode_of(path: &std::path::Path) -> u32 {
         fs::metadata(path).expect("metadata").permissions().mode() & 0o777
     }
 
     const GLOSSARY: &str = "docs → /path/to/docs\n";
 
+    #[cfg(unix)]
     #[test]
     fn write_and_read_round_trip_uses_mode_0600() {
         let dir = TempDir::new();
@@ -269,6 +292,7 @@ mod tests {
         assert_eq!(mode_of(&soul), 0o600);
     }
 
+    #[cfg(unix)]
     #[test]
     fn new_directory_is_mode_0700_and_read_does_not_create_files() {
         let dir = TempDir::new();
