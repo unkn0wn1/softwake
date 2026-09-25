@@ -3,8 +3,8 @@
 //! Each entry is confirm or deny. There is no safe variant. [`ConnectorRegistry::invoke`]
 //! is the blind path and never succeeds for a registered action.
 //! [`ConnectorRegistry::authorize_confirmed`] allows a confirm action and does
-//! not perform it. Neither method accepts an [`crate::EmailConnector`], so
-//! neither can send.
+//! not perform it. Neither method accepts a connector value, so neither can
+//! send or list.
 
 /// Connector name for email.
 pub const EMAIL: &str = "email";
@@ -18,17 +18,29 @@ pub const EMAIL_SEND: &str = "send";
 /// Denied email action. It has no backend.
 pub const EMAIL_DELETE: &str = "delete";
 
-/// Connector name for Drive. Actions stay denied until a backend exists.
+/// Connector name for Drive.
 pub const DRIVE: &str = "drive";
 
-/// Denied Drive action. It has no backend.
+/// Confirm-gated Drive action.
+///
+/// [`crate::MockDrive::list`] is what returns the files. Calling it is the
+/// caller's step after [`ConnectorRegistry::authorize_confirmed`].
 pub const DRIVE_LIST: &str = "list";
 
-/// Connector name for calendar. Actions stay denied until a backend exists.
+/// Denied Drive action. It has no backend.
+pub const DRIVE_DELETE: &str = "delete";
+
+/// Connector name for calendar.
 pub const CALENDAR: &str = "calendar";
 
-/// Denied calendar action. It has no backend.
+/// Confirm-gated calendar action.
+///
+/// [`crate::MockCalendar::list`] is what returns the events. Calling it is the
+/// caller's step after [`ConnectorRegistry::authorize_confirmed`].
 pub const CALENDAR_LIST: &str = "list";
+
+/// Denied calendar action. It has no backend.
+pub const CALENDAR_DELETE: &str = "delete";
 
 /// How a registered connector action may be treated.
 ///
@@ -87,14 +99,26 @@ const PHASE3: &[ConnectorMeta] = &[
     ConnectorMeta {
         connector: DRIVE,
         action: DRIVE_LIST,
+        risk: ConnectorRisk::Confirm,
+        description: "List Drive files through the connector. Runs only after confirmation.",
+    },
+    ConnectorMeta {
+        connector: DRIVE,
+        action: DRIVE_DELETE,
         risk: ConnectorRisk::Deny,
-        description: "List Drive files. Denied until a backend exists.",
+        description: "Delete a Drive file. Denied.",
     },
     ConnectorMeta {
         connector: CALENDAR,
         action: CALENDAR_LIST,
+        risk: ConnectorRisk::Confirm,
+        description: "List calendar events through the connector. Runs only after confirmation.",
+    },
+    ConnectorMeta {
+        connector: CALENDAR,
+        action: CALENDAR_DELETE,
         risk: ConnectorRisk::Deny,
-        description: "List calendar events. Denied until a backend exists.",
+        description: "Delete a calendar event. Denied.",
     },
 ];
 
@@ -139,7 +163,8 @@ pub struct ConnectorRegistry {
 }
 
 impl ConnectorRegistry {
-    /// Registry for this slice: email send, email delete, Drive list, calendar list.
+    /// Registry for this slice: email send and delete, Drive list and delete,
+    /// calendar list and delete.
     #[must_use]
     pub const fn phase3() -> Self {
         Self { actions: PHASE3 }
@@ -187,9 +212,10 @@ impl ConnectorRegistry {
 
     /// Allow a confirm action after the daemon has already accepted a confirmation.
     ///
-    /// This function does not check a token and does not send. `Ok(())` means
-    /// the caller may perform the action. The only confirm action in
-    /// [`Self::phase3`] is [`EMAIL`] / [`EMAIL_SEND`].
+    /// This function does not check a token, does not send, and does not list.
+    /// `Ok(())` means the caller may perform the action. The confirm actions in
+    /// [`Self::phase3`] are [`EMAIL`] / [`EMAIL_SEND`], [`DRIVE`] / [`DRIVE_LIST`],
+    /// and [`CALENDAR`] / [`CALENDAR_LIST`].
     ///
     /// # Errors
     ///
@@ -234,8 +260,8 @@ fn needs_confirm(connector: &str, action: &str) -> ConnectorError {
 #[cfg(test)]
 mod tests {
     use super::{
-        CALENDAR, CALENDAR_LIST, ConnectorError, ConnectorRegistry, ConnectorRisk, DRIVE,
-        DRIVE_LIST, EMAIL, EMAIL_DELETE, EMAIL_SEND,
+        CALENDAR, CALENDAR_DELETE, CALENDAR_LIST, ConnectorError, ConnectorRegistry, ConnectorRisk,
+        DRIVE, DRIVE_DELETE, DRIVE_LIST, EMAIL, EMAIL_DELETE, EMAIL_SEND,
     };
 
     fn registry() -> ConnectorRegistry {
@@ -254,8 +280,10 @@ mod tests {
             vec![
                 (EMAIL, EMAIL_SEND, ConnectorRisk::Confirm),
                 (EMAIL, EMAIL_DELETE, ConnectorRisk::Deny),
-                (DRIVE, DRIVE_LIST, ConnectorRisk::Deny),
-                (CALENDAR, CALENDAR_LIST, ConnectorRisk::Deny),
+                (DRIVE, DRIVE_LIST, ConnectorRisk::Confirm),
+                (DRIVE, DRIVE_DELETE, ConnectorRisk::Deny),
+                (CALENDAR, CALENDAR_LIST, ConnectorRisk::Confirm),
+                (CALENDAR, CALENDAR_DELETE, ConnectorRisk::Deny),
             ]
         );
         assert!(
@@ -273,8 +301,10 @@ mod tests {
             vec![
                 "Send one email through the connector. Runs only after confirmation.",
                 "Delete email. Denied.",
-                "List Drive files. Denied until a backend exists.",
-                "List calendar events. Denied until a backend exists.",
+                "List Drive files through the connector. Runs only after confirmation.",
+                "Delete a Drive file. Denied.",
+                "List calendar events through the connector. Runs only after confirmation.",
+                "Delete a calendar event. Denied.",
             ]
         );
         let confirmations = registry
@@ -282,7 +312,7 @@ mod tests {
             .iter()
             .filter(|entry| entry.risk == ConnectorRisk::Confirm)
             .count();
-        assert_eq!(confirmations, 1);
+        assert_eq!(confirmations, 3);
         for entry in registry.entries() {
             match entry.risk {
                 ConnectorRisk::Confirm | ConnectorRisk::Deny => {
@@ -299,11 +329,24 @@ mod tests {
             registry.risk(EMAIL, EMAIL_DELETE),
             Some(ConnectorRisk::Deny)
         );
-        assert_eq!(registry.risk(DRIVE, DRIVE_LIST), Some(ConnectorRisk::Deny));
         assert_eq!(
-            registry.risk(CALENDAR, CALENDAR_LIST),
+            registry.risk(DRIVE, DRIVE_LIST),
+            Some(ConnectorRisk::Confirm)
+        );
+        assert_eq!(
+            registry.risk(DRIVE, DRIVE_DELETE),
             Some(ConnectorRisk::Deny)
         );
+        assert_eq!(
+            registry.risk(CALENDAR, CALENDAR_LIST),
+            Some(ConnectorRisk::Confirm)
+        );
+        assert_eq!(
+            registry.risk(CALENDAR, CALENDAR_DELETE),
+            Some(ConnectorRisk::Deny)
+        );
+        assert_eq!(registry.risk("Drive", DRIVE_LIST), None);
+        assert_eq!(registry.risk(DRIVE, "List"), None);
         assert_eq!(registry.risk("Email", EMAIL_SEND), None);
         assert_eq!(registry.risk(EMAIL, "SEND"), None);
         assert_eq!(registry.risk("", EMAIL_SEND), None);
@@ -318,22 +361,28 @@ mod tests {
         for entry in registry.entries() {
             assert!(registry.invoke(entry.connector, entry.action).is_err());
         }
-        let needs_confirm = registry.invoke(EMAIL, EMAIL_SEND).expect_err("blind");
-        assert_eq!(
-            needs_confirm,
-            ConnectorError::NeedsConfirm {
-                connector: EMAIL.to_owned(),
-                action: EMAIL_SEND.to_owned(),
-            }
-        );
-        assert_eq!(
-            needs_confirm.to_string(),
-            "connector action requires confirmation: email/send"
-        );
         for (connector, action) in [
-            (EMAIL, EMAIL_DELETE),
+            (EMAIL, EMAIL_SEND),
             (DRIVE, DRIVE_LIST),
             (CALENDAR, CALENDAR_LIST),
+        ] {
+            let needs_confirm = registry.invoke(connector, action).expect_err("blind");
+            assert_eq!(
+                needs_confirm,
+                ConnectorError::NeedsConfirm {
+                    connector: connector.to_owned(),
+                    action: action.to_owned(),
+                }
+            );
+            assert_eq!(
+                needs_confirm.to_string(),
+                format!("connector action requires confirmation: {connector}/{action}")
+            );
+        }
+        for (connector, action) in [
+            (EMAIL, EMAIL_DELETE),
+            (DRIVE, DRIVE_DELETE),
+            (CALENDAR, CALENDAR_DELETE),
         ] {
             let denied = registry.invoke(connector, action).expect_err("deny");
             assert_eq!(
@@ -351,13 +400,19 @@ mod tests {
     }
 
     #[test]
-    fn authorize_confirmed_allows_only_email_send() {
+    fn authorize_confirmed_allows_only_confirm_rows() {
         let registry = registry();
-        assert_eq!(registry.authorize_confirmed(EMAIL, EMAIL_SEND), Ok(()));
         for (connector, action) in [
-            (EMAIL, EMAIL_DELETE),
+            (EMAIL, EMAIL_SEND),
             (DRIVE, DRIVE_LIST),
             (CALENDAR, CALENDAR_LIST),
+        ] {
+            assert_eq!(registry.authorize_confirmed(connector, action), Ok(()));
+        }
+        for (connector, action) in [
+            (EMAIL, EMAIL_DELETE),
+            (DRIVE, DRIVE_DELETE),
+            (CALENDAR, CALENDAR_DELETE),
         ] {
             assert_eq!(
                 registry.authorize_confirmed(connector, action),
@@ -377,6 +432,11 @@ mod tests {
             ("email", "forward"),
             ("email", "Send"),
             ("drive", "send"),
+            ("drive", "upload"),
+            ("calendar", "create"),
+            ("Drive", "list"),
+            ("", "list"),
+            ("drive", ""),
             ("", "send"),
             ("email", ""),
         ] {
@@ -391,6 +451,13 @@ mod tests {
             assert_eq!(
                 error.to_string(),
                 format!("unknown connector action: {connector}/{action}")
+            );
+            assert_eq!(
+                registry.authorize_confirmed(connector, action),
+                Err(ConnectorError::Unknown {
+                    connector: connector.to_owned(),
+                    action: action.to_owned(),
+                })
             );
         }
     }

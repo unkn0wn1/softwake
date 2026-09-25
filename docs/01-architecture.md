@@ -34,7 +34,7 @@ Keep crates small and single-purpose. Exact names can shift; responsibilities sh
 | `softwake-wake` | Local wake/sleep phrases. Text table for the typed demo. PCM seam for sherpa-onnx keyword spotting ([ADR 0006](ADR-0006-on-device-wake.md)) |
 | `softwake-session` | Text session for one awake period. Stores rendered soul instructions. No model client yet |
 | `softwake-tools` | Tool registry with safe, confirm, and deny metadata. `echo` is safe, `notify` and `email_send` wait for confirmation, `shell` is denied |
-| `softwake-connectors` | World I/O boundary. Email trait and in-memory mock. Registry is confirm or deny. No live cloud client in the default build ([ADR 0008](ADR-0008-connector-boundary.md)) |
+| `softwake-connectors` | World I/O boundary. Email, Drive, and calendar traits with in-memory mocks. Registry is confirm or deny. No live cloud client in the default build. The daemon calls the email mock only ([ADR 0008](ADR-0008-connector-boundary.md)) |
 | `softwake-policy` | Classifies tool names and connector pairs. Unknown subjects are denied. Overrides may only tighten. The daemon asks it before a tool runs ([ADR 0010](ADR-0010-policy-engine.md)) |
 | `softwake-memory` | Long-term memory boundary. `Memory` trait and in-memory mock, off until enabled. The daemon does not call it ([ADR 0009](ADR-0009-long-term-memory.md)) |
 | `softwake-soul` | Load/validate soul pack; render system instructions |
@@ -94,7 +94,7 @@ Unix domain socket and newline-delimited JSON, protocol version 1. The path, fra
 
 ## Connectors
 
-World I/O is a library boundary in `softwake-connectors` ([ADR 0008](ADR-0008-connector-boundary.md)). The daemon calls that crate from `Hands` when a confirmed `email_send` runs: `authorize_confirmed` for `email` / `send`, then `EmailConnector::send` on a `MockEmail`. The registry is confirm or deny: `email` / `send` is confirm, and `email` / `delete`, `drive` / `list`, and `calendar` / `list` are deny. `MockEmail` appends to an in-memory outbox when the caller sends after authorization. The registry methods themselves do not send. Before that call, `softwake-policy` must evaluate `email` / `send` as confirm. A live backend, when one exists, is an opt-in feature that CI does not enable. The default mock does not open a socket. Protocol generation stays 1; connector actions are not socket commands.
+World I/O is a library boundary in `softwake-connectors` ([ADR 0008](ADR-0008-connector-boundary.md)). The daemon calls that crate from `Hands` when a confirmed `email_send` runs: `authorize_confirmed` for `email` / `send`, then `EmailConnector::send` on a `MockEmail`. The registry is confirm or deny: `email` / `send`, `drive` / `list`, and `calendar` / `list` are confirm; `email` / `delete`, `drive` / `delete`, and `calendar` / `delete` are deny. `MockEmail` appends to an in-memory outbox when the caller sends after authorization. `MockDrive::list` and `MockCalendar::list` return what that value stores. The daemon does not call those list mocks. The registry methods themselves do not send or list. Before the email send, `softwake-policy` must evaluate `email` / `send` as confirm. A live backend, when one exists, is an opt-in feature that CI does not enable. The default mocks do not open a socket. Protocol generation stays 1; connector actions are not socket commands.
 
 ## Policy
 

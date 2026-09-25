@@ -2,27 +2,34 @@
 //!
 //! World I/O is a separate surface from the tool registry. [`ConnectorRegistry`]
 //! classifies an action as confirm or deny. There is no safe world action.
-//! [`invoke`](ConnectorRegistry::invoke) never sends. [`authorize_confirmed`](ConnectorRegistry::authorize_confirmed)
-//! does not send either: it only reports that a confirm action may proceed.
-//! [`MockEmail`] stores outbound messages in memory. This crate does not open
+//! [`invoke`](ConnectorRegistry::invoke) never sends or lists.
+//! [`authorize_confirmed`](ConnectorRegistry::authorize_confirmed) does not send
+//! or list either: it only reports that a confirm action may proceed.
+//! [`MockEmail`] stores outbound messages in memory. [`MockDrive`] and
+//! [`MockCalendar`] list entries stored on that value. This crate does not open
 //! a socket and does not read credentials.
 
+mod calendar;
+mod drive;
 mod email;
 mod mock;
 mod registry;
 
+pub use calendar::{CalendarConnector, CalendarEvent};
+pub use drive::{DriveConnector, DriveFile};
 pub use email::{EmailConnector, OutboundEmail, SendReceipt};
-pub use mock::MockEmail;
+pub use mock::{MockCalendar, MockDrive, MockEmail};
 pub use registry::{
-    CALENDAR, CALENDAR_LIST, ConnectorError, ConnectorMeta, ConnectorRegistry, ConnectorRisk,
-    DRIVE, DRIVE_LIST, EMAIL, EMAIL_DELETE, EMAIL_SEND,
+    CALENDAR, CALENDAR_DELETE, CALENDAR_LIST, ConnectorError, ConnectorMeta, ConnectorRegistry,
+    ConnectorRisk, DRIVE, DRIVE_DELETE, DRIVE_LIST, EMAIL, EMAIL_DELETE, EMAIL_SEND,
 };
 
 #[cfg(test)]
 mod tests {
     use super::{
-        CALENDAR, CALENDAR_LIST, ConnectorError, ConnectorRegistry, DRIVE, DRIVE_LIST, EMAIL,
-        EMAIL_DELETE, EMAIL_SEND, EmailConnector, MockEmail, OutboundEmail, SendReceipt,
+        CALENDAR, CALENDAR_DELETE, CALENDAR_LIST, CalendarConnector, ConnectorError,
+        ConnectorRegistry, DRIVE, DRIVE_DELETE, DRIVE_LIST, DriveConnector, EMAIL, EMAIL_DELETE,
+        EMAIL_SEND, EmailConnector, MockCalendar, MockDrive, MockEmail, OutboundEmail, SendReceipt,
     };
 
     fn message(to: &str, subject: &str, body: &str) -> OutboundEmail {
@@ -38,6 +45,16 @@ mod tests {
         message: &OutboundEmail,
     ) -> Result<SendReceipt, C::Error> {
         connector.send(message)
+    }
+
+    fn list_files<C: DriveConnector>(connector: &C) -> Result<Vec<super::DriveFile>, C::Error> {
+        connector.list()
+    }
+
+    fn list_events<C: CalendarConnector>(
+        connector: &C,
+    ) -> Result<Vec<super::CalendarEvent>, C::Error> {
+        connector.list()
     }
 
     #[test]
@@ -60,8 +77,8 @@ mod tests {
         let email = MockEmail::default();
         for (connector, action) in [
             (EMAIL, EMAIL_DELETE),
-            (DRIVE, DRIVE_LIST),
-            (CALENDAR, CALENDAR_LIST),
+            (DRIVE, DRIVE_DELETE),
+            (CALENDAR, CALENDAR_DELETE),
         ] {
             assert_eq!(
                 registry.authorize_confirmed(connector, action),
@@ -88,5 +105,59 @@ mod tests {
         let receipt = deliver(&mut email, &stored).expect("mock send");
         assert_eq!(receipt.id, 1);
         assert_eq!(email.outbox(), &[stored]);
+    }
+
+    #[test]
+    fn classification_does_not_list() {
+        let registry = ConnectorRegistry::phase3();
+        let mut drive = MockDrive::default();
+        let file = drive.insert("notes");
+        assert!(registry.invoke(DRIVE, DRIVE_LIST).is_err());
+        assert_eq!(drive.list(), vec![file.clone()]);
+        assert!(registry.authorize_confirmed(DRIVE, DRIVE_LIST).is_ok());
+        assert_eq!(drive.list(), vec![file.clone()]);
+        assert_eq!(
+            registry.authorize_confirmed(DRIVE, DRIVE_DELETE),
+            Err(ConnectorError::Denied {
+                connector: DRIVE.to_owned(),
+                action: DRIVE_DELETE.to_owned(),
+            })
+        );
+        assert_eq!(drive.list(), vec![file]);
+
+        let mut calendar = MockCalendar::default();
+        let event = calendar.insert("stand-up", "Monday");
+        assert!(registry.invoke(CALENDAR, CALENDAR_LIST).is_err());
+        assert_eq!(calendar.list(), vec![event.clone()]);
+        assert!(
+            registry
+                .authorize_confirmed(CALENDAR, CALENDAR_LIST)
+                .is_ok()
+        );
+        assert_eq!(calendar.list(), vec![event.clone()]);
+        assert_eq!(
+            registry.authorize_confirmed(CALENDAR, CALENDAR_DELETE),
+            Err(ConnectorError::Denied {
+                connector: CALENDAR.to_owned(),
+                action: CALENDAR_DELETE.to_owned(),
+            })
+        );
+        assert_eq!(calendar.list(), vec![event]);
+    }
+
+    #[test]
+    fn mock_drive_satisfies_drive_connector() {
+        let mut drive = MockDrive::default();
+        let stored = drive.insert("notes");
+        let listed = list_files(&drive).expect("mock list");
+        assert_eq!(listed, vec![stored]);
+    }
+
+    #[test]
+    fn mock_calendar_satisfies_calendar_connector() {
+        let mut calendar = MockCalendar::default();
+        let stored = calendar.insert("stand-up", "Monday");
+        let listed = list_events(&calendar).expect("mock list");
+        assert_eq!(listed, vec![stored]);
     }
 }
