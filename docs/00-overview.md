@@ -24,7 +24,7 @@ Chat UIs are not how you want to drive a machine when your hands are busy. Softw
 - Full desktop automation (window managers, arbitrary shell)
 - Cloud-only wake word (ambient cloud VAD is not “sleep”)
 - Electron / Capacitor / webview as the audio runtime
-- Long-term memory productization. The decision is a local trait ([ADR 0009](ADR-0009-long-term-memory.md)); a durable store is still open
+- Long-term memory productization. Phase 1 did not ship it. The store is an opt-in file ([ADR 0009](ADR-0009-long-term-memory.md)); the daemon still does not load it
 
 ## Phases (summary)
 
@@ -32,7 +32,7 @@ Chat UIs are not how you want to drive a machine when your hands are busy. Softw
 |-------|---------|
 | **1** | Local wake word → awake session → one safe tool → sleep phrase; hibernate from UI; soul.md + user.md loaded into session |
 | **2** | Better TTS/STT or realtime voice; confirm flows; richer tool bus |
-| **3** | Connectors (boundary first; live backends still open) + long-term memory decision (local trait; durable store still open); policy engine ([ADR 0010](ADR-0010-policy-engine.md)) |
+| **3** | Connectors (boundary first; live backends still open) + long-term memory (local trait and opt-in durable file; daemon unwired) + policy engine ([ADR 0010](ADR-0010-policy-engine.md)) |
 
 See [06-milestones.md](06-milestones.md).
 
