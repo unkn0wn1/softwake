@@ -98,6 +98,7 @@ pub(crate) fn transcribe_pcm(
 /// # Errors
 ///
 /// A voice, feature, or player sentence. The bearer is not included.
+#[cfg_attr(test, allow(dead_code))] // called only from `#[cfg(not(test))]` speak path
 pub(crate) fn speak_reply(ready: &DiskChat, text: &str) -> Result<(), String> {
     let provider = ready.prepared.provider;
     if !family_speaks_xai(provider) {
