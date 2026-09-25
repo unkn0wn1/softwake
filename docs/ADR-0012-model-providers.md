@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-25
-- **Amended:** 2026-09-25. Session chat is [ADR 0013](ADR-0013-session-provider.md). OpenRouter and OpenAI-compatible (API key + base URL) join the Settings provider list. Provider secrets prefer the OS keyring, with an opt-in plaintext fallback. This record stays the Settings, Test, and secret-bag decision.
+- **Amended:** 2026-09-25. Session chat is [ADR 0013](ADR-0013-session-provider.md). OpenRouter and OpenAI-compatible (API key + base URL) join the Settings provider list. Provider secrets prefer the OS keyring, with an opt-in plaintext fallback. Settings now keep **two** Test catalogs and selections: chat (the acting session) and voice / STT. Live speech-to-text is not part of this crate. This record stays the Settings, Test, and secret-bag decision.
 
 ## Decision
 
@@ -18,7 +18,7 @@ Five credential kinds ship in Settings:
 | `openrouter` | OpenRouter | API key |
 | `openai-compatible` | OpenAI-compatible | API key plus a configured base URL |
 
-Softwake has one acting model role. There is no separate Voice default in this crate. On-device wake and awake STT stay in [ADR 0006](ADR-0006-on-device-wake.md) and [ADR 0007](ADR-0007-awake-stt-tts.md).
+Softwake has one acting **chat** model role for the session ([ADR 0013](ADR-0013-session-provider.md)). Settings also store a **voice / STT** model id and catalog so the operator can choose a speech-to-text model after Test. That picker is persistence and UI only: this crate does not run live STT or audio. On-device wake and awake STT stay in [ADR 0006](ADR-0006-on-device-wake.md) and [ADR 0007](ADR-0007-awake-stt-tts.md).
 
 ### Sign-in and Test
 
@@ -26,12 +26,15 @@ Softwake has one acting model role. There is no separate Voice default in this c
 - **API keys** are pasted in Settings (or later ctl). A saved key wins over `XAI_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` / `OPENAI_COMPATIBLE_API_KEY`. The environment applies when that provider has no saved key.
 - **OpenAI-compatible** also requires a non-secret base URL in Settings (for example `http://127.0.0.1:11434/v1`). Softwake does not append `/v1`. Test and chat call `{base}/chat/completions` and `{base}/models`.
 - **OpenRouter** uses `https://openrouter.ai/api/v1`.
-- **Test** resolves a bearer token (and base URL when needed), probes chat with a one-token completion, then `GET …/models` for that family. The model dropdown stays empty until Test stores a catalog for the selected provider. A failed Test does not invent ids and does not clear a previous catalog.
-- Seed chat models (`grok-4.5` for xAI, `gpt-4.1-mini` for OpenAI, `openai/gpt-4.1-mini` for OpenRouter, `gpt-4.1-mini` for OpenAI-compatible) are registry hints only. They appear in the picker only when Test's catalog includes them, or when a passing Test received an empty chat list after a successful probe (seed fallback).
+- **Test** resolves a bearer token (and base URL when needed), probes chat with a one-token completion, then `GET …/models` for that family. The response is split into a **chat** list and a **voice / STT** list. Both dropdowns stay empty until Test stores catalogs for the selected provider. A failed Test does not invent ids and does not clear a previous catalog.
+- **Chat filter:** drop ids whose lowercase form contains `embed`, `moderation`, `tts`, `whisper`, `transcribe`, `stt`, `realtime`, `image`, `audio`, `video`, `dall-e`, `davinci`, `babbage`, `ada-`, or `search`. Then keep family prefixes: xAI `grok-`; OpenAI `gpt-` / `chatgpt-` / `o` + digit; OpenRouter and OpenAI-compatible keep anything not excluded. Unmatched ids are dropped (no dump of the raw list into both pickers).
+- **Voice / STT filter:** keep ids whose lowercase form contains `whisper`, `transcribe`, or `stt`, and drop those that also contain `tts` or `realtime`. This is the speech-to-text catalog, not TTS speaker names.
+- Seed chat models (`grok-4.5` for xAI, `gpt-4.1-mini` for OpenAI, `openai/gpt-4.1-mini` for OpenRouter, `gpt-4.1-mini` for OpenAI-compatible) are registry hints only. They appear in the chat picker when Test's catalog includes them, or when a passing Test received an empty chat list after a successful probe (seed fallback).
+- Seed voice / STT models (`grok-voice-transcribe-2.0` for xAI, `gpt-4o-transcribe-diarize` for OpenAI) apply the same way when a passing Test has no STT ids. OpenRouter and OpenAI-compatible have no voice seed; voice stays empty unless the catalog listed STT ids.
 
 ### Secrets
 
-Tokens and API keys never enter git. Non-secret Settings (selected provider id, selected model id, cached model lists) are JSON under `$XDG_CONFIG_HOME/softwake/providers.json` (or `~/.config/softwake/providers.json`). Secrets are a separate bag under `$XDG_STATE_HOME/softwake/secrets.json` (or `~/.local/state/softwake/secrets.json`), file mode `0600`, parent dir mode `0700` when this crate creates them.
+Tokens and API keys never enter git. Non-secret Settings (selected provider id, selected chat model id, selected voice / STT model id, cached chat and voice lists) are JSON under `$XDG_CONFIG_HOME/softwake/providers.json` (or `~/.config/softwake/providers.json`). Document version stays `1`; new fields default to empty. Secrets are a separate bag under `$XDG_STATE_HOME/softwake/secrets.json` (or `~/.local/state/softwake/secrets.json`), file mode `0600`, parent dir mode `0700` when this crate creates them.
 
 Version 1 of the bag was plaintext at rest. That file is still read. The current store prefers the OS keyring: Linux Secret Service, and macOS Keychain or Windows Credential Manager through the same crate (those two are not tested in CI). In keyring mode the file is a pointer with `version: 2`, `plaintext: false`, `backend: "keyring"`, and no secret fields. One secret-service item holds the five secret fields, service `softwake`, user `secret-bag`.
 
@@ -43,13 +46,13 @@ Plaintext remains an opt-in fallback (`backend: "plaintext"`, `plaintext_opt_in:
 
 ### UI and daemon
 
-The thin Settings panel in `softwake-ui` calls Tauri commands that use this crate in the UI process. IPC protocol generation stays `1`. Provider commands are not socket commands. [`ProviderHandle`](../crates/softwake-providers/src/handle.rs) is the read-only view of the selected provider, selected model, and bearer lookup. Session chat on that handle is [ADR 0013](ADR-0013-session-provider.md).
+The thin Settings panel in `softwake-ui` calls Tauri commands that use this crate in the UI process. IPC protocol generation stays `1`. Provider commands are not socket commands. [`ProviderHandle`](../crates/softwake-providers/src/handle.rs) is the read-only view of the selected provider, selected chat model, selected voice / STT model, and bearer lookup. Session chat on that handle is [ADR 0013](ADR-0013-session-provider.md) and still uses the chat model only.
 
 ## Context
 
 Phase 4 needs provider sign-in after the context pack ([ADR 0011](ADR-0011-context-pack.md)). Connectors already keep live cloud clients out of the default build ([ADR 0008](ADR-0008-connector-boundary.md)). Model access follows the same rule: library types and mock transport first, live HTTP opt-in, CI key-free.
 
-Softwake is an acting conductor, not a dual Voice/AI recorder. One provider and one chat model are enough for the session prompt. Wake and STT stay local.
+Softwake is an acting conductor. One provider and one chat model are enough for the session prompt. Settings also persist a voice / STT model for a later audio path; wake and live STT stay local and are not invoked from Test.
 
 ## Alternatives
 
@@ -80,7 +83,7 @@ cargo test -p softwake-providers --features live-http -- --ignored --skip live_s
 
 The skip leaves out the ignored Secret Service round-trip. That test is not part of `cargo test --workspace`.
 
-In the window: open Settings, pick a provider, paste a key or start xAI sign-in, press Test, then choose a model from the filled dropdown.
+In the window: open Settings, pick a provider, paste a key or start xAI sign-in, press Test, then choose a chat model and a voice (STT) model from the filled dropdowns.
 
 ## Consequences
 

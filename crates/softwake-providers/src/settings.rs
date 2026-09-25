@@ -25,6 +25,9 @@ pub struct ModelCache {
     /// Chat model ids in catalog order.
     #[serde(default)]
     pub chat_models: Vec<String>,
+    /// Voice / STT model ids in catalog order. Empty until Test.
+    #[serde(default)]
+    pub voice_models: Vec<String>,
     /// Unix milliseconds when Test stored this list. Zero means unknown.
     #[serde(default)]
     pub fetched_at_ms: u64,
@@ -50,6 +53,9 @@ pub struct ProviderSettings {
     /// Selected chat model id for that provider. Empty until the operator picks one.
     #[serde(default)]
     pub selected_model: String,
+    /// Selected voice / STT model id. Empty until the operator picks one after Test.
+    #[serde(default)]
+    pub selected_voice_model: String,
     /// Per-provider model catalogs from Test.
     #[serde(default)]
     pub model_cache: BTreeMap<String, ModelCache>,
@@ -71,6 +77,7 @@ impl Default for ProviderSettings {
             version: DOCUMENT_VERSION,
             selected_provider: ProviderId::XaiKey,
             selected_model: String::new(),
+            selected_voice_model: String::new(),
             model_cache: BTreeMap::new(),
             last_test: BTreeMap::new(),
             openai_compatible_base_url: String::new(),
@@ -79,7 +86,7 @@ impl Default for ProviderSettings {
 }
 
 impl ProviderSettings {
-    /// Model ids shown in the picker for `provider`. Empty until Test.
+    /// Chat model ids shown in the picker for `provider`. Empty until Test.
     #[must_use]
     pub fn models_for(&self, provider: ProviderId) -> &[String] {
         self.model_cache
@@ -87,12 +94,27 @@ impl ProviderSettings {
             .map_or(&[], |cache| cache.chat_models.as_slice())
     }
 
-    /// Store a catalog after a passing Test.
-    pub fn store_models(&mut self, provider: ProviderId, models: Vec<String>, fetched_at_ms: u64) {
+    /// Voice / STT model ids shown in the picker for `provider`. Empty until Test.
+    #[must_use]
+    pub fn voice_models_for(&self, provider: ProviderId) -> &[String] {
+        self.model_cache
+            .get(provider.as_str())
+            .map_or(&[], |cache| cache.voice_models.as_slice())
+    }
+
+    /// Store chat and voice catalogs after a passing Test.
+    pub fn store_models(
+        &mut self,
+        provider: ProviderId,
+        chat_models: Vec<String>,
+        voice_models: Vec<String>,
+        fetched_at_ms: u64,
+    ) {
         self.model_cache.insert(
             provider.as_str().to_owned(),
             ModelCache {
-                chat_models: models,
+                chat_models,
+                voice_models,
                 fetched_at_ms,
             },
         );
@@ -349,6 +371,8 @@ mod tests {
     fn default_picker_empty_until_test() {
         let settings = ProviderSettings::default();
         assert!(settings.models_for(ProviderId::XaiKey).is_empty());
+        assert!(settings.voice_models_for(ProviderId::XaiKey).is_empty());
+        assert!(settings.selected_voice_model.is_empty());
     }
 
     #[test]
@@ -373,7 +397,13 @@ mod tests {
             selected_provider: ProviderId::Openai,
             ..ProviderSettings::default()
         };
-        settings.store_models(ProviderId::Openai, vec!["gpt-4.1-mini".to_owned()], 42);
+        settings.selected_voice_model = "whisper-1".to_owned();
+        settings.store_models(
+            ProviderId::Openai,
+            vec!["gpt-4.1-mini".to_owned()],
+            vec!["whisper-1".to_owned()],
+            42,
+        );
         store.save(&settings).expect("save");
         let loaded = store.load().expect("load");
         assert_eq!(loaded.selected_provider, ProviderId::Openai);
@@ -381,6 +411,11 @@ mod tests {
             loaded.models_for(ProviderId::Openai),
             &["gpt-4.1-mini".to_owned()]
         );
+        assert_eq!(
+            loaded.voice_models_for(ProviderId::Openai),
+            &["whisper-1".to_owned()]
+        );
+        assert_eq!(loaded.selected_voice_model, "whisper-1");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

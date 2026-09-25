@@ -29,14 +29,16 @@ pub use chat::{
     missing_credential_message, prepare_chat,
 };
 pub use constants::{
-    OPENAI_API_BASE, OPENAI_CHAT_SEED, OPENAI_COMPATIBLE_CHAT_SEED, OPENROUTER_API_BASE,
-    OPENROUTER_CHAT_SEED, XAI_API_BASE, XAI_CHAT_SEED, XAI_OAUTH_CLIENT_ID, XAI_OAUTH_DEVICE_URL,
-    XAI_OAUTH_GRANT_DEVICE, XAI_OAUTH_ISSUER, XAI_OAUTH_SCOPE, XAI_OAUTH_TOKEN_URL,
-    XAI_REFRESH_SKEW_MS,
+    OPENAI_API_BASE, OPENAI_CHAT_SEED, OPENAI_COMPATIBLE_CHAT_SEED, OPENAI_VOICE_SEED,
+    OPENROUTER_API_BASE, OPENROUTER_CHAT_SEED, XAI_API_BASE, XAI_CHAT_SEED, XAI_OAUTH_CLIENT_ID,
+    XAI_OAUTH_DEVICE_URL, XAI_OAUTH_GRANT_DEVICE, XAI_OAUTH_ISSUER, XAI_OAUTH_SCOPE,
+    XAI_OAUTH_TOKEN_URL, XAI_REFRESH_SKEW_MS, XAI_VOICE_SEED,
 };
 pub use handle::{HandleError, ProviderHandle};
 pub use ids::{ParseProviderIdError, ProviderId};
-pub use models::{filter_chat_models, is_chat_model, parse_model_ids};
+pub use models::{
+    filter_chat_models, filter_voice_models, is_chat_model, is_voice_model, parse_model_ids,
+};
 pub use oauth::{
     DeviceCodeStart, DevicePoll, OAuthTokenSet, access_needs_refresh, device_code_body,
     merge_refresh, parse_device_poll, parse_device_start, parse_token_response, refresh_body,

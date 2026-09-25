@@ -48,8 +48,9 @@
         <section id="pane-providers" class="pane glass hidden" hidden aria-labelledby="providers-title">
           <h2 id="providers-title">Providers</h2>
           <p class="meta">
-            Pick a provider, save a key or sign in, press Test, then choose a model. The
-            model list stays empty until Test succeeds.
+            Pick a provider, save a key or sign in, press Test, then choose a chat model
+            and a voice (speech-to-text) model. Both lists stay empty until Test succeeds.
+            Voice selection is stored for a later audio path; Test does not run live STT.
           </p>
           <label class="field">
             <span>Provider</span>
@@ -90,8 +91,14 @@
           </div>
           <p id="test-status" class="meta">Test: not run</p>
           <label class="field">
-            <span>Model</span>
+            <span>Chat model</span>
             <select id="model-select" disabled>
+              <option value="">Test to load models</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Voice model</span>
+            <select id="voice-model-select" disabled>
               <option value="">Test to load models</option>
             </select>
           </label>

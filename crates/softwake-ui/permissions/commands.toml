@@ -80,8 +80,13 @@ commands.allow = ["provider_test"]
 
 [[permission]]
 identifier = "allow-provider-set-model"
-description = "Save the selected model id."
+description = "Save the selected chat model id."
 commands.allow = ["provider_set_model"]
+
+[[permission]]
+identifier = "allow-provider-set-voice-model"
+description = "Save the selected voice / STT model id."
+commands.allow = ["provider_set_voice_model"]
 
 [[permission]]
 identifier = "allow-provider-opt-in-plaintext"

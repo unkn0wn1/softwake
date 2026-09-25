@@ -95,6 +95,20 @@ impl ProviderHandle {
         self.settings.models_for(self.settings.selected_provider)
     }
 
+    /// Selected voice / STT model id, if the operator picked one after Test.
+    #[must_use]
+    pub fn selected_voice_model(&self) -> Option<&str> {
+        let model = self.settings.selected_voice_model.trim();
+        if model.is_empty() { None } else { Some(model) }
+    }
+
+    /// Cached voice / STT models for the selected provider (empty until Test).
+    #[must_use]
+    pub fn cached_voice_models(&self) -> &[String] {
+        self.settings
+            .voice_models_for(self.settings.selected_provider)
+    }
+
     /// Last Test report for the selected provider.
     ///
     /// `None` when Settings has no report for that id. One report is stored
