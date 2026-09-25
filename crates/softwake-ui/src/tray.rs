@@ -110,9 +110,6 @@ fn show_settings<R: Runtime>(app: &AppHandle<R>) {
         let _ = window.show();
         let _ = window.set_focus();
     }
-    // Settings must not cover the always-on-top capsule.
-    if let Some(hud) = app.get_webview_window("hud") {
-        let _ = hud.set_always_on_top(true);
-        let _ = hud.show();
-    }
+    // Re-park saved or primary BR and keep always-on-top above Settings.
+    crate::reassert_hud_placement(app);
 }

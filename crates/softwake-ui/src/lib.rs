@@ -85,7 +85,8 @@ pub fn run() {
                             let _ = window.hide();
                         }
                         WindowEvent::Focused(true) | WindowEvent::Moved(_) => {
-                            assert_hud_on_top(window.app_handle());
+                            // Opening Settings must not leave a centred HUD.
+                            reassert_hud_placement(window.app_handle());
                         }
                         _ => {}
                     }
@@ -132,7 +133,11 @@ fn bottom_right_on(monitor: &tauri::Monitor, width: f64, height: f64) -> (f64, f
 }
 
 /// Primary bottom-right, else first monitor, else a coarse fallback (not center).
-fn default_hud_position(app: &AppHandle, width: f64, height: f64) -> (f64, f64) {
+fn default_hud_position<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    width: f64,
+    height: f64,
+) -> (f64, f64) {
     if let Ok(Some(monitor)) = app.primary_monitor() {
         return bottom_right_on(&monitor, width, height);
     }
@@ -146,7 +151,7 @@ fn default_hud_position(app: &AppHandle, width: f64, height: f64) -> (f64, f64) 
 }
 
 /// Keep the capsule above Settings and other normal windows.
-pub(crate) fn assert_hud_on_top(app: &AppHandle) {
+pub(crate) fn assert_hud_on_top<R: tauri::Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("hud") {
         let _ = window.set_always_on_top(true);
         let _ = window.unminimize();
@@ -156,7 +161,10 @@ pub(crate) fn assert_hud_on_top(app: &AppHandle) {
 }
 
 /// Resize the HUD. Re-anchor to primary BR only when the operator has not dragged it.
-pub(crate) fn set_hud_layout(app: &AppHandle, expanded: bool) -> Result<(), String> {
+pub(crate) fn set_hud_layout<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    expanded: bool,
+) -> Result<(), String> {
     let (width, height) = hud_logical_size(expanded);
     let window = app
         .get_webview_window("hud")
@@ -174,7 +182,7 @@ pub(crate) fn set_hud_layout(app: &AppHandle, expanded: bool) -> Result<(), Stri
     Ok(())
 }
 
-fn open_hud(app: &AppHandle) -> tauri::Result<()> {
+fn open_hud<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let (width, height) = hud_logical_size(false);
     let (x, y) = match hud_pos::load() {
         Some(pos) => (pos.x, pos.y),
@@ -193,8 +201,46 @@ fn open_hud(app: &AppHandle) -> tauri::Result<()> {
         .position(x, y);
 
     let window = builder.build()?;
+    // Wayland / some compositors ignore builder.position — force after create.
+    let _ = window.set_size(LogicalSize::new(width, height));
+    let _ = window.set_position(LogicalPosition::new(x, y));
     let _ = window.set_always_on_top(true);
+    let _ = window.show();
+    reassert_hud_placement(app);
+    // Second pass after the compositor maps the window (avoids centred spawn
+    // over Settings on Linux).
+    let delayed = app.clone();
+    let _ = std::thread::Builder::new()
+        .name("softwake-hud-place".into())
+        .spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            reassert_hud_placement(&delayed);
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            reassert_hud_placement(&delayed);
+        });
     Ok(())
+}
+
+/// Park at saved coords or primary bottom-right. Never leave a centred default.
+pub(crate) fn reassert_hud_placement<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let Some(window) = app.get_webview_window("hud") else {
+        return;
+    };
+    let (width, height) = window
+        .inner_size()
+        .ok()
+        .and_then(|size| {
+            let scale = window.scale_factor().ok()?;
+            let logical = size.to_logical::<f64>(scale);
+            Some((logical.width, logical.height))
+        })
+        .unwrap_or_else(|| hud_logical_size(false));
+    let (x, y) = match hud_pos::load() {
+        Some(pos) => (pos.x, pos.y),
+        None => default_hud_position(app, width, height),
+    };
+    let _ = window.set_position(LogicalPosition::new(x, y));
+    assert_hud_on_top(app);
 }
 
 #[cfg(test)]

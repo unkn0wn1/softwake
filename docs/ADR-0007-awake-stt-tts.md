@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-09-25
 - **Amended:** 2026-09-25. An optional xAI cloud voice connector (press-to-talk STT, TTS voice `eve`) sits behind `live-http` and the existing provider credentials. Mocks stay the default and the CI path.
+- **Amended:** 2026-09-25. Listen-while-awake energy VAD (free speech) shares the same STT→ask→Eve path. TTS playback is spawn-and-return so the HUD never waits on `ffplay`/`mpv`.
 
 ## Decision
 
@@ -20,8 +21,9 @@ When the daemon is built with `live-http` and the selected provider is xAI (sign
 - **Press-to-talk.** The HUD mic button arms a PCM buffer on the existing capture stream (16 kHz mono `i16`). Release caps the clip at about 15 seconds and refuses clips shorter than about 0.3 seconds. Hibernate refuses. Sleep enters awake first, the same gate as HUD ask, then buffers.
 - **STT.** `POST {api}/v1/stt` as multipart `model` then `file` (WAV). The model is Settings `selected_voice_model`, or the xAI seed `grok-voice-transcribe-2.0` when that field is empty. The transcript is shown and sent through the existing awake `ask` path.
 - **TTS.** After a successful ask (typed or spoken), `POST {api}/v1/tts` with JSON `{ "text", "voice_id", "language": "en" }` returns mp3 bytes. `voice_id` is Settings `selected_tts_voice`. Empty means **`eve`**, the documented xAI default. Other documented built-ins may be chosen in Settings. `eve` is not sent to a non-xAI provider; that picker is disabled.
-- **Playback.** The daemon writes a temp mp3 and tries `ffplay -nodisp -autoexit -loglevel quiet`, then `mpv --no-video --really-quiet`. A missing player is a HUD error. The serve loop bounds each HTTP call (the same chat-style timeout) and does not wait forever on a stuck player.
-- **IPC.** `talk_start` and `talk_stop` are additive on protocol generation 1. `Status.talking` is additive and omitted when false.
+- **Playback.** The daemon writes a temp mp3 and tries `ffplay -nodisp -autoexit -loglevel quiet`, then `mpv --no-video --really-quiet`. A missing player is a HUD error. The player is **spawned and detached**: Softwake returns as soon as the child starts and does **not** `.wait()` on Eve finishing. A reaper joins with a timeout and deletes the temp file. A new ask interrupts the previous player when possible. The HUD bloom and UI stay responsive while she talks.
+- **Listen while awake (free speech).** While **awake**, capture running, PTT not armed, and outside a short post-ask cooldown (~2.5s to avoid Eve echo), an energy / silence gate (`EnergyUtterance`) collects an utterance from PipeWire PCM and runs the same STT→ask→Eve path as PTT. Sleep→awake by voice still needs KWS weights. `Status.auto_listening` is additive and omitted when false. PTT always takes priority.
+- **IPC.** `talk_start` and `talk_stop` are additive on protocol generation 1. `Status.talking` and `Status.auto_listening` are additive and omitted when false. The HUD fires talk/ask without awaiting the full pipeline; it paints `thinking…` and reads the reply from status polls so rAF/bloom never stalls on network or playback.
 
 Settings document version stays 1. `selected_tts_voice` defaults to empty. Phrase keyword spotting (“hey Softwake”) stays out of this path ([ADR 0006](ADR-0006-on-device-wake.md)).
 

@@ -11,6 +11,7 @@
 //! stubs that document where models will load. Default `cargo test` does not
 //! enable those features and does not download anything.
 
+mod energy_utt;
 mod mock;
 mod pcm_wav;
 mod playback;
@@ -20,9 +21,10 @@ mod sherpa_asr;
 mod sherpa_tts;
 mod xdg;
 
+pub use energy_utt::{EnergyUtterance, SILENCE_FRAMES_END, SILENCE_RMS, START_FRAMES, START_RMS};
 pub use mock::{MockStt, MockTts};
 pub use pcm_wav::{TALK_MAX_SAMPLES, TALK_MIN_SAMPLES, TalkBuffer, wav_from_pcm16};
-pub use playback::{PLAYBACK_TIMEOUT, PlaybackMode, PlayedClip, play_audio};
+pub use playback::{PLAYBACK_TIMEOUT, PlaybackMode, PlayedClip, interrupt_playback, play_audio};
 #[cfg(feature = "sherpa-asr")]
 pub use sherpa_asr::SherpaAsr;
 #[cfg(feature = "sherpa-tts")]

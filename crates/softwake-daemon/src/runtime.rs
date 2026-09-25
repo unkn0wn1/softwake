@@ -21,7 +21,7 @@ use softwake_ipc::{Command, Event as WireEvent, IpcError, PendingTool, ResponseB
 use softwake_session::{SessionPhase, TextStubSession};
 use softwake_soul::SoulDir;
 use softwake_state::{CooldownConfig, Effect, Event, Machine, StateError, VoiceState};
-use softwake_voice::{MockStt, MockTts, TextToSpeech, TranscriptEvent};
+use softwake_voice::{EnergyUtterance, MockStt, MockTts, TextToSpeech, TranscriptEvent};
 use softwake_wake::{NullDetector, PhraseHit};
 
 use crate::capture::{CaptureBackend, CaptureKind};
@@ -56,6 +56,16 @@ pub(crate) struct Runtime {
     stt: MockStt,
     tts: MockTts,
     talk: crate::talk::TalkSession,
+    /// Energy-gated free speech while awake (inactive during PTT).
+    auto_utt: EnergyUtterance,
+    /// Finished free-speech PCM waiting for STT→ask (taken by serve after status).
+    pending_auto_pcm: Option<Vec<i16>>,
+    /// Wall time when the last ask/TTS finished; free speech stays quiet during cooldown.
+    last_voice_activity: Option<Instant>,
+    /// Last operator-facing voice/ask line retained for HUD polls.
+    last_status_message: Option<String>,
+    /// Last detail line retained for HUD polls.
+    last_status_detail: Option<String>,
     /// Last playback error after a successful ask. Empty when speech played or was skipped.
     last_speech_note: Option<String>,
     /// In-test provider. Absent in the serve binary, so ask uses the disk path.
@@ -97,6 +107,11 @@ impl Runtime {
             stt: MockStt::default(),
             tts: MockTts::default(),
             talk: crate::talk::TalkSession::default(),
+            auto_utt: EnergyUtterance::new(),
+            pending_auto_pcm: None,
+            last_voice_activity: None,
+            last_status_message: None,
+            last_status_detail: None,
             last_speech_note: None,
             #[cfg(test)]
             chat_fixture: None,
@@ -121,7 +136,10 @@ impl Runtime {
         }
         self.drain_pcm();
         match command {
-            Command::GetStatus => Self::quiet(self.snapshot(None, None)),
+            Command::GetStatus => Self::quiet(self.snapshot(
+                self.last_status_message.clone(),
+                self.last_status_detail.clone(),
+            )),
             Command::ReloadSoul => {
                 self.soul.reload();
                 Self::quiet(self.snapshot(Some(self.soul.reload_summary()), None))
@@ -296,6 +314,9 @@ impl Runtime {
     fn finish_ask_reply(&mut self, reply: String) -> Outcome {
         self.speak_if_configured(&reply);
         let detail = self.last_speech_note.clone();
+        self.last_voice_activity = Some(Instant::now());
+        self.auto_utt.reset();
+        self.retain_status_text(Some(reply.clone()), detail.clone());
         Outcome {
             body: ResponseBody::ok(self.snapshot(Some(reply), detail)),
             events: Vec::new(),
@@ -325,6 +346,9 @@ impl Runtime {
         if wire_state(self.machine.state()) == WireState::Hibernate {
             return Self::talk_rejected(crate::talk::TALK_HIBERNATING);
         }
+        // PTT takes priority over free-speech gating.
+        self.auto_utt.reset();
+        self.pending_auto_pcm = None;
         if wire_state(self.machine.state()) == WireState::Sleep {
             let woke = self.wake_phrase();
             if woke.body.status().is_none() {
@@ -333,6 +357,10 @@ impl Runtime {
             // Wake already broadcast by the caller when this returns events.
             self.talk.arm();
             self.drain_pcm();
+            self.retain_status_text(
+                Some("listening".to_owned()),
+                Some("press and hold to talk".to_owned()),
+            );
             return Outcome {
                 body: ResponseBody::ok(self.snapshot(
                     Some("listening".to_owned()),
@@ -348,6 +376,10 @@ impl Runtime {
         }
         self.talk.arm();
         self.drain_pcm();
+        self.retain_status_text(
+            Some("listening".to_owned()),
+            Some("press and hold to talk".to_owned()),
+        );
         Self::quiet(self.snapshot(
             Some("listening".to_owned()),
             Some("press and hold to talk".to_owned()),
@@ -372,6 +404,10 @@ impl Runtime {
             Ok(samples) => samples,
             Err(message) => return Self::talk_rejected(&message),
         };
+        self.retain_status_text(
+            Some("thinking…".to_owned()),
+            Some("press to talk".to_owned()),
+        );
         self.transcribe_and_ask(&samples)
     }
 
@@ -388,6 +424,10 @@ impl Runtime {
     #[cfg(test)]
     pub(crate) fn set_talk_transcript_for_test(&mut self, text: impl Into<String>) {
         self.talk_transcript = Some(text.into());
+    }
+
+    pub(crate) fn transcribe_and_ask_pub(&mut self, samples: &[i16]) -> Outcome {
+        self.transcribe_and_ask(samples)
     }
 
     fn transcribe_and_ask(&mut self, samples: &[i16]) -> Outcome {
@@ -549,14 +589,35 @@ impl Runtime {
         let mut hit = PhraseHit::None;
         let mut scored = false;
         let mut energy_seen = false;
-        while let Ok(Some(frame)) = self.capture.poll_frame() {
-            if self.talk.is_armed() {
-                self.talk.push(frame.samples());
+        let awake = wire_state(self.machine.state()) == WireState::Awake;
+        let auto_ok = awake
+            && !self.talk.is_armed()
+            && self.pending_auto_pcm.is_none()
+            && !self.in_voice_cooldown();
+        if !auto_ok && (self.auto_utt.is_buffering() || !awake) {
+            // PTT, cooldown, sleep, or a pending clip — drop a partial auto buffer.
+            if self.talk.is_armed() || !awake || self.in_voice_cooldown() {
+                self.auto_utt.reset();
             }
-            let level = rms_level(frame.samples());
+        }
+        while let Ok(Some(frame)) = self.capture.poll_frame() {
+            let samples = frame.samples();
+            if self.talk.is_armed() {
+                self.talk.push(samples);
+            }
+            let level = rms_level(samples);
             self.last_capture_level = Some(level);
             if level >= 0.02 {
                 energy_seen = true;
+            }
+            if auto_ok && self.pending_auto_pcm.is_none() {
+                if let Some(pcm) = self.auto_utt.push_frame(samples, level) {
+                    self.pending_auto_pcm = Some(pcm);
+                    self.retain_status_text(
+                        Some("thinking…".to_owned()),
+                        Some("free speech".to_owned()),
+                    );
+                }
             }
             hit = score_frame(&mut self.pcm, &frame);
             scored = true;
@@ -564,7 +625,7 @@ impl Runtime {
         if scored {
             self.last_pcm_hit = Some(hit);
         }
-        // Only while asleep: awake talk is PTT (or a later open-mic path), not KWS.
+        // Only while asleep: awake talk is PTT / free speech, not KWS.
         if energy_seen
             && matches!(hit, PhraseHit::None)
             && self.capture.kind() == CaptureKind::PipeWire
@@ -655,6 +716,10 @@ impl Runtime {
                 Effect::ReleaseActingResources => {
                     self.session.close();
                     self.talk.clear();
+                    self.auto_utt.reset();
+                    self.pending_auto_pcm = None;
+                    self.last_status_message = None;
+                    self.last_status_detail = None;
                     let _ = self.stt.drain();
                     if let Some(cancelled) = self.hands.clear_pending() {
                         extra.push(WireEvent::ToolConfirmResolved {
@@ -702,6 +767,35 @@ impl Runtime {
             pending_tool: self.pending_wire(),
             last_tool: self.hands.last_tool_line(),
             talking: self.talk.is_armed(),
+            auto_listening: self.auto_listening_active(),
+        }
+    }
+
+    fn auto_listening_active(&self) -> bool {
+        wire_state(self.machine.state()) == WireState::Awake
+            && self.capture.is_running()
+            && !self.talk.is_armed()
+            && self.pending_auto_pcm.is_none()
+            && !self.in_voice_cooldown()
+    }
+
+    fn in_voice_cooldown(&self) -> bool {
+        self.last_voice_activity
+            .is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(2500))
+    }
+
+    /// Take a finished free-speech utterance for STT→ask (serve calls after `GetStatus`).
+    pub(crate) fn take_pending_auto_pcm(&mut self) -> Option<Vec<i16>> {
+        self.pending_auto_pcm.take()
+    }
+
+    /// Remember the latest HUD-facing message so polls see free-speech / async replies.
+    fn retain_status_text(&mut self, message: Option<String>, detail: Option<String>) {
+        if message.is_some() {
+            self.last_status_message = message;
+        }
+        if detail.is_some() {
+            self.last_status_detail = detail;
         }
     }
 
@@ -950,6 +1044,65 @@ mod talk_tests {
                 error: IpcError::TalkRejected { .. }
             }
         ));
+    }
+
+    #[test]
+    fn awake_auto_utterance_queues_pcm_and_sleep_does_not() {
+        let dir = TestSoulDir::valid();
+        let mut runtime = Runtime::new(dir.soul_dir());
+        let loud = vec![8_000_i16; 320];
+        for _ in 0..40 {
+            assert!(runtime.capture_mock().push_frame(&loud));
+            runtime.drain_pcm();
+        }
+        assert!(runtime.take_pending_auto_pcm().is_none());
+
+        let (mut runtime, _dir) = awake();
+        for _ in 0..8 {
+            assert!(runtime.capture_mock().push_frame(&loud));
+            runtime.drain_pcm();
+        }
+        let quiet = vec![0_i16; 320];
+        for _ in 0..30 {
+            assert!(runtime.capture_mock().push_frame(&quiet));
+            runtime.drain_pcm();
+            if runtime.pending_auto_pcm.is_some() {
+                break;
+            }
+        }
+        let pcm = runtime
+            .take_pending_auto_pcm()
+            .expect("auto utterance while awake");
+        assert!(pcm.len() >= TALK_MIN_SAMPLES);
+        assert!(
+            runtime
+                .handle(softwake_ipc::Command::GetStatus)
+                .body
+                .status()
+                .expect("status")
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains("thinking"))
+        );
+    }
+
+    #[test]
+    fn ptt_resets_auto_gate_and_status_reports_auto_listening() {
+        let (mut runtime, _dir) = awake();
+        let outcome = runtime.handle(softwake_ipc::Command::GetStatus);
+        let status = outcome.body.status().expect("status");
+        assert!(status.auto_listening);
+        let loud = vec![8_000_i16; 320];
+        for _ in 0..8 {
+            assert!(runtime.capture_mock().push_frame(&loud));
+            runtime.drain_pcm();
+        }
+        assert!(runtime.auto_utt.is_buffering());
+        let started = runtime.talk_start();
+        assert!(started.body.status().expect("armed").talking);
+        assert!(!runtime.auto_utt.is_buffering());
+        assert!(!started.body.status().expect("armed").auto_listening);
+        assert!(runtime.take_pending_auto_pcm().is_none());
     }
 }
 

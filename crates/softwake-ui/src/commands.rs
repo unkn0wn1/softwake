@@ -137,6 +137,10 @@ pub fn ask(text: String) -> Result<Status, String> {
 /// Falls back to a local sine while capture runs and no level is on the wire
 /// ([ADR 0016](../../docs/ADR-0016-capture-level-hud.md)).
 #[derive(Debug, Clone, Serialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "HUD wire mirrors Status talking/auto_listening flags"
+)]
 pub struct HudSnapshot {
     /// Voice state spelling: sleep, awake, or hibernate.
     pub state: String,
@@ -147,6 +151,16 @@ pub struct HudSnapshot {
     /// `true` when the UI sine fallback is in use; `false` when the daemon
     /// supplied [`Status::capture_level`].
     pub level_mocked: bool,
+    /// Last retained voice/ask line (PTT, typed ask, or free speech).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// Short detail (speech note, free speech, etc.).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Press-to-talk armed.
+    pub talking: bool,
+    /// Awake energy-gated listen without holding PTT.
+    pub auto_listening: bool,
 }
 
 /// Status plus a listening level for the HUD capsule.
@@ -166,6 +180,10 @@ pub fn hud_snapshot() -> Result<HudSnapshot, String> {
         capture_running: status.capture_running,
         level,
         level_mocked,
+        message: status.message,
+        detail: status.detail,
+        talking: status.talking,
+        auto_listening: status.auto_listening,
     })
 }
 

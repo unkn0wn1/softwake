@@ -337,8 +337,20 @@ fn client_loop(stream: UnixStream, shared: &Shared) {
 fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerReader) -> bool {
     match reader.read() {
         Ok(ClientMessage::Request { id, command }) => {
-            let outcome = lock(&shared.runtime).handle(command);
-            reply(shared, tx, id, outcome)
+            let (outcome, pending_auto) = {
+                let mut runtime = lock(&shared.runtime);
+                let outcome = runtime.handle(command);
+                let pending_auto = runtime.take_pending_auto_pcm();
+                (outcome, pending_auto)
+            };
+            let ok = reply(shared, tx, id, outcome);
+            if let Some(pcm) = pending_auto {
+                let outcome = lock(&shared.runtime).transcribe_and_ask_pub(&pcm);
+                for event in &outcome.events {
+                    shared.broadcast(event);
+                }
+            }
+            ok
         }
         Ok(ClientMessage::ToolRequest { id, name, args }) => {
             let outcome = lock(&shared.runtime).invoke_tool(&name, &args);
