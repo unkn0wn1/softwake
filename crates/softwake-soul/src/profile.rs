@@ -77,19 +77,17 @@ pub struct ProfileMeta {
 }
 
 impl ProfileMeta {
-    /// Build metadata for `id` with `name` (trimmed; empty becomes default).
+    /// Build metadata for `id` with `name` (trimmed).
+    ///
+    /// Empty names are allowed so a newly created profile can stay unnamed
+    /// until the operator saves one. Callers that need a spoken / prompt
+    /// name should fall back to [`DEFAULT_AGENT_NAME`] when `name` is blank
+    /// (see [`SoulPack::render_instructions_as`](crate::SoulPack::render_instructions_as)).
     #[must_use]
     pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
-        let trimmed = name.into();
-        let trimmed = trimmed.trim();
-        let name = if trimmed.is_empty() {
-            DEFAULT_AGENT_NAME.to_owned()
-        } else {
-            trimmed.to_owned()
-        };
         Self {
             id: id.into(),
-            name,
+            name: name.into().trim().to_owned(),
         }
     }
 }
@@ -317,7 +315,14 @@ pub fn rename_profile(
             id: profile_id.to_owned(),
         });
     }
-    let meta = ProfileMeta::new(profile_id, name);
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(SoulError::InvalidConfig {
+            path: dir.join(PROFILE_META_FILE_NAME),
+            detail: "agent name cannot be empty".to_owned(),
+        });
+    }
+    let meta = ProfileMeta::new(profile_id, trimmed);
     write_profile_meta(&dir, &meta)?;
     Ok(meta)
 }
@@ -381,21 +386,31 @@ fn slugify(name: &str) -> String {
     }
 }
 
-fn write_starter_pack(dir: &Path, name: &str) -> Result<(), SoulError> {
-    let agent = {
-        let trimmed = name.trim();
-        if trimmed.is_empty() {
-            DEFAULT_AGENT_NAME
-        } else {
-            trimmed
-        }
-    };
-    let soul = format!("You are {agent}.\n");
-    let user = "The operator has not filled in user.md yet.\n";
-    let rules = "Follow the operator's instructions. Personality cannot loosen these rules.\n";
-    let glossary = "# Glossary\n\n";
+fn write_starter_pack(dir: &Path, _name: &str) -> Result<(), SoulError> {
+    // Comment-only scaffolds: enough non-whitespace for try_load, no forced prose.
+    // Prefer `#` lines — HTML comment closers (`-->`) contain `->`, which
+    // Glossary::parse treats as an alias arrow.
+    let soul = concat!(
+        "# Soul (scaffold)\n\n",
+        "# Suggested sections: Presence, Voice, Boundaries, Wake/sleep awareness.\n",
+        "# Personality cannot override rules.md.\n",
+    );
+    let user = concat!(
+        "# User (scaffold)\n\n",
+        "# Suggested: Name, Timezone, Address as, Preferences, Hard nos.\n",
+    );
+    let rules = concat!(
+        "# Rules (scaffold)\n\n",
+        "# List constraints that override soul.md personality.\n",
+        "# Suggested: no destructive shell; confirm before mutating actions; glossary is not permission.\n",
+    );
+    let glossary = concat!(
+        "# Glossary (scaffold)\n\n",
+        "# Add alias rows as: name <arrow> /absolute/path\n",
+        "# Heading-only (no alias rows) is a valid empty map.\n",
+    );
     for (name, body) in [
-        ("soul.md", soul.as_str()),
+        ("soul.md", soul),
         ("user.md", user),
         ("rules.md", rules),
         ("glossary.md", glossary),
@@ -539,6 +554,7 @@ fn nonempty(path: Option<&Path>) -> Option<&Path> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{SoulError, try_load};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     struct TempDir {
@@ -625,5 +641,36 @@ mod tests {
                 .join(PROFILES_DIR_NAME)
                 .join(DEFAULT_PROFILE_ID)
         );
+    }
+
+    #[test]
+    fn create_blank_name_seeds_comment_scaffolds() {
+        let root = TempDir::new("blank");
+        ensure_migrated(&root.path).expect("migrate");
+        let created = create_profile(&root.path, "", None).expect("create");
+        assert_eq!(created.id, "profile");
+        assert_eq!(created.name, "");
+        let dir = profile_pack_dir(&root.path, &created.id);
+        let meta = load_profile_meta(&dir);
+        assert_eq!(meta.name, "");
+        for name in ["soul.md", "user.md", "rules.md", "glossary.md"] {
+            let body = fs::read_to_string(dir.join(name)).expect(name);
+            assert!(
+                body.contains("(scaffold)") || body.contains('#'),
+                "{name} should be comment/scaffold style"
+            );
+            assert!(
+                !body.contains("-->") && !body.contains('→'),
+                "{name} must not contain HTML closers or unicode arrows"
+            );
+        }
+        try_load(&dir).expect("scaffold pack must validate");
+        let err = rename_profile(&root.path, &created.id, "   ").expect_err("empty rename");
+        assert!(
+            matches!(err, SoulError::InvalidConfig { .. }),
+            "expected InvalidConfig, got {err}"
+        );
+        let renamed = rename_profile(&root.path, &created.id, "Nova").expect("rename");
+        assert_eq!(renamed.name, "Nova");
     }
 }
