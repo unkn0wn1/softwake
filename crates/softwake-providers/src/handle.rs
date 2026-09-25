@@ -88,13 +88,27 @@ impl ProviderHandle {
     ///
     /// Does not refresh OAuth. Does not open a network socket.
     #[must_use]
-    pub fn bearer_token(&self, env_xai: Option<&str>, env_openai: Option<&str>) -> Option<String> {
+    pub fn bearer_token(
+        &self,
+        env_xai: Option<&str>,
+        env_openai: Option<&str>,
+        env_openrouter: Option<&str>,
+        env_openai_compatible: Option<&str>,
+    ) -> Option<String> {
         crate::probe::resolve_bearer(
             self.settings.selected_provider,
             &self.bag,
             env_xai,
             env_openai,
+            env_openrouter,
+            env_openai_compatible,
         )
+    }
+
+    /// Borrow the non-secret Settings document.
+    #[must_use]
+    pub fn settings(&self) -> &crate::settings::ProviderSettings {
+        &self.settings
     }
 }
 

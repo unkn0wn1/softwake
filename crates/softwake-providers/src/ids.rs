@@ -15,6 +15,10 @@ pub enum ProviderId {
     XaiKey,
     /// `OpenAI` API key.
     Openai,
+    /// `OpenRouter` API key.
+    Openrouter,
+    /// OpenAI-compatible API key plus a configured base URL.
+    OpenaiCompatible,
 }
 
 impl ProviderId {
@@ -25,13 +29,21 @@ impl ProviderId {
             Self::XaiOauth => "xai-oauth",
             Self::XaiKey => "xai-key",
             Self::Openai => "openai",
+            Self::Openrouter => "openrouter",
+            Self::OpenaiCompatible => "openai-compatible",
         }
     }
 
     /// Every registered id, in display order.
     #[must_use]
-    pub const fn all() -> [Self; 3] {
-        [Self::XaiOauth, Self::XaiKey, Self::Openai]
+    pub const fn all() -> [Self; 5] {
+        [
+            Self::XaiOauth,
+            Self::XaiKey,
+            Self::Openai,
+            Self::Openrouter,
+            Self::OpenaiCompatible,
+        ]
     }
 }
 
@@ -49,6 +61,8 @@ impl FromStr for ProviderId {
             "xai-oauth" => Ok(Self::XaiOauth),
             "xai-key" => Ok(Self::XaiKey),
             "openai" => Ok(Self::Openai),
+            "openrouter" => Ok(Self::Openrouter),
+            "openai-compatible" => Ok(Self::OpenaiCompatible),
             _ => Err(ParseProviderIdError {
                 value: s.to_owned(),
             }),

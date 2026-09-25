@@ -38,6 +38,8 @@ pub fn resolve_bearer(
     bag: &SecretBag,
     env_xai: Option<&str>,
     env_openai: Option<&str>,
+    env_openrouter: Option<&str>,
+    env_openai_compatible: Option<&str>,
 ) -> Option<String> {
     match provider {
         ProviderId::XaiOauth => bag
@@ -65,6 +67,30 @@ pub fn resolve_bearer(
             .map(str::to_owned)
             .or_else(|| {
                 env_openai
+                    .map(str::trim)
+                    .filter(|key| !key.is_empty())
+                    .map(str::to_owned)
+            }),
+        ProviderId::Openrouter => bag
+            .openrouter_api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                env_openrouter
+                    .map(str::trim)
+                    .filter(|key| !key.is_empty())
+                    .map(str::to_owned)
+            }),
+        ProviderId::OpenaiCompatible => bag
+            .openai_compatible_api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                env_openai_compatible
                     .map(str::trim)
                     .filter(|key| !key.is_empty())
                     .map(str::to_owned)
@@ -149,6 +175,7 @@ pub fn run_test<T: Transport>(
     transport: &T,
     provider: ProviderId,
     bearer: &str,
+    api_base: &str,
     now_ms: u64,
 ) -> TestOutcome {
     let _ = now_ms;
@@ -161,9 +188,17 @@ pub fn run_test<T: Transport>(
             chat_models: Vec::new(),
         };
     }
+    let base = api_base.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return TestOutcome {
+            ok: false,
+            message: "No OpenAI-compatible base URL is configured. Set one in Settings.".to_owned(),
+            chat_models: Vec::new(),
+        };
+    }
 
-    let chat_url = format!("{}/chat/completions", def.family.api_base());
-    let models_url = format!("{}/models", def.family.api_base());
+    let chat_url = format!("{base}/chat/completions");
+    let models_url = format!("{base}/models");
     let seed = def.chat_seed;
     let body = json!({
         "model": seed,
@@ -297,7 +332,9 @@ mod tests {
     use serde_json::json;
 
     use super::{apply_test_outcome, resolve_bearer, run_test, start_device_code};
-    use crate::constants::{XAI_API_BASE, XAI_CHAT_SEED, XAI_OAUTH_DEVICE_URL};
+    use crate::constants::{
+        OPENROUTER_API_BASE, XAI_API_BASE, XAI_CHAT_SEED, XAI_OAUTH_DEVICE_URL,
+    };
     use crate::ids::ProviderId;
     use crate::oauth::OAuthTokenSet;
     use crate::secrets::SecretBag;
@@ -309,12 +346,12 @@ mod tests {
         let mut bag = SecretBag::empty();
         bag.xai_api_key = Some("saved".to_owned());
         assert_eq!(
-            resolve_bearer(ProviderId::XaiKey, &bag, Some("env"), None).as_deref(),
+            resolve_bearer(ProviderId::XaiKey, &bag, Some("env"), None, None, None).as_deref(),
             Some("saved")
         );
         bag.xai_api_key = None;
         assert_eq!(
-            resolve_bearer(ProviderId::XaiKey, &bag, Some("env"), None).as_deref(),
+            resolve_bearer(ProviderId::XaiKey, &bag, Some("env"), None, None, None).as_deref(),
             Some("env")
         );
     }
@@ -342,7 +379,7 @@ mod tests {
                     .to_string(),
                 },
             );
-        let outcome = run_test(&transport, ProviderId::XaiKey, "key", 0);
+        let outcome = run_test(&transport, ProviderId::XaiKey, "key", XAI_API_BASE, 0);
         assert!(outcome.ok);
         assert_eq!(outcome.chat_models, vec!["grok-4.5".to_owned()]);
 
@@ -363,6 +400,7 @@ mod tests {
             ),
             ProviderId::XaiKey,
             "bad",
+            XAI_API_BASE,
             0,
         );
         assert!(!fail.ok);
@@ -392,7 +430,7 @@ mod tests {
                     body: json!({"data": [{"id": "grok-voice-transcribe-2.0"}]}).to_string(),
                 },
             );
-        let outcome = run_test(&transport, ProviderId::XaiOauth, "tok", 0);
+        let outcome = run_test(&transport, ProviderId::XaiOauth, "tok", XAI_API_BASE, 0);
         assert!(outcome.ok);
         assert_eq!(outcome.chat_models, vec![XAI_CHAT_SEED.to_owned()]);
     }
@@ -428,8 +466,127 @@ mod tests {
             token_type: "Bearer".to_owned(),
         });
         assert_eq!(
-            resolve_bearer(ProviderId::XaiOauth, &bag, None, None).as_deref(),
+            resolve_bearer(ProviderId::XaiOauth, &bag, None, None, None, None).as_deref(),
             Some("access")
         );
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "covers resolve + Test for both new providers in one MockTransport story"
+    )]
+    fn openrouter_and_compatible_resolve_and_test() {
+        let mut bag = SecretBag::empty();
+        bag.openrouter_api_key = Some("or-saved".to_owned());
+        assert_eq!(
+            resolve_bearer(
+                ProviderId::Openrouter,
+                &bag,
+                None,
+                None,
+                Some("or-env"),
+                None
+            )
+            .as_deref(),
+            Some("or-saved")
+        );
+        bag.openrouter_api_key = None;
+        assert_eq!(
+            resolve_bearer(
+                ProviderId::Openrouter,
+                &bag,
+                None,
+                None,
+                Some("or-env"),
+                None
+            )
+            .as_deref(),
+            Some("or-env")
+        );
+
+        bag.openai_compatible_api_key = Some("compat".to_owned());
+        assert_eq!(
+            resolve_bearer(
+                ProviderId::OpenaiCompatible,
+                &bag,
+                None,
+                None,
+                None,
+                Some("compat-env")
+            )
+            .as_deref(),
+            Some("compat")
+        );
+
+        let transport = MockTransport::new()
+            .with_post_json(
+                format!("{OPENROUTER_API_BASE}/chat/completions"),
+                HttpResponse {
+                    status: 200,
+                    body: "{}".to_owned(),
+                },
+            )
+            .with_get(
+                format!("{OPENROUTER_API_BASE}/models"),
+                HttpResponse {
+                    status: 200,
+                    body: json!({
+                        "data": [
+                            {"id": "anthropic/claude-sonnet-4"},
+                            {"id": "openai/text-embedding-3-small"}
+                        ]
+                    })
+                    .to_string(),
+                },
+            );
+        let outcome = run_test(
+            &transport,
+            ProviderId::Openrouter,
+            "or-key",
+            OPENROUTER_API_BASE,
+            0,
+        );
+        assert!(outcome.ok);
+        assert_eq!(
+            outcome.chat_models,
+            vec!["anthropic/claude-sonnet-4".to_owned()]
+        );
+
+        let compat_base = "http://127.0.0.1:1234/v1";
+        let transport = MockTransport::new()
+            .with_post_json(
+                format!("{compat_base}/chat/completions"),
+                HttpResponse {
+                    status: 200,
+                    body: "{}".to_owned(),
+                },
+            )
+            .with_get(
+                format!("{compat_base}/models"),
+                HttpResponse {
+                    status: 200,
+                    body: json!({"data": [{"id": "local-llama-3"}]}).to_string(),
+                },
+            );
+        let outcome = run_test(
+            &transport,
+            ProviderId::OpenaiCompatible,
+            "compat-key",
+            compat_base,
+            0,
+        );
+        assert!(outcome.ok);
+        assert_eq!(outcome.chat_models, vec!["local-llama-3".to_owned()]);
+
+        let missing_base = run_test(
+            &MockTransport::new(),
+            ProviderId::OpenaiCompatible,
+            "compat-key",
+            "",
+            0,
+        );
+        assert!(!missing_base.ok);
+        assert!(missing_base.message.contains("base URL"));
     }
 }

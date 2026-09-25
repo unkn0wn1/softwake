@@ -33,6 +33,8 @@ pub fn is_chat_model(family: ProviderFamily, id: &str) -> bool {
                 || (lower.starts_with('o')
                     && lower.chars().nth(1).is_some_and(|c| c.is_ascii_digit()))
         }
+        // OpenRouter and compatible catalogs mix vendors; keep anything not excluded above.
+        ProviderFamily::Openrouter | ProviderFamily::OpenaiCompatible => true,
     }
 }
 
@@ -83,6 +85,18 @@ mod tests {
         assert!(is_chat_model(ProviderFamily::Openai, "gpt-4.1-mini"));
         assert!(is_chat_model(ProviderFamily::Openai, "o3-mini"));
         assert!(!is_chat_model(ProviderFamily::Openai, "whisper-1"));
+        assert!(is_chat_model(
+            ProviderFamily::Openrouter,
+            "anthropic/claude-sonnet-4"
+        ));
+        assert!(!is_chat_model(
+            ProviderFamily::Openrouter,
+            "openai/text-embedding-3-small"
+        ));
+        assert!(is_chat_model(
+            ProviderFamily::OpenaiCompatible,
+            "local-llama-3"
+        ));
     }
 
     #[test]

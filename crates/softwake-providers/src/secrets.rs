@@ -42,6 +42,12 @@ pub struct SecretBag {
     /// xAI OAuth tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xai_oauth: Option<OAuthTokenSet>,
+    /// Saved `OpenRouter` API key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openrouter_api_key: Option<String>,
+    /// Saved OpenAI-compatible API key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_compatible_api_key: Option<String>,
 }
 
 fn one() -> u32 {
@@ -62,6 +68,8 @@ impl SecretBag {
             xai_api_key: None,
             openai_api_key: None,
             xai_oauth: None,
+            openrouter_api_key: None,
+            openai_compatible_api_key: None,
         }
     }
 }
@@ -343,6 +351,8 @@ mod tests {
             .update(|bag| {
                 bag.xai_api_key = Some("xai-secret".to_owned());
                 bag.openai_api_key = Some("sk-test".to_owned());
+                bag.openrouter_api_key = Some("or-test".to_owned());
+                bag.openai_compatible_api_key = Some("compat-test".to_owned());
                 bag.xai_oauth = Some(OAuthTokenSet {
                     access_token: "a".to_owned(),
                     refresh_token: "r".to_owned(),
@@ -354,6 +364,11 @@ mod tests {
         let loaded = store.load().expect("load");
         assert_eq!(loaded.xai_api_key.as_deref(), Some("xai-secret"));
         assert_eq!(loaded.openai_api_key.as_deref(), Some("sk-test"));
+        assert_eq!(loaded.openrouter_api_key.as_deref(), Some("or-test"));
+        assert_eq!(
+            loaded.openai_compatible_api_key.as_deref(),
+            Some("compat-test")
+        );
         assert_eq!(
             loaded.xai_oauth.as_ref().map(|t| t.refresh_token.as_str()),
             Some("r")

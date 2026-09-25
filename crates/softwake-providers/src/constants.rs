@@ -34,3 +34,12 @@ pub const XAI_CHAT_SEED: &str = "grok-4.5";
 
 /// Registry seed for `OpenAI` chat when Test's catalog omits chat ids after a pass.
 pub const OPENAI_CHAT_SEED: &str = "gpt-4.1-mini";
+
+/// `OpenRouter` OpenAI-compatible API base.
+pub const OPENROUTER_API_BASE: &str = "https://openrouter.ai/api/v1";
+
+/// Registry seed for `OpenRouter` chat when Test's catalog omits chat ids after a pass.
+pub const OPENROUTER_CHAT_SEED: &str = "openai/gpt-4.1-mini";
+
+/// Registry seed for OpenAI-compatible chat when Test's catalog omits chat ids after a pass.
+pub const OPENAI_COMPATIBLE_CHAT_SEED: &str = "gpt-4.1-mini";

@@ -20,8 +20,10 @@ pub const CHAT_MAX_TOKENS: u32 = 1024;
 pub struct PreparedChat {
     /// Selected provider.
     pub provider: ProviderId,
-    /// API family for [`ProviderFamily::api_base`].
+    /// API family (model filtering / diagnostics).
     pub family: ProviderFamily,
+    /// Resolved API base used for chat completions (no trailing slash).
+    pub api_base: String,
     /// Settings model id. Not a registry seed substitute.
     pub model: String,
 }
@@ -46,6 +48,12 @@ pub enum PrepareError {
     NoCredential {
         /// Selected provider id.
         provider: ProviderId,
+    },
+    /// OpenAI-compatible base URL missing or invalid.
+    #[error("{message}")]
+    NoApiBase {
+        /// Operator-facing sentence.
+        message: String,
     },
 }
 
@@ -79,6 +87,8 @@ pub fn missing_credential_message(provider: ProviderId) -> String {
         ProviderId::XaiOauth => "No xAI sign-in is configured.".to_owned(),
         ProviderId::XaiKey => "No xAI API key is configured.".to_owned(),
         ProviderId::Openai => "No OpenAI API key is configured.".to_owned(),
+        ProviderId::Openrouter => "No OpenRouter API key is configured.".to_owned(),
+        ProviderId::OpenaiCompatible => "No OpenAI-compatible API key is configured.".to_owned(),
     }
 }
 
@@ -97,6 +107,8 @@ pub fn prepare_chat(
     settings_file_present: bool,
     env_xai: Option<&str>,
     env_openai: Option<&str>,
+    env_openrouter: Option<&str>,
+    env_openai_compatible: Option<&str>,
 ) -> Result<(PreparedChat, String), PrepareError> {
     if !settings_file_present {
         return Err(PrepareError::NoProvider);
@@ -112,13 +124,22 @@ pub fn prepare_chat(
     if !handle.cached_models().iter().any(|cached| cached == model) {
         return Err(PrepareError::NoModel);
     }
-    let Some(bearer) = handle.bearer_token(env_xai, env_openai) else {
+    let Some(bearer) =
+        handle.bearer_token(env_xai, env_openai, env_openrouter, env_openai_compatible)
+    else {
         return Err(PrepareError::NoCredential { provider });
     };
+    let api_base =
+        crate::registry::resolve_api_base(provider, handle.settings()).map_err(|error| {
+            PrepareError::NoApiBase {
+                message: error.to_string(),
+            }
+        })?;
     Ok((
         PreparedChat {
             provider,
             family: provider_definition(provider).family,
+            api_base,
             model: model.to_owned(),
         },
         bearer,
@@ -141,7 +162,7 @@ pub fn complete_chat<T: Transport>(
     system: &str,
     user: &str,
 ) -> Result<String, ChatError> {
-    let url = format!("{}/chat/completions", prepared.family.api_base());
+    let url = format!("{}/chat/completions", prepared.api_base);
     let body = serde_json::json!({
         "model": prepared.model,
         "max_tokens": CHAT_MAX_TOKENS,
@@ -270,6 +291,8 @@ mod tests {
         match provider {
             ProviderId::XaiKey => bag.xai_api_key = key.map(str::to_owned),
             ProviderId::Openai => bag.openai_api_key = key.map(str::to_owned),
+            ProviderId::Openrouter => bag.openrouter_api_key = key.map(str::to_owned),
+            ProviderId::OpenaiCompatible => bag.openai_compatible_api_key = key.map(str::to_owned),
             ProviderId::XaiOauth => {}
         }
         ProviderHandle::from_parts(settings, bag)
@@ -282,7 +305,8 @@ mod tests {
     #[test]
     fn missing_settings_file_is_no_provider_even_with_a_key() {
         let handle = ready(ProviderId::XaiKey, "grok-4.5", Some("saved"));
-        let error = prepare_chat(&handle, false, Some("env-key"), None).expect_err("absent");
+        let error =
+            prepare_chat(&handle, false, Some("env-key"), None, None, None).expect_err("absent");
         assert_eq!(error, PrepareError::NoProvider);
         assert_eq!(
             error.to_string(),
@@ -301,7 +325,7 @@ mod tests {
             None,
             Some("k"),
         );
-        let error = prepare_chat(&missing, true, None, None).expect_err("no report");
+        let error = prepare_chat(&missing, true, None, None, None, None).expect_err("no report");
         assert_eq!(
             error,
             PrepareError::TestNotSucceeded {
@@ -320,7 +344,7 @@ mod tests {
             Some(false),
             Some("k"),
         );
-        let error = prepare_chat(&failed, true, None, None).expect_err("failed test");
+        let error = prepare_chat(&failed, true, None, None, None, None).expect_err("failed test");
         assert_eq!(
             error,
             PrepareError::TestNotSucceeded {
@@ -340,7 +364,7 @@ mod tests {
             Some("k"),
         );
         assert_eq!(
-            prepare_chat(&blank, true, None, None).expect_err("blank"),
+            prepare_chat(&blank, true, None, None, None, None).expect_err("blank"),
             PrepareError::NoModel
         );
         let other = handle_with(
@@ -350,7 +374,7 @@ mod tests {
             Some(true),
             Some("k"),
         );
-        let error = prepare_chat(&other, true, None, None).expect_err("uncached");
+        let error = prepare_chat(&other, true, None, None, None, None).expect_err("uncached");
         assert_eq!(error, PrepareError::NoModel);
         assert_eq!(
             error.to_string(),
@@ -376,17 +400,34 @@ mod tests {
                 "gpt-4.1-mini",
                 "No OpenAI API key is configured.",
             ),
+            (
+                ProviderId::Openrouter,
+                "openai/gpt-4.1-mini",
+                "No OpenRouter API key is configured.",
+            ),
+            (
+                ProviderId::OpenaiCompatible,
+                "gpt-4.1-mini",
+                "No OpenAI-compatible API key is configured.",
+            ),
         ];
         for (provider, model, sentence) in cases {
             let handle = ready(provider, model, None);
-            let error = prepare_chat(&handle, true, None, None).expect_err("no key");
+            let error = prepare_chat(&handle, true, None, None, None, None).expect_err("no key");
             assert_eq!(error, PrepareError::NoCredential { provider }, "{sentence}");
             assert_eq!(error.to_string(), sentence);
             assert_eq!(missing_credential_message(provider), sentence);
         }
         let oauth = ready(ProviderId::XaiOauth, "grok-4.5", None);
-        let error =
-            prepare_chat(&oauth, true, Some("env-xai"), Some("env-openai")).expect_err("oauth env");
+        let error = prepare_chat(
+            &oauth,
+            true,
+            Some("env-xai"),
+            Some("env-openai"),
+            None,
+            None,
+        )
+        .expect_err("oauth env");
         assert_eq!(
             error,
             PrepareError::NoCredential {
@@ -398,7 +439,8 @@ mod tests {
     #[test]
     fn saved_key_beats_env_and_keeps_the_selected_model() {
         let handle = ready(ProviderId::XaiKey, "grok-custom", Some("saved-key"));
-        let (prepared, bearer) = prepare_chat(&handle, true, Some("env-key"), None).expect("ready");
+        let (prepared, bearer) =
+            prepare_chat(&handle, true, Some("env-key"), None, None, None).expect("ready");
         assert_eq!(bearer, "saved-key");
         assert_eq!(prepared.model, "grok-custom");
         assert_eq!(prepared.provider, ProviderId::XaiKey);
@@ -411,10 +453,17 @@ mod tests {
         let provider = match family {
             ProviderFamily::Xai => ProviderId::XaiKey,
             ProviderFamily::Openai => ProviderId::Openai,
+            ProviderFamily::Openrouter => ProviderId::Openrouter,
+            ProviderFamily::OpenaiCompatible => ProviderId::OpenaiCompatible,
         };
+        let api_base = family
+            .fixed_api_base()
+            .unwrap_or("http://127.0.0.1:9/v1")
+            .to_owned();
         PreparedChat {
             provider,
             family,
+            api_base,
             model: model.to_owned(),
         }
     }
