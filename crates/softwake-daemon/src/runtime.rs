@@ -43,6 +43,8 @@ pub(crate) struct Runtime {
     last_tick: Instant,
     capture: CaptureBackend,
     pcm: PcmEngine,
+    /// Agent name the current [`Self::pcm`] was built for. Avoids reloading ONNX on no-op soul reloads.
+    pcm_agent: String,
     /// Last PCM score from [`Self::drain_pcm`]. `None` means the queue was empty.
     #[cfg_attr(not(test), allow(dead_code))]
     last_pcm_hit: Option<PhraseHit>,
@@ -100,6 +102,7 @@ impl Runtime {
             last_tick: Instant::now(),
             capture,
             pcm: PcmEngine::for_agent(&agent),
+            pcm_agent: agent,
             last_pcm_hit: None,
             last_capture_level: None,
             last_energy_log: None,
@@ -374,8 +377,12 @@ impl Runtime {
         }
         #[cfg(not(test))]
         {
-            let Ok(ready) = crate::chat::load_disk_chat() else {
-                return;
+            let ready = match crate::chat::load_disk_chat() {
+                Ok(ready) => ready,
+                Err(message) => {
+                    self.last_speech_note = Some(format!("voice skipped: {message}"));
+                    return;
+                }
             };
             if let Err(message) = crate::talk::speak_reply(&ready, reply) {
                 self.last_speech_note = Some(message);
@@ -691,8 +698,17 @@ impl Runtime {
     }
 
     /// Rebuild the PCM detector after a soul / profile reload.
+    ///
+    /// Reloads ONNX only when the agent / profile name actually changed.
+    /// Repeat `reload_soul` with the same agent must not reopen KWS weights
+    /// (each load holds ONNX / mmap FDs).
     fn rebuild_pcm(&mut self) {
-        self.pcm = PcmEngine::for_agent(&self.soul.agent_name());
+        let agent = self.soul.agent_name();
+        if agent == self.pcm_agent {
+            return;
+        }
+        self.pcm = PcmEngine::for_agent(&agent);
+        self.pcm_agent = agent;
     }
 
     /// Apply a KWS hit to the voice machine when the state allows it.

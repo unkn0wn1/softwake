@@ -91,17 +91,14 @@ pub(crate) fn transcribe_pcm(
 
 /// Speak `text` with the xAI TTS voice when the selected provider is xAI.
 ///
-/// Other families, a missing voice, and a build without `live-http` return
-/// [`Ok`] and do not open a socket. Playback errors are returned so the HUD
-/// can show them without dropping the assistant text.
+/// Other families and a missing voice return [`Ok`] (no TTS for that provider).
+/// A build without `live-http` returns [`Err`] so the HUD can show why Eve is
+/// silent. Playback errors are returned the same way.
 ///
 /// # Errors
 ///
-/// A voice or player sentence. The bearer is not included.
-#[cfg_attr(
-    not(feature = "live-http"),
-    allow(dead_code, clippy::unnecessary_wraps)
-)]
+/// A voice, feature, or player sentence. The bearer is not included.
+#[cfg_attr(test, allow(dead_code))] // called only from `#[cfg(not(test))]` speak path
 pub(crate) fn speak_reply(ready: &DiskChat, text: &str) -> Result<(), String> {
     let provider = ready.prepared.provider;
     if !family_speaks_xai(provider) {
@@ -113,7 +110,7 @@ pub(crate) fn speak_reply(ready: &DiskChat, text: &str) -> Result<(), String> {
     #[cfg(not(feature = "live-http"))]
     {
         let _ = (text, voice);
-        Ok(())
+        Err(LIVE_HTTP_DISABLED.to_owned())
     }
     #[cfg(feature = "live-http")]
     {
