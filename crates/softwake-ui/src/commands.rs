@@ -132,21 +132,23 @@ pub fn ask(text: String) -> Result<Status, String> {
 
 /// HUD particle level plus voice state.
 ///
-/// `level` is mocked in v1 (sine while capture runs). Real mic RMS comes with
-/// the audio spike ([ADR 0015](../../docs/ADR-0015-tray-hud.md)).
+/// Prefers [`Status::capture_level`] from the daemon when PCM was scored.
+/// Falls back to a local sine while capture runs and no level is on the wire
+/// ([ADR 0016](../../docs/ADR-0016-capture-level-hud.md)).
 #[derive(Debug, Clone, Serialize)]
 pub struct HudSnapshot {
     /// Voice state spelling: sleep, awake, or hibernate.
     pub state: String,
     /// Whether capture is running.
     pub capture_running: bool,
-    /// Mock level in `0.0..=1.0` for particle bloom.
+    /// Level in `0.0..=1.0` for particle bloom.
     pub level: f64,
-    /// Always true in this build; real RMS is deferred.
+    /// `true` when the UI sine fallback is in use; `false` when the daemon
+    /// supplied [`Status::capture_level`].
     pub level_mocked: bool,
 }
 
-/// Status plus a mock listening level for the HUD capsule.
+/// Status plus a listening level for the HUD capsule.
 ///
 /// # Errors
 ///
@@ -154,12 +156,15 @@ pub struct HudSnapshot {
 #[tauri::command]
 pub fn hud_snapshot() -> Result<HudSnapshot, String> {
     let status = call(Command::GetStatus)?;
-    let level = mock_level(status.capture_running);
+    let (level, level_mocked) = match status.capture_level {
+        Some(level) => (f64::from(level).clamp(0.0, 1.0), false),
+        None => (mock_level(status.capture_running), true),
+    };
     Ok(HudSnapshot {
         state: status.state.as_str().to_owned(),
         capture_running: status.capture_running,
         level,
-        level_mocked: true,
+        level_mocked,
     })
 }
 

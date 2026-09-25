@@ -11,8 +11,9 @@
 //! A later native build fills `start` with a `PipeWire` stream whose process
 //! callback queues [`crate::AudioFrame`] values at [`crate::AudioFormat::WAKE`].
 //! [`crate::AudioCapture::poll_frame`] is already the pull API that callback
-//! will feed. Enabling the feature today does not open a device and does not
-//! require a `PipeWire` daemon.
+//! will feed. When those frames exist, the daemon scores them with
+//! [`crate::rms_level`] the same way as mock PCM. Enabling the feature today
+//! does not open a device and does not require a `PipeWire` daemon.
 
 use crate::{AudioCapture, AudioFormat, AudioFrame};
 

@@ -38,6 +38,35 @@ impl MockAudioCapture {
         true
     }
 
+    /// Queue one short listening tone while running (16 kHz mono).
+    ///
+    /// Amplitude breathes with `phase_secs` so a `GetStatus` poll can feed HUD
+    /// particles from real PCM without a microphone. Returns `false` when
+    /// capture is stopped.
+    #[must_use]
+    pub fn push_listening_tone(&mut self, phase_secs: f32) -> bool {
+        const RATE: f32 = 16_000.0;
+        const HZ: f32 = 440.0;
+        const N: usize = 160; // 10 ms
+        let breath = 0.18 + 0.42 * (0.5 + 0.5 * (phase_secs * 1.7).sin());
+        let mut samples = [0_i16; N];
+        for (i, sample) in samples.iter_mut().enumerate() {
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "tone index 0..160 is exact in f32"
+            )]
+            let phase = (i as f32) * 2.0 * std::f32::consts::PI * HZ / RATE;
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "intentional PCM quantization for the mock tone"
+            )]
+            {
+                *sample = (breath * phase.sin() * f32::from(i16::MAX)) as i16;
+            }
+        }
+        self.push_frame(&samples)
+    }
+
     /// Next queued frame, and only while running.
     ///
     /// After `stop`, this returns [`None`] and the queue stays empty.
@@ -135,6 +164,17 @@ mod tests {
         capture.start().expect("start again");
         assert!(capture.is_running());
         assert_eq!(capture.poll_frame().expect("kept").samples(), &[7]);
+    }
+
+    #[test]
+    fn listening_tone_queues_pcm_only_while_running() {
+        let mut capture = MockAudioCapture::default();
+        assert!(!capture.push_listening_tone(0.0));
+        capture.start().expect("start");
+        assert!(capture.push_listening_tone(0.3));
+        let frame = capture.poll_frame().expect("tone frame");
+        assert_eq!(frame.samples().len(), 160);
+        assert!(frame.samples().iter().any(|s| *s != 0));
     }
 
     #[test]

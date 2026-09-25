@@ -91,9 +91,18 @@ fn reload_soul_rereads_and_a_second_client_sees_state_changed() {
     assert!(reloaded.soul.as_ref().is_some_and(|report| report.ok));
     let message = reload_message(true, None);
     assert_eq!(reloaded.message.as_deref(), Some(message.as_str()));
-    assert_eq!(
-        ctl::format_status(&reloaded),
-        format!("state: sleep\ncapture: running\nsoul: ok\nsoul reload: pending\n{message}\n")
+    let printed = ctl::format_status(&reloaded);
+    assert!(printed.contains("state: sleep"), "{printed}");
+    assert!(printed.contains("capture: running"), "{printed}");
+    assert!(printed.contains("soul: ok"), "{printed}");
+    assert!(printed.contains("soul reload: pending"), "{printed}");
+    assert!(printed.contains(message.as_str()), "{printed}");
+    let level = reloaded
+        .capture_level
+        .expect("listening tone is scored while capture runs");
+    assert!(
+        printed.contains(&format!("capture level: {level:.3}")),
+        "{printed}"
     );
 
     let hibernated = ctl::call(temp.path(), Command::Hibernate).expect("hibernate");

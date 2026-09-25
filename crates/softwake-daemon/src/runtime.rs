@@ -15,7 +15,7 @@
 
 use std::time::Instant;
 
-use softwake_audio::{AudioCapture, MockAudioCapture};
+use softwake_audio::{AudioCapture, MockAudioCapture, rms_level};
 use softwake_ipc::VoiceState as WireState;
 use softwake_ipc::{Command, Event as WireEvent, IpcError, PendingTool, ResponseBody, Status};
 use softwake_session::{SessionPhase, TextStubSession};
@@ -45,6 +45,8 @@ pub(crate) struct Runtime {
     /// Last PCM score from [`Self::drain_pcm`]. `None` means the queue was empty.
     #[cfg_attr(not(test), allow(dead_code))]
     last_pcm_hit: Option<PhraseHit>,
+    /// Latest [`rms_level`] from a drained frame. Cleared when capture stops.
+    last_capture_level: Option<f32>,
     soul: LoadedSoul,
     session: TextStubSession,
     hands: Hands,
@@ -67,6 +69,7 @@ impl Runtime {
             capture,
             pcm: NullDetector,
             last_pcm_hit: None,
+            last_capture_level: None,
             soul: LoadedSoul::open(soul_dir),
             session: TextStubSession::default(),
             hands: Hands::from_disk(),
@@ -85,6 +88,12 @@ impl Runtime {
     pub(crate) fn handle(&mut self, command: Command) -> Outcome {
         // Score PCM that arrived before this command. Serve's queue is empty
         // unless a test pushed samples. The typed demo enters awake on its own.
+        // While capture runs, queue a short mock listening tone before drain so
+        // status replies (and HUD polls) see frame-derived levels without a mic.
+        if self.capture.is_running() {
+            let phase = self.last_tick.elapsed().as_secs_f32();
+            let _ = self.capture.push_listening_tone(phase);
+        }
         self.drain_pcm();
         match command {
             Command::GetStatus => Self::quiet(self.snapshot(None, None)),
@@ -358,11 +367,15 @@ impl Runtime {
         let mut hit = PhraseHit::None;
         let mut scored = false;
         while let Ok(Some(frame)) = AudioCapture::poll_frame(&mut self.capture) {
+            self.last_capture_level = Some(rms_level(frame.samples()));
             hit = score_frame(&mut self.pcm, &frame);
             scored = true;
         }
         if scored {
             self.last_pcm_hit = Some(hit);
+        }
+        if !self.capture.is_running() {
+            self.last_capture_level = None;
         }
         hit
     }
@@ -442,6 +455,7 @@ impl Runtime {
                 }
                 Effect::StopCapture => {
                     let Ok(()) = self.capture.stop();
+                    self.last_capture_level = None;
                 }
                 Effect::StartCapture => {
                     let Ok(()) = self.capture.start();
@@ -464,6 +478,11 @@ impl Runtime {
         Status {
             state: wire_state(self.machine.state()),
             capture_running: self.capture.is_running(),
+            capture_level: if self.capture.is_running() {
+                self.last_capture_level
+            } else {
+                None
+            },
             soul_reload_pending: self.soul.reload_pending(),
             soul: Some(self.soul.report()),
             message,
@@ -640,6 +659,22 @@ mod tests {
             outcome.body.status().is_some(),
             "wake should apply, got {outcome:?}"
         );
+    }
+
+    #[test]
+    fn get_status_reports_capture_level_from_mock_pcm_while_listening() {
+        let (mut runtime, _soul) = valid_runtime();
+        assert!(runtime.capture.is_running());
+        let outcome = runtime.handle(Command::GetStatus);
+        let status = outcome.body.status().expect("ok");
+        let level = status.capture_level.expect("listening tone was scored");
+        assert!(level > 0.0, "{level}");
+        assert!(level <= 1.0, "{level}");
+
+        let outcome = runtime.handle(Command::Hibernate);
+        let hibernated = outcome.body.status().expect("ok");
+        assert!(!hibernated.capture_running);
+        assert!(hibernated.capture_level.is_none());
     }
 
     #[test]

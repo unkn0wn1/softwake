@@ -23,7 +23,7 @@
 
 ### Level input (v1)
 
-Daemon `Status` today exposes `capture_running`, not mic energy. This slice ships a **mock level** (sine while capture is running, near-zero otherwise) so particles and the strip can be wired without a protocol bump. **Real microphone RMS arrives with the audio / capture spike**; until then the HUD may document that the level is mocked. No new socket field in this ADR.
+v1 shipped a **mock level** (sine while capture is running, near-zero otherwise) so particles could ship without a protocol field. **Capture RMS on `Status::capture_level` is [ADR 0016](ADR-0016-capture-level-hud.md)**; the HUD prefers that value and keeps the sine only as fallback.
 
 ### Non-goals
 
@@ -41,7 +41,7 @@ Operators need Softwake present while they work in other apps: a tray for status
 
 1. **Settings-only window** — rejected; Softwake disappears behind other apps and has no ambient listening cue.
 2. **Single window that morphs** — rejected; Settings (editors, providers, confirm) needs space; the capsule must stay small and always-on-top.
-3. **Protocol field for RMS now** — deferred; capture energy is not produced yet. Mock level unblocks HUD UX; an additive status field can land with the audio spike without breaking generation 1 clients that ignore unknown keys if we add one later carefully.
+3. **Protocol field for RMS in the tray slice** — deferred then; [ADR 0016](ADR-0016-capture-level-hud.md) adds the additive `capture_level` field with the audio spike.
 
 ## Consequences
 
