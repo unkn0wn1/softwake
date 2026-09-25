@@ -407,7 +407,6 @@ impl Demo {
         self.with_status(lines)
     }
 
-
     /// Send one typed line to the selected provider while awake.
     ///
     /// Blank text is rejected before this runs. Sleep and hibernate refuse
