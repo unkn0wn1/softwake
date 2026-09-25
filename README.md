@@ -50,11 +50,13 @@ From the repository root, using the workspace `Cargo.lock`:
 cargo install --path crates/softwake-daemon --locked
 ```
 
-That installs the `softwaked` binary. The window binary is `softwake-ui`. From a checkout, start `softwaked serve`, then:
+That installs the `softwaked` binary. The window binary is `softwake-ui` (Settings + system tray + HUD). From a checkout, start `softwaked serve`, then:
 
 ```bash
 cargo run -p softwake-ui
 ```
+
+The tray stays while Settings is closed. The HUD capsule is always-on-top; click it to type an ask.
 
 The same lockfile install for the window:
 
@@ -290,7 +292,7 @@ The soul directory is the first match of `--soul-dir PATH` (on `serve` and `demo
 
 ## Window
 
-`softwake-ui` is a resizable settings window, 860 by 680. A left nav has four panes. Status is selected when the window opens.
+`softwake-ui` opens a **system tray** icon, a small **always-on-top HUD capsule**, and a resizable Settings window (860 by 680). Closing Settings hides it; Quit from the tray exits. The HUD shows blooming particles driven by a mock listening level while capture runs, and a click opens a type strip that fades when idle ([ADR 0015](docs/ADR-0015-tray-hud.md)). Real microphone RMS is deferred to the audio spike. A left nav has four panes. Status is selected when the Settings window opens.
 
 **Status** shows the daemon state, whether capture is running, whether the soul pack is `ok` or `missing` (and the reason when the daemon sent one), whether a soul reload is pending, the latest tool line, and a confirm-gated tool when one is waiting. Buttons are Hibernate, Wake (leave hibernate into sleep), Sleep, Reload soul, Confirm, and Cancel. The Status Wake button is `wake_from_ui` / `ctl resume` (hibernate → sleep). `softwaked ctl wake` is the separate command that enters awake from sleep and requires a valid soul pack. Reload reads `soul.md`, `user.md`, `rules.md`, and `glossary.md`. The new text applies on the next awake. The status snapshot does not include the socket path. The window uses the same default socket as `softwaked ctl`. Start `softwaked serve` first. Provider commands are not socket commands.
 

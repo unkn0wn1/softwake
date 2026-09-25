@@ -5,7 +5,7 @@
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  softwake-ui (Tauri)                                   │
-│  settings · status · hibernate/wake · soul reload       │
+│  settings · tray · HUD · status · hibernate/wake        │
 └───────────────────────────┬─────────────────────────────┘
                             │ Unix socket, newline-delimited JSON
 ┌───────────────────────────▼─────────────────────────────┐
@@ -40,7 +40,7 @@ Keep crates small and single-purpose. Exact names can shift; responsibilities sh
 | `softwake-memory` | Long-term memory boundary. `Memory` trait, in-memory mock, and opt-in JSON file. Off until enabled. Awake ask/chat attach budgeted recall when `memory.json` exists ([ADR 0009](ADR-0009-long-term-memory.md), [ADR 0013](ADR-0013-session-provider.md)) |
 | `softwake-soul` | Load four files (`soul.md`, `user.md`, `rules.md`, `glossary.md`), render instructions, and expand glossary aliases ([ADR 0011](ADR-0011-context-pack.md)) |
 | `softwake-ipc` | Shared protocol: newline-delimited JSON over a Unix socket |
-| `softwake-ui` | Tauri settings window. Left nav: Status talks to the daemon; Providers calls `softwake-providers` in-process; General edits the soul pack in-process; Email is a stub |
+| `softwake-ui` | Tauri Settings window, system tray, and always-on-top HUD ([ADR 0015](ADR-0015-tray-hud.md)). Left nav: Status talks to the daemon; Providers calls `softwake-providers` in-process; General edits the soul pack in-process; Email is a stub |
 
 Do not put PipeWire types into `softwake-soul`. Do not put HTTP clients into `softwake-state`.
 
