@@ -53,3 +53,23 @@ jobs:
 
       - name: Build
         run: cargo build --workspace --all-targets
+
+  windows-check:
+    name: windows target check
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check workspace (Windows)
+        # Full test/UI parity stays on ubuntu. This job proves the Windows
+        # IPC + FS cfg + WASAPI stub compile. softwake-ui needs WebView2, which
+        # windows-latest provides.
+        run: |
+          cargo check --workspace
+          cargo check -p softwake-daemon --features live-http,wasapi-capture
+          cargo check -p softwake-ui --features live-http
+

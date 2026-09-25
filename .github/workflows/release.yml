@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: "Create a GitHub Release and upload assets (false = build artifacts only)"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: linux-x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install UI and PipeWire system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libxdo-dev \
+            libssl-dev \
+            libdbus-1-dev \
+            libpipewire-0.3-dev
+
+      - name: Build release binaries
+        # PipeWire capture linked; sherpa-kws omitted here so Releases do not
+        # download ONNX weights in CI. Operators who need KWS build with
+        # --features sherpa-kws locally or we add a follow-up job.
+        run: |
+          cargo build --release -p softwake-daemon --features live-http,pipewire-capture
+          cargo build --release -p softwake-ui --features live-http
+
+      - name: Stage archive
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="dispatch-${GITHUB_SHA::7}"
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          STAGE="softwake-${VERSION}-linux-x86_64"
+          mkdir -p "${STAGE}"
+          cp target/release/softwaked target/release/softwake-ui "${STAGE}/"
+          tar -czf "${STAGE}.tar.gz" "${STAGE}"
+          echo "ASSET=${STAGE}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: softwake-linux-x86_64
+          path: ${{ env.ASSET }}
+
+      - name: Upload to GitHub Release
+        if: github.event_name == 'push' || inputs.create_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'push' && github.ref_name || format('dispatch-{0}', github.sha) }}
+          name: ${{ github.event_name == 'push' && github.ref_name || format('dispatch-{0}', github.sha) }}
+          draft: ${{ github.event_name == 'workflow_dispatch' }}
+          files: ${{ env.ASSET }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  windows:
+    name: windows-x86_64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binaries
+        shell: bash
+        run: |
+          cargo build --release -p softwake-daemon --features live-http,wasapi-capture
+          cargo build --release -p softwake-ui --features live-http
+
+      - name: Stage archive
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="dispatch-${GITHUB_SHA::7}"
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          STAGE="softwake-${VERSION}-windows-x86_64"
+          mkdir -p "${STAGE}"
+          cp target/release/softwaked.exe target/release/softwake-ui.exe "${STAGE}/"
+          powershell -Command "Compress-Archive -Path '${STAGE}' -DestinationPath '${STAGE}.zip'"
+          echo "ASSET=${STAGE}.zip" >> "$GITHUB_ENV"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: softwake-windows-x86_64
+          path: ${{ env.ASSET }}
+
+      - name: Upload to GitHub Release
+        if: github.event_name == 'push' || inputs.create_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'push' && github.ref_name || format('dispatch-{0}', github.sha) }}
+          name: ${{ github.event_name == 'push' && github.ref_name || format('dispatch-{0}', github.sha) }}
+          draft: ${{ github.event_name == 'workflow_dispatch' }}
+          files: ${{ env.ASSET }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

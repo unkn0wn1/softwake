@@ -1,4 +1,4 @@
-//! Blocking Unix-socket server for [`crate::runtime::Runtime`].
+//! Blocking IPC server for [`crate::runtime::Runtime`].
 //!
 //! Phase 1 stays on std threads. Each client has a reader and a writer so one
 //! slow UI cannot stop another client's request from being applied. Events are
@@ -14,7 +14,6 @@
 //! the next bind deletes the file if nothing answers on it.
 
 use std::io::Error as IoError;
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
@@ -22,9 +21,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 
 use softwake_ipc::{
-    ClientMessage, Command, Event as WireEvent, HandshakeError, Listener, PROTOCOL_VERSION,
-    ResponseBody, ServerConnection, ServerMessage, ServerReader, ServerWriter, SocketError, Status,
-    VoiceState, resolve_socket_path,
+    ClientMessage, Command, Event as WireEvent, HandshakeError, IpcStream, Listener,
+    PROTOCOL_VERSION, ResponseBody, ServerConnection, ServerMessage, ServerReader, ServerWriter,
+    SocketError, Status, VoiceState, connect_stream, resolve_socket_path,
 };
 
 use softwake_soul::SoulDir;
@@ -198,7 +197,7 @@ impl Drop for ServeHandle {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
         // Unblock `accept`. Failure is fine when the listener is already gone.
-        let _ = UnixStream::connect(&self.path);
+        let _ = connect_stream(&self.path);
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
@@ -249,7 +248,7 @@ struct Subscriber {
 }
 
 struct ClientSlot {
-    shutdown: UnixStream,
+    shutdown: IpcStream,
     thread: JoinHandle<()>,
 }
 
@@ -269,9 +268,9 @@ impl Shared {
         })
     }
 
-    fn spawn_client(self: &Arc<Self>, stream: UnixStream) {
+    fn spawn_client(self: &Arc<Self>, stream: IpcStream) {
         // HUD / tray open a fresh socket per status poll. Without reaping, each
-        // finished client leaves its shutdown `UnixStream` clone in `clients`
+        // finished client leaves its shutdown `IpcStream` clone in `clients`
         // forever and the process hits EMFILE (os error 24).
         self.reap_clients();
         let shutdown = match stream.try_clone() {
@@ -338,7 +337,7 @@ impl Shared {
     }
 }
 
-fn client_loop(stream: UnixStream, shared: &Shared) {
+fn client_loop(stream: IpcStream, shared: &Shared) {
     // Subscribe before `hello_ok` so a state change cannot be broadcast in
     // the gap after the client has observed the handshake.
     let pending = match ServerConnection::begin(stream) {

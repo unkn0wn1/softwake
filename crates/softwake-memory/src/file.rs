@@ -11,6 +11,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
 use crate::{MAX_TEXT_BYTES, Memory, MemoryId, Snippet};
@@ -547,12 +548,19 @@ fn ensure_parent(path: &Path) -> Result<(), FileMemoryError> {
     if parent.as_os_str().is_empty() {
         return Ok(());
     }
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    builder.mode(0o700);
-    builder
-        .create(parent)
-        .map_err(|source| io_err(path, source))?;
+    #[cfg(unix)]
+    {
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        builder.mode(0o700);
+        builder
+            .create(parent)
+            .map_err(|source| io_err(path, source))?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(parent).map_err(|source| io_err(path, source))?;
+    }
     Ok(())
 }
 
@@ -574,7 +582,10 @@ fn temp_path(path: &Path) -> Result<PathBuf, FileMemoryError> {
 fn write_temp(tmp: &Path, dest: &Path, bytes: &[u8]) -> Result<(), FileMemoryError> {
     let mut options = OpenOptions::new();
     options.write(true).create(true).truncate(true);
-    options.mode(0o600);
+    #[cfg(unix)]
+    {
+        options.mode(0o600);
+    }
     let mut file = match options.open(tmp) {
         Ok(file) => file,
         Err(source) => return Err(io_err(dest, source)),

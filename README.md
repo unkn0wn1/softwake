@@ -19,17 +19,23 @@ cargo build --workspace --all-targets
 
 See [Cargo features](#cargo-features) for `pipewire`, `pipewire-native`, and `sherpa-kws`.
 
+## Releases
+
+Tagged builds (`v*`) publish **linux-x86_64** and **windows-x86_64** archives on GitHub Releases. See [docs/releases.md](docs/releases.md) for download, install, the OS feature matrix, and how to cut a tag. Design: [ADR 0019](docs/ADR-0019-multiplatform-releases.md).
+
 ## Cargo features
 
 | Crate | Feature | Default | What it compiles |
 |-------|---------|---------|------------------|
 | `softwake-audio` | `pipewire` | yes | Capture stub. Does not link `libpipewire`. |
-| `softwake-audio` | `pipewire-native` | no | Links `libpipewire` and opens the default input at 16 kHz mono. Not enabled in CI. |
+| `softwake-audio` | `pipewire-native` | no | Links `libpipewire` and opens the default input at 16 kHz mono. Not enabled in CI. Linux only. |
+| `softwake-audio` | `wasapi` | yes | WASAPI capture stub for Windows. Does not open a device. |
 | `softwake-wake` / `softwake-daemon` | `sherpa-kws` | no | Real sherpa-onnx KWS when weights exist under `$XDG_DATA_HOME/softwake/kws`. No weights in git. Not enabled in CI. |
 | `softwake-voice` | `sherpa-asr` | no | Streaming ASR stub. No weights and no ONNX download. Not enabled in CI. |
 | `softwake-voice` | `sherpa-tts` | no | TTS stub. No weights and no synthesizer download. Not enabled in CI. |
 | `softwake-providers` | `live-http` | no | Real HTTPS via `ureq` for OAuth and Test. Unit tests use `MockTransport`. Not required for `cargo test -p softwake-providers`. |
-| `softwake-daemon` | `pipewire-capture` | no | Real mic via `softwake-audio/pipewire-native`. Use `serve --capture pipewire`. Not enabled in CI. |
+| `softwake-daemon` | `pipewire-capture` | no | Real mic via `softwake-audio/pipewire-native`. Use `serve --capture pipewire`. Not enabled in CI. Linux only. |
+| `softwake-daemon` | `wasapi-capture` | no | WASAPI stub via `softwake-audio/wasapi`. Use `serve --capture wasapi` (fails until native). |
 | `softwake-daemon` | `live-http` | no | Enables `softwake-providers/live-http` so typed `ask` / `chat` can call the selected provider. The default build rejects that call and does not open a socket. |
 | `softwake-ui` | `live-http` | yes | Enables `softwake-providers/live-http` so Settings Test and xAI sign-in can reach the network. |
 

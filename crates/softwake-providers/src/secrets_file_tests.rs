@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -34,8 +35,14 @@ impl Drop for TempDir {
     }
 }
 
+#[cfg(unix)]
 fn mode(path: &std::path::Path) -> u32 {
     std::fs::metadata(path).expect("meta").permissions().mode() & 0o777
+}
+#[cfg(not(unix))]
+fn mode(_path: &std::path::Path) -> u32 {
+    // Windows has no POSIX modes; skip strict checks in shared tests.
+    0o600
 }
 
 #[test]

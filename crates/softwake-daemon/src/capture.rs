@@ -2,12 +2,16 @@
 //!
 //! Default is [`MockAudioCapture`] (CI/demo). Opt into `PipeWire` with
 //! `--capture pipewire` or `SOFTWAKE_CAPTURE=pipewire` when the daemon was
-//! built with the `pipewire-capture` feature.
+//! built with the `pipewire-capture` feature (Linux). Opt into the WASAPI
+//! stub with `--capture wasapi` when built with `wasapi-capture` (Windows;
+//! does not open a device yet).
 
 use softwake_audio::{AudioCapture, AudioFrame, MockAudioCapture};
 
 #[cfg(feature = "pipewire-capture")]
 use softwake_audio::{PipeWireCapture, PipeWireError};
+#[cfg(feature = "wasapi-capture")]
+use softwake_audio::{WasapiCapture, WasapiError};
 
 /// Which microphone backend `serve` should open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,6 +20,9 @@ pub(crate) enum CaptureKind {
     Mock,
     /// Default `PipeWire` input at [`softwake_audio::AudioFormat::WAKE`].
     PipeWire,
+    /// WASAPI stub (Windows). Does not open a device yet.
+    #[cfg(feature = "wasapi-capture")]
+    Wasapi,
 }
 
 impl CaptureKind {
@@ -23,6 +30,8 @@ impl CaptureKind {
         match self {
             Self::Mock => "mock",
             Self::PipeWire => "pipewire",
+            #[cfg(feature = "wasapi-capture")]
+            Self::Wasapi => "wasapi",
         }
     }
 }
@@ -49,8 +58,18 @@ pub(crate) fn parse_capture_kind(raw: &str) -> Result<CaptureKind, String> {
                 )
             }
         }
+        "wasapi" | "win" => {
+            #[cfg(feature = "wasapi-capture")]
+            {
+                Ok(CaptureKind::Wasapi)
+            }
+            #[cfg(not(feature = "wasapi-capture"))]
+            {
+                Err("capture wasapi needs a build with --features wasapi-capture".to_owned())
+            }
+        }
         other => Err(format!(
-            "unknown capture backend {other} (expected mock or pipewire)"
+            "unknown capture backend {other} (expected mock, pipewire, or wasapi)"
         )),
     }
 }
@@ -85,12 +104,21 @@ impl From<PipeWireError> for CaptureError {
     }
 }
 
+#[cfg(feature = "wasapi-capture")]
+impl From<WasapiError> for CaptureError {
+    fn from(error: WasapiError) -> Self {
+        Self(error.to_string())
+    }
+}
+
 /// Mock or (feature-gated) `PipeWire` capture behind one drain API.
 #[derive(Debug)]
 pub(crate) enum CaptureBackend {
     Mock(MockAudioCapture),
     #[cfg(feature = "pipewire-capture")]
     PipeWire(PipeWireCapture),
+    #[cfg(feature = "wasapi-capture")]
+    Wasapi(WasapiCapture),
 }
 
 impl CaptureBackend {
@@ -118,6 +146,12 @@ impl CaptureBackend {
                     unreachable!("pipewire capture without pipewire-capture feature")
                 }
             }
+            #[cfg(feature = "wasapi-capture")]
+            CaptureKind::Wasapi => {
+                let mut capture = WasapiCapture::new();
+                capture.start()?;
+                Ok(Self::Wasapi(capture))
+            }
         }
     }
 
@@ -126,6 +160,8 @@ impl CaptureBackend {
             Self::Mock(_) => CaptureKind::Mock,
             #[cfg(feature = "pipewire-capture")]
             Self::PipeWire(_) => CaptureKind::PipeWire,
+            #[cfg(feature = "wasapi-capture")]
+            Self::Wasapi(_) => CaptureKind::Wasapi,
         }
     }
 
@@ -134,6 +170,8 @@ impl CaptureBackend {
             Self::Mock(capture) => capture.is_running(),
             #[cfg(feature = "pipewire-capture")]
             Self::PipeWire(capture) => capture.is_running(),
+            #[cfg(feature = "wasapi-capture")]
+            Self::Wasapi(capture) => capture.is_running(),
         }
     }
 
@@ -149,6 +187,11 @@ impl CaptureBackend {
             }
             #[cfg(feature = "pipewire-capture")]
             Self::PipeWire(capture) => {
+                capture.start()?;
+                Ok(())
+            }
+            #[cfg(feature = "wasapi-capture")]
+            Self::Wasapi(capture) => {
                 capture.start()?;
                 Ok(())
             }
@@ -170,6 +213,11 @@ impl CaptureBackend {
                 capture.stop()?;
                 Ok(())
             }
+            #[cfg(feature = "wasapi-capture")]
+            Self::Wasapi(capture) => {
+                capture.stop()?;
+                Ok(())
+            }
         }
     }
 
@@ -185,6 +233,8 @@ impl CaptureBackend {
             }
             #[cfg(feature = "pipewire-capture")]
             Self::PipeWire(capture) => Ok(AudioCapture::poll_frame(capture)?),
+            #[cfg(feature = "wasapi-capture")]
+            Self::Wasapi(capture) => Ok(AudioCapture::poll_frame(capture)?),
         }
     }
 
@@ -196,6 +246,8 @@ impl CaptureBackend {
             }
             #[cfg(feature = "pipewire-capture")]
             Self::PipeWire(_) => {}
+            #[cfg(feature = "wasapi-capture")]
+            Self::Wasapi(_) => {}
         }
     }
 
@@ -206,6 +258,8 @@ impl CaptureBackend {
             Self::Mock(capture) => capture,
             #[cfg(feature = "pipewire-capture")]
             Self::PipeWire(_) => panic!("expected mock capture in tests"),
+            #[cfg(feature = "wasapi-capture")]
+            Self::Wasapi(_) => panic!("expected mock capture in tests"),
         }
     }
 }
@@ -253,5 +307,21 @@ mod tests {
     fn pipewire_rejected_without_feature() {
         let error = parse_capture_kind("pipewire").expect_err("needs feature");
         assert!(error.contains("pipewire-capture"), "{error}");
+    }
+
+    #[cfg(not(feature = "wasapi-capture"))]
+    #[test]
+    fn wasapi_rejected_without_feature() {
+        let error = parse_capture_kind("wasapi").expect_err("needs feature");
+        assert!(error.contains("wasapi-capture"), "{error}");
+    }
+
+    #[cfg(feature = "wasapi-capture")]
+    #[test]
+    fn wasapi_parses_when_linked() {
+        assert_eq!(
+            parse_capture_kind("wasapi").expect("wasapi"),
+            CaptureKind::Wasapi
+        );
     }
 }
