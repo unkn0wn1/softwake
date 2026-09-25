@@ -241,7 +241,7 @@ read is ok or missing.
 `ctl ask TEXT` and `ctl chat TEXT` send one typed line to the running daemon.
 Both use the same socket message. The daemon must already be awake. `ctl wake`
 enters awake when the four-file pack is valid. `ctl resume` lands in sleep and
-does not enter awake. Serve does not wake from the microphone yet (NullDetector until KWS weights).
+does not enter awake. Serve wakes from the microphone when built with `sherpa-kws` and KWS weights are installed (else NullDetector).
 The default build does not call the provider. A live answer needs the daemon
 built with live-http. The assistant text is printed after the status lines.
 A refusal exits non-zero.

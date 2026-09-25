@@ -8,12 +8,14 @@
 //! model. The `sherpa-kws` feature compiles `SherpaKwsDetector`, which
 //! implements the same PCM trait and also returns no hit until weights load.
 
+mod phrases;
 #[cfg(feature = "sherpa-kws")]
 mod sherpa;
 mod text;
 
 use std::fmt;
 
+pub use phrases::{DEFAULT_AGENT_NAME, hit_from_keyword, phrases_for_agent};
 #[cfg(feature = "sherpa-kws")]
 pub use sherpa::SherpaKwsDetector;
 pub use text::{PhraseTable, PhraseTableError, TextWakeDetector};

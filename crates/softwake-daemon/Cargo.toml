@@ -38,6 +38,8 @@ default = []
 live-http = ["softwake-providers/live-http"]
 # Real PipeWire microphone capture for serve. Off in CI.
 pipewire-capture = ["softwake-audio/pipewire-native"]
+# Real sherpa-onnx KWS when weights are installed. Off in CI.
+sherpa-kws = ["softwake-wake/sherpa-kws"]
 
 [lints]
 workspace = true

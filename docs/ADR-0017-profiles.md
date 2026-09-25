@@ -25,7 +25,7 @@ Path resolution for the soul pack is:
 
 First run with a legacy `soul/` directory **copies** the four markdown files into `profiles/default/`, writes `profile.json` with name Softwake, and writes `softwake.json` with `active_profile: default`. Legacy `soul/` is left in place and is not deleted.
 
-`SoulPack::render_instructions_as(name)` inserts a code-owned Identity lead-in: `Your name is {name}.` Profile rename updates `profile.json` only. Phrase / keyword wake on that name is out of scope (separate KWS work).
+`SoulPack::render_instructions_as(name)` inserts a code-owned Identity lead-in: `Your name is {name}.` Profile rename updates `profile.json` only. Phrase / keyword wake uses that name as the primary wake keyword when KWS weights are loaded (`sherpa-kws` feature; [ADR 0006](ADR-0006-on-device-wake.md)).
 
 Settings gains a **Profiles** left-nav pane: list / create / rename / set active, plus the four pack editors for the **selected** profile. Pack editors are removed from General. Protocol generation stays `1`. No new IPC status fields; the UI resolves profiles in-process. `reload_soul` still applies a valid pack on the next awake.
 
@@ -38,7 +38,7 @@ ADR 0011 defined the four-file pack in a single soul directory. Operators want m
 - Keep a single soul directory and only add a name field. Rejected: Spencer asked for multiple profiles.
 - Put active profile id on the Status IPC object. Rejected for this slice: protocol stays 1; UI and daemon share path resolution.
 - Move (not copy) legacy `soul/` on migrate. Rejected: copy is safer and leaves a rollback path.
-- Wire the agent name into Sherpa / KWS wake phrases. Rejected: out of scope; name is stored for a later slice.
+- Defer wiring the agent name into KWS forever. Rejected: this slice wires profile name → wake/sleep phrases when `sherpa-kws` + weights are present.
 
 ## Consequences
 

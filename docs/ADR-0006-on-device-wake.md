@@ -9,7 +9,7 @@ The production wake engine is **sherpa-onnx keyword spotting** (a streaming Zipf
 
 The engine scores 16 kHz mono `i16` PCM through the existing [`WakeDetector::push_samples`](../crates/softwake-wake/src/lib.rs) seam and returns a [`PhraseHit`](../crates/softwake-wake/src/lib.rs). Wake and sleep stay local. No audio leaves the machine for the wake decision.
 
-This decision does not vendor model weights and does not link `sherpa-onnx` yet. The default PCM detector remains `NullDetector`, which returns `PhraseHit::None` for every window. The `sherpa-kws` feature compiles `SherpaKwsDetector`, the same trait with the same `None` result, and records where weights will load. The typed demo still uses `TextWakeDetector` ([ADR 0002](ADR-0002-wake-engine-spike.md)) for `wake` and `sleep`.
+The default PCM detector remains `NullDetector` (no ONNX link). The `sherpa-kws` feature links the `sherpa-onnx` crate and loads an English Zipformer KWS checkpoint from `$XDG_DATA_HOME/softwake/kws` (else `~/.local/share/softwake/kws`) when those files are present. Without weights, `SherpaKwsDetector` still returns `PhraseHit::None`. Operators install weights with `scripts/install-kws-weights.sh` (not run by CI). Wake/sleep keyword lists are built from the active profile **name** plus Softwake fallbacks ([ADR 0017](ADR-0017-profiles.md)). The typed demo still uses `TextWakeDetector` ([ADR 0002](ADR-0002-wake-engine-spike.md)).
 
 ## Why this engine
 
@@ -33,7 +33,7 @@ Accuracy expectations, without a new benchmark in this change:
 
 ## License and what ships
 
-- The `sherpa-onnx` crate is Apache-2.0. Adding it later behind `sherpa-kws` is allowed. This PR does not add it: `sherpa-onnx-sys` bundles an ONNX runtime, and CI must not download that blob or any checkpoint.
+- The `sherpa-onnx` crate is Apache-2.0. Softwake links it only behind `sherpa-kws`. `sherpa-onnx-sys` may fetch a native ONNX runtime at build time for that feature. CI does not enable `sherpa-kws` and does not download checkpoints.
 - Weights are not committed. A developer downloads an English Zipformer keyword-spotting model (the GigaSpeech 3.3M checkpoint above, or a successor with a license that allows the intended use) into the model directory:
   - `$XDG_DATA_HOME/softwake/kws` when `XDG_DATA_HOME` is set
   - `$HOME/.local/share/softwake/kws` otherwise
@@ -92,7 +92,7 @@ The typed demo pushes 10 ms of silence through mock capture and then through `Nu
 - Porcupine as the default. Rejected because initialization needs a vendor access key.
 - Whisper, or any full speech-to-text model, as the wake gate. Rejected. Wrong cost for always-on sleep, and the transcript search repeats the spike's false triggers.
 - Cloud wake. Rejected. Audio would leave the machine.
-- Linking `sherpa-onnx` and downloading weights in this change. Rejected. CI would depend on a native runtime and a checkpoint fetch. The trait and the feature gate are the merge bar.
+- Enabling `sherpa-kws` or downloading weights in default CI. Rejected. The feature gate + install script are the merge bar; operators opt in locally.
 - Linking `libpipewire` in the default build. Rejected. CI has no microphone requirement, and the default job must not need a `PipeWire` daemon. Opt-in `pipewire-native` / `pipewire-capture` is the approved path.
 
 ## Consequences
@@ -100,5 +100,5 @@ The typed demo pushes 10 ms of silence through mock capture and then through `Nu
 - [`ADR 0002`](ADR-0002-wake-engine-spike.md) remains the text spike. This ADR is the production-engine choice.
 - `PhraseHit` and the voice-state mapping do not change when `NullDetector` is replaced by a loaded `SherpaKwsDetector`.
 - The phrase table remains configuration. It will be rendered into sherpa-onnx's keyword list. It is not thrown away.
-- Default `cargo test --workspace` does not open a microphone, does not start `PipeWire`, does not download weights, and does not enable `sherpa-kws` or `pipewire-native`.
+- Default `cargo test --workspace` does not open a microphone, does not start `PipeWire`, does not download weights, and does not enable `sherpa-kws` or `pipewire-native`. Local builds may enable `sherpa-kws` after `scripts/install-kws-weights.sh`.
 - Packaging is unchanged. Streaming speech-to-text and text-to-speech are [ADR 0007](ADR-0007-awake-stt-tts.md).

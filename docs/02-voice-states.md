@@ -43,8 +43,8 @@ Three states. Names are fixed vocabulary for UI, logs, and docs.
 
 ```toml
 [voice]
-wake_phrases = ["hey softwake", "softwake"]
-sleep_phrases = ["softwake sleep", "go to sleep"]
+wake_phrases = ["<profile name>", "hey <profile name>", "hey softwake", "softwake"]
+sleep_phrases = ["go to sleep", "goodnight <profile name>", "<profile name> sleep", "goodnight softwake", "softwake sleep"]
 # hibernate has no phrase by default — UI only
 post_wake_cooldown_ms = 800
 post_sleep_cooldown_ms = 800
