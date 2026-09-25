@@ -5,6 +5,8 @@
 //! immediately, [`ToolRisk::Confirm`] becomes one pending confirmation, and
 //! [`ToolRisk::Deny`] is refused. The confirm-gated tool does not run, and
 //! the notification sink does not change, until [`Hands::confirm`].
+//! `email_send` uses that same confirmation. The outbox changes only after
+//! [`crate::email_tool::commit_email_send`] accepts the message.
 //!
 //! One pending confirmation at a time. A second confirm-gated request is
 //! rejected and leaves the first in place. [`Hands::cancel`] clears it in any
@@ -13,8 +15,14 @@
 
 use std::collections::VecDeque;
 
+use softwake_connectors::{ConnectorRegistry, EMAIL, EMAIL_SEND, MockEmail, OutboundEmail};
 use softwake_state::{Machine, StateError, VoiceState};
-use softwake_tools::{NOTIFY_TOOL, ToolError, ToolRegistry, ToolResult, ToolRisk};
+use softwake_tools::{
+    EMAIL_SEND_TOOL, NOTIFY_TOOL, ToolError, ToolRegistry, ToolResult, ToolRisk,
+    parse_email_send_args,
+};
+
+use crate::email_tool::commit_email_send;
 
 /// How many tool-log entries the runtime keeps.
 const LOG_CAP: usize = 64;
@@ -80,6 +88,25 @@ pub(crate) enum DispatchError {
         pending_id: String,
         /// State that refused the confirm.
         state: VoiceState,
+    },
+
+    /// `email_send` did not include to, subject, and body.
+    ///
+    /// No pending record is stored when this happens on a request. On confirm,
+    /// the existing record stays and the outbox is unchanged.
+    #[error("{name} needs to, subject, and body")]
+    InvalidArgs {
+        /// Tool the caller named.
+        name: String,
+    },
+
+    /// The connector refused the send after the tool confirmation was accepted.
+    ///
+    /// The pending record stays. The outbox is unchanged.
+    #[error("{message}")]
+    Connector {
+        /// Registry text for the refused pair.
+        message: String,
     },
 }
 
@@ -192,10 +219,12 @@ struct Pending {
     description: &'static str,
 }
 
-/// Registry gate, one pending confirmation, the notification sink, and the tool log.
+/// Registry gate, one pending confirmation, the notification sink, the email outbox, and the tool log.
 #[derive(Debug)]
 pub(crate) struct Hands {
     registry: ToolRegistry,
+    connectors: ConnectorRegistry,
+    email: MockEmail,
     pending: Option<Pending>,
     sink: VecDeque<String>,
     log: VecDeque<ToolLogEntry>,
@@ -204,11 +233,13 @@ pub(crate) struct Hands {
 }
 
 impl Hands {
-    /// Empty sink, empty log, and the phase-2 registry.
+    /// Empty sink, empty outbox, empty log, and the builtin registries.
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
             registry: ToolRegistry::phase2(),
+            connectors: ConnectorRegistry::phase3(),
+            email: MockEmail::default(),
             pending: None,
             sink: VecDeque::new(),
             log: VecDeque::new(),
@@ -240,6 +271,12 @@ impl Hands {
         &self.sink
     }
 
+    /// Messages accepted by the in-memory connector, oldest first.
+    #[must_use]
+    pub(crate) fn outbox(&self) -> &[OutboundEmail] {
+        self.email.outbox()
+    }
+
     /// Tool log, oldest first. At most [`LOG_CAP`] entries.
     #[cfg(test)]
     #[must_use]
@@ -259,7 +296,7 @@ impl Hands {
 
     /// Run a safe tool, or stage a confirm-gated tool.
     ///
-    /// A confirm-gated tool does not run and does not touch the sink.
+    /// A confirm-gated tool does not run. The sink and the outbox stay as they are.
     pub(crate) fn request(
         &mut self,
         machine: &Machine,
@@ -308,6 +345,11 @@ impl Hands {
                     );
                     return Err(DispatchError::Busy { pending_id });
                 }
+                if name == EMAIL_SEND_TOOL {
+                    if let Err(error) = parse_email_send_args(args) {
+                        return Err(self.fail_tool(error));
+                    }
+                }
                 self.next_pending = self.next_pending.saturating_add(1);
                 let pending_id = self.next_pending.to_string();
                 self.pending = Some(Pending {
@@ -331,7 +373,7 @@ impl Hands {
     ///
     /// `expected_name`, when set, must match the stored tool. A mismatch leaves
     /// the pending record in place. The sink changes only after a successful
-    /// `notify` run.
+    /// `notify` run. The outbox changes only after a successful `email_send`.
     pub(crate) fn confirm(
         &mut self,
         machine: &Machine,
@@ -386,13 +428,7 @@ impl Hands {
                 state,
             });
         }
-        let detail = match self.registry.invoke_confirmed(&pending.name, &pending.args) {
-            Ok(ToolResult { detail }) => detail,
-            Err(error) => return Err(self.fail_tool(error)),
-        };
-        if pending.name == NOTIFY_TOOL {
-            self.push_notification(detail.clone());
-        }
+        let detail = self.confirmed_detail(&pending)?;
         self.pending = None;
         self.record(
             &pending.name,
@@ -481,13 +517,70 @@ impl Hands {
         })
     }
 
+    /// Result text for a confirmation that already passed the awake check.
+    ///
+    /// A failure leaves `self.pending` in place. `email_send` appends only
+    /// after `invoke_confirmed` and `authorize_confirmed` both succeed.
+    fn confirmed_detail(&mut self, pending: &Pending) -> Result<String, DispatchError> {
+        if pending.name == EMAIL_SEND_TOOL {
+            let parsed = match parse_email_send_args(&pending.args) {
+                Ok(parsed) => parsed,
+                Err(error) => return Err(self.fail_tool(error)),
+            };
+            if let Err(error) = self.registry.invoke_confirmed(&pending.name, &pending.args) {
+                return Err(self.fail_tool(error));
+            }
+            let message = OutboundEmail {
+                to: parsed.to,
+                subject: parsed.subject,
+                body: parsed.body,
+            };
+            let receipt = match commit_email_send(
+                &self.connectors,
+                &mut self.email,
+                EMAIL,
+                EMAIL_SEND,
+                &message,
+            ) {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    let message = error.to_string();
+                    self.record(
+                        &pending.name,
+                        Some(ToolRisk::Confirm),
+                        ToolOutcome::Unknown,
+                        Some(message.clone()),
+                    );
+                    return Err(DispatchError::Connector { message });
+                }
+            };
+            return Ok(format!("sent {}", receipt.id));
+        }
+        let detail = match self.registry.invoke_confirmed(&pending.name, &pending.args) {
+            Ok(ToolResult { detail }) => detail,
+            Err(error) => return Err(self.fail_tool(error)),
+        };
+        if pending.name == NOTIFY_TOOL {
+            self.push_notification(detail.clone());
+        }
+        Ok(detail)
+    }
+
     fn fail_tool(&mut self, error: ToolError) -> DispatchError {
-        let (recorded, risk, outcome, dispatch) = match error {
+        let (recorded, risk, outcome, detail, dispatch) = match error {
             ToolError::Denied { name } => (
                 name.clone(),
                 Some(ToolRisk::Deny),
                 ToolOutcome::Denied,
+                None,
                 DispatchError::Denied { name },
+            ),
+            ToolError::InvalidArgs { name } => (
+                name.clone(),
+                Some(ToolRisk::Confirm),
+                ToolOutcome::Unknown,
+                Some("needs to, subject, and body".to_owned()),
+                DispatchError::InvalidArgs { name },
             ),
             ToolError::Unknown { name }
             | ToolError::NeedsConfirm { name }
@@ -495,10 +588,11 @@ impl Hands {
                 name.clone(),
                 None,
                 ToolOutcome::Unknown,
+                None,
                 DispatchError::Unknown { name },
             ),
         };
-        self.record(&recorded, risk, outcome, None);
+        self.record(&recorded, risk, outcome, detail);
         dispatch
     }
 
@@ -737,9 +831,11 @@ mod tests {
         );
         assert!(hands.pending().is_none());
         assert!(hands.notifications().is_empty());
+        assert!(hands.outbox().is_empty());
         assert_eq!(hands.last_tool_line().as_deref(), Some("shell deny denied"));
         hands.confirm(&machine, "1", None).expect_err("no pending");
         assert!(hands.notifications().is_empty());
+        assert!(hands.outbox().is_empty());
 
         assert_eq!(
             hands.request(&machine, "volume", &[]),
@@ -807,5 +903,212 @@ mod tests {
         assert_eq!(hands.notifications().len(), 64);
         assert_eq!(hands.notifications().front().map(String::as_str), Some("6"));
         assert_eq!(hands.notifications().back().map(String::as_str), Some("69"));
+    }
+
+    fn email_args(body: &[&str]) -> Vec<String> {
+        let mut args = vec!["ada@example.com".to_owned(), "hello".to_owned()];
+        args.extend(body.iter().map(|part| (*part).to_owned()));
+        args
+    }
+
+    fn hibernating() -> Machine {
+        let mut machine = asleep();
+        machine.apply(Event::UiHibernate).expect("hibernate");
+        machine
+    }
+
+    #[test]
+    fn email_send_waits_and_confirm_appends_once() {
+        let mut hands = Hands::new();
+        let machine = awake();
+        let args = email_args(&["a", "short", "note"]);
+        let pending = hands
+            .request(&machine, "email_send", &args)
+            .expect("pending");
+        let RequestOutcome::Pending(pending) = pending else {
+            panic!("email_send is confirm-gated");
+        };
+        assert_eq!(pending.pending_id, "1");
+        assert_eq!(pending.name, "email_send");
+        assert_eq!(
+            pending.description,
+            "Append one message to the in-memory outbox."
+        );
+        assert!(hands.outbox().is_empty());
+        assert!(hands.notifications().is_empty());
+        assert_eq!(
+            hands.last_tool_line().as_deref(),
+            Some("email_send confirm pending")
+        );
+
+        let busy = hands
+            .request(&machine, "email_send", &email_args(&["other"]))
+            .expect_err("busy");
+        assert_eq!(
+            busy,
+            DispatchError::Busy {
+                pending_id: "1".to_owned()
+            }
+        );
+        let notify_busy = hands
+            .request(&machine, "notify", &["other".to_owned()])
+            .expect_err("notify busy");
+        assert!(matches!(notify_busy, DispatchError::Busy { .. }));
+        assert!(hands.outbox().is_empty());
+
+        let echo = hands
+            .request(&machine, "echo", &[])
+            .expect("echo still runs");
+        assert!(matches!(echo, RequestOutcome::Ran(_)));
+        assert!(hands.outbox().is_empty());
+
+        let confirmed = hands
+            .confirm(&machine, "1", Some("email_send"))
+            .expect("confirm");
+        assert_eq!(confirmed.detail, "sent 1");
+        assert_eq!(hands.outbox().len(), 1);
+        assert_eq!(hands.outbox()[0].to, "ada@example.com");
+        assert_eq!(hands.outbox()[0].subject, "hello");
+        assert_eq!(hands.outbox()[0].body, "a short note");
+        assert!(hands.notifications().is_empty());
+        assert!(hands.pending().is_none());
+        assert_eq!(
+            hands.last_tool_line().as_deref(),
+            Some("email_send confirm confirmed")
+        );
+
+        let again = hands.confirm(&machine, "1", None).expect_err("spent");
+        assert_eq!(
+            again,
+            DispatchError::UnknownPending {
+                pending_id: "1".to_owned()
+            }
+        );
+        assert_eq!(hands.outbox().len(), 1);
+        assert!(hands.clear_pending().is_none());
+        assert_eq!(hands.outbox().len(), 1);
+
+        hands
+            .request(&machine, "email_send", &email_args(&["second"]))
+            .expect("second pending");
+        let second = hands.confirm(&machine, "2", None).expect("second confirm");
+        assert_eq!(second.detail, "sent 2");
+        assert_eq!(hands.outbox().len(), 2);
+        assert_eq!(hands.outbox()[1].body, "second");
+    }
+
+    #[test]
+    fn short_email_send_does_not_stage() {
+        let mut hands = Hands::new();
+        let machine = awake();
+        let refused = hands
+            .request(
+                &machine,
+                "email_send",
+                &["ada@example.com".to_owned(), "hello".to_owned()],
+            )
+            .expect_err("short");
+        assert_eq!(
+            refused,
+            DispatchError::InvalidArgs {
+                name: "email_send".to_owned()
+            }
+        );
+        assert_eq!(
+            refused.to_string(),
+            "email_send needs to, subject, and body"
+        );
+        assert!(hands.pending().is_none());
+        assert!(hands.outbox().is_empty());
+        assert_eq!(
+            hands.last_tool_line().as_deref(),
+            Some("email_send confirm unknown")
+        );
+    }
+
+    #[test]
+    fn email_send_is_forbidden_when_not_awake() {
+        let mut hands = Hands::new();
+        let args = email_args(&["body"]);
+        let asleep = hands
+            .request(&asleep(), "email_send", &args)
+            .expect_err("asleep");
+        assert_eq!(
+            asleep,
+            DispatchError::Forbidden {
+                name: "email_send".to_owned(),
+                state: VoiceState::Sleep,
+            }
+        );
+        let hibernate = hands
+            .request(&hibernating(), "email_send", &["only".to_owned()])
+            .expect_err("hibernate");
+        assert_eq!(
+            hibernate,
+            DispatchError::Forbidden {
+                name: "email_send".to_owned(),
+                state: VoiceState::Hibernate,
+            }
+        );
+        assert!(hands.pending().is_none());
+        assert!(hands.outbox().is_empty());
+    }
+
+    #[test]
+    fn cancel_and_sleep_do_not_send_email() {
+        let mut hands = Hands::new();
+        let machine = awake();
+        hands
+            .request(&machine, "email_send", &email_args(&["body"]))
+            .expect("pending");
+        let mismatch = hands
+            .confirm(&machine, "1", Some("notify"))
+            .expect_err("name");
+        assert!(matches!(mismatch, DispatchError::PendingMismatch { .. }));
+        assert!(hands.outbox().is_empty());
+        assert!(hands.pending().is_some());
+        hands.cancel("1", Some("notify")).expect_err("cancel name");
+        assert!(hands.pending().is_some());
+
+        let mut asleep = machine;
+        asleep.apply(Event::SleepPhrase).expect("sleep");
+        let refused = hands.confirm(&asleep, "1", None).expect_err("asleep");
+        assert!(matches!(refused, DispatchError::ConfirmForbidden { .. }));
+        assert!(hands.outbox().is_empty());
+        assert!(hands.pending().is_some());
+        hands.cancel("1", None).expect("cancel");
+        assert!(hands.pending().is_none());
+        assert!(hands.outbox().is_empty());
+
+        let machine = awake();
+        hands
+            .request(&machine, "email_send", &email_args(&["later"]))
+            .expect("stage");
+        let cleared = hands.clear_pending().expect("cleared");
+        assert_eq!(cleared.name, "email_send");
+        assert!(hands.outbox().is_empty());
+        assert_eq!(
+            hands.log().back().expect("log").detail.as_deref(),
+            Some("cleared when acting stopped")
+        );
+    }
+
+    #[test]
+    fn email_send_stores_subject_and_body_unchanged() {
+        let mut hands = Hands::new();
+        let machine = awake();
+        let args = vec![
+            "ada@example.com".to_owned(),
+            "hello there".to_owned(),
+            "line one".to_owned(),
+        ];
+        hands
+            .request(&machine, "email_send", &args)
+            .expect("pending");
+        hands.confirm(&machine, "1", None).expect("confirm");
+        assert_eq!(hands.outbox().len(), 1);
+        assert_eq!(hands.outbox()[0].subject, "hello there");
+        assert_eq!(hands.outbox()[0].body, "line one");
+        assert!(hands.notifications().is_empty());
     }
 }

@@ -187,7 +187,8 @@ Demo commands, one per line:
 
 `tool echo` returns pong. `tool echo hello` returns "echo: hello".
 `tool notify hello` waits until `confirm` (or `confirm-tool ID`).
-`cancel` drops that pending call. `tool shell` is denied.
+`tool email_send TO SUBJECT BODY...` waits the same way. Confirm appends
+one in-memory message. `cancel` drops that pending call. `tool shell` is denied.
 Other tool names are rejected. Sleep and hibernate reject every tool
 and drop a pending confirmation. Safe tools run only while awake.
 
@@ -219,8 +220,9 @@ already applied until the next awake session. Status reports whether that
 read is ok or missing.
 
 `ctl tool` asks the running daemon to run one tool while it is awake.
-`echo` runs immediately. `notify` returns a pending id and does not run
-until `ctl confirm-tool ID`. `ctl cancel-tool ID` drops it. `shell` is
+`echo` runs immediately. `notify` and `email_send` return a pending id and
+do not run until `ctl confirm-tool ID`. Confirming `email_send` appends one
+in-memory message. `ctl cancel-tool ID` drops the pending call. `shell` is
 denied. The result is printed after the status lines. A refusal names
 the reason. Serve does not yet enter awake from the microphone; the
 typed demo is the path that does."#
@@ -497,6 +499,7 @@ mod tests {
         assert!(help.contains("confirm-tool"));
         assert!(help.contains("cancel-tool"));
         assert!(help.contains("notify"));
+        assert!(help.contains("email_send"));
     }
 
     #[test]

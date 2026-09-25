@@ -29,12 +29,13 @@
 
 1. [ ] Email / Drive / calendar via explicit connectors
    - [x] Connector boundary ([ADR 0008](ADR-0008-connector-boundary.md)): `softwake-connectors`, `EmailConnector`, `MockEmail`, confirm/deny registry, no live cloud client in the default build
+   - [x] Confirm-gated tool `email_send` ([ADR 0008](ADR-0008-connector-boundary.md)): daemon `Hands` holds `MockEmail`; confirm calls `authorize_confirmed` then `EmailConnector::send`. No live client.
    - [ ] Live email backend (opt-in, not in CI)
    - [ ] Drive backend
    - [ ] Calendar backend
 2. [ ] Long-term memory module (Honcho or smaller local store) — decision ADR
 3. [ ] Stricter policy engine
-   - [x] Connector actions are confirm or deny; unknown pairs fail closed ([ADR 0008](ADR-0008-connector-boundary.md)). The tool bus is unchanged.
+   - [x] Connector actions are confirm or deny; unknown pairs fail closed ([ADR 0008](ADR-0008-connector-boundary.md)).
    - [ ] Policy beyond the connector registry
 
 ## Deferred ideas (do not pull into phase 1)

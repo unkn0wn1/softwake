@@ -6,13 +6,17 @@
 //! [`invoke_confirmed`](ToolRegistry::invoke_confirmed) runs confirm-gated tools
 //! and is the daemon's step after the operator accepts. Neither function
 //! spawns a process, writes a file, or opens a socket. The notification sink
-//! lives in the daemon; this crate only formats the line.
+//! and the email outbox live in the daemon. This crate classifies names and
+//! shapes `email_send` arguments. It does not send.
 
 /// Name of the safe tool. Behaviour matches phase 1.
 pub const ECHO_TOOL: &str = "echo";
 
 /// Confirm-gated tool. The daemon appends the formatted line to an in-memory sink.
 pub const NOTIFY_TOOL: &str = "notify";
+
+/// Confirm-gated send. The daemon appends one in-memory message after confirm.
+pub const EMAIL_SEND_TOOL: &str = "email_send";
 
 /// Registered deny name. It is never runnable.
 pub const SHELL_TOOL: &str = "shell";
@@ -69,6 +73,11 @@ const PHASE2: &[ToolMeta] = &[
         description: "Append a notification to the in-memory sink.",
     },
     ToolMeta {
+        name: EMAIL_SEND_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Append one message to the in-memory outbox.",
+    },
+    ToolMeta {
         name: SHELL_TOOL,
         risk: ToolRisk::Deny,
         description: "Run a shell. Denied.",
@@ -112,6 +121,13 @@ pub enum ToolError {
         /// Name that was rejected.
         name: String,
     },
+
+    /// [`EMAIL_SEND_TOOL`] was missing to, subject, or body.
+    #[error("{name} needs to, subject, and body")]
+    InvalidArgs {
+        /// Name that was rejected.
+        name: String,
+    },
 }
 
 /// Registered tools and their pure runners.
@@ -121,7 +137,7 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
-    /// Registry used by the daemon: `echo`, `notify`, and `shell`.
+    /// Registry used by the daemon: `echo`, `notify`, `email_send`, and `shell`.
     #[must_use]
     pub const fn phase2() -> Self {
         Self { tools: PHASE2 }
@@ -187,17 +203,26 @@ impl ToolRegistry {
     /// This function does not check a token. The daemon calls it only after
     /// confirmation. [`NOTIFY_TOOL`] returns the arguments joined by spaces.
     /// That string is the notification line; this crate does not store it.
+    /// [`EMAIL_SEND_TOOL`] parses to, subject, and body, then returns an empty
+    /// detail. The receipt id is chosen by the daemon when it sends.
     ///
     /// # Errors
     ///
     /// Returns [`ToolError::Unknown`] when `name` is not registered,
-    /// [`ToolError::Denied`] for a denied tool, and
-    /// [`ToolError::NotConfirmGated`] for a safe tool.
+    /// [`ToolError::Denied`] for a denied tool,
+    /// [`ToolError::NotConfirmGated`] for a safe tool, and
+    /// [`ToolError::InvalidArgs`] when [`EMAIL_SEND_TOOL`] has fewer than
+    /// three arguments.
     pub fn invoke_confirmed(&self, name: &str, args: &[String]) -> Result<ToolResult, ToolError> {
         match self.lookup(name).map(|tool| tool.risk) {
-            Some(ToolRisk::Confirm) => Ok(ToolResult {
-                detail: render(name, args),
-            }),
+            Some(ToolRisk::Confirm) => {
+                if name == EMAIL_SEND_TOOL {
+                    parse_email_send_args(args)?;
+                }
+                Ok(ToolResult {
+                    detail: render(name, args),
+                })
+            }
             Some(ToolRisk::Deny) => Err(ToolError::Denied {
                 name: name.to_owned(),
             }),
@@ -225,6 +250,50 @@ fn render(name: &str, args: &[String]) -> String {
     }
 }
 
+/// Slots for [`EMAIL_SEND_TOOL`].
+///
+/// The strings are stored unchanged. Nothing here checks that `to` is an address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmailSendArgs {
+    /// Recipient text.
+    pub to: String,
+    /// Subject line. One argument, which may itself contain spaces.
+    pub subject: String,
+    /// Body text. The remaining arguments joined by a single space.
+    pub body: String,
+}
+
+/// Split `email_send` arguments into to, subject, and body.
+///
+/// `args[0]` is `to`, `args[1]` is `subject`, and `args[2..]` joined by a
+/// single space is `body`. A present slot may be empty. Missing slots are rejected.
+///
+/// # Errors
+///
+/// Returns [`ToolError::InvalidArgs`] when `args` has fewer than three elements.
+pub fn parse_email_send_args(args: &[String]) -> Result<EmailSendArgs, ToolError> {
+    let Some((to, rest)) = args.split_first() else {
+        return Err(invalid_email_args());
+    };
+    let Some((subject, body)) = rest.split_first() else {
+        return Err(invalid_email_args());
+    };
+    if body.is_empty() {
+        return Err(invalid_email_args());
+    }
+    Ok(EmailSendArgs {
+        to: to.clone(),
+        subject: subject.clone(),
+        body: body.join(" "),
+    })
+}
+
+fn invalid_email_args() -> ToolError {
+    ToolError::InvalidArgs {
+        name: EMAIL_SEND_TOOL.to_owned(),
+    }
+}
+
 fn echo_detail(args: &[String]) -> String {
     if args.is_empty() {
         "pong".to_owned()
@@ -241,7 +310,8 @@ fn echo_detail(args: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ECHO_TOOL, NOTIFY_TOOL, SHELL_TOOL, ToolError, ToolRegistry, ToolResult, ToolRisk,
+        ECHO_TOOL, EMAIL_SEND_TOOL, EmailSendArgs, NOTIFY_TOOL, SHELL_TOOL, ToolError,
+        ToolRegistry, ToolResult, ToolRisk, parse_email_send_args,
     };
 
     fn registry() -> ToolRegistry {
@@ -260,12 +330,15 @@ mod tests {
             vec![
                 (ECHO_TOOL, ToolRisk::Safe),
                 (NOTIFY_TOOL, ToolRisk::Confirm),
+                (EMAIL_SEND_TOOL, ToolRisk::Confirm),
                 (SHELL_TOOL, ToolRisk::Deny),
             ]
         );
         assert_eq!(registry.risk("echo"), Some(ToolRisk::Safe));
         assert_eq!(registry.risk("notify"), Some(ToolRisk::Confirm));
+        assert_eq!(registry.risk("email_send"), Some(ToolRisk::Confirm));
         assert_eq!(registry.risk("shell"), Some(ToolRisk::Deny));
+        assert_eq!(registry.risk("Email_Send"), None);
         assert_eq!(registry.risk("volume"), None);
         assert_eq!(registry.risk("Echo"), None);
         assert_eq!(registry.risk(""), None);
@@ -279,6 +352,10 @@ mod tests {
                 .lookup("notify")
                 .is_some_and(|tool| tool.risk == ToolRisk::Confirm)
         );
+        assert!(registry.lookup("email_send").is_some_and(|tool| {
+            tool.risk == ToolRisk::Confirm
+                && tool.description == "Append one message to the in-memory outbox."
+        }));
         assert_eq!(ToolRegistry::default().entries(), registry.entries());
     }
 
@@ -338,6 +415,92 @@ mod tests {
                 .detail,
             ""
         );
+    }
+
+    #[test]
+    fn email_send_does_not_run_until_invoke_confirmed_and_parses_fields() {
+        let registry = registry();
+        let args = vec![
+            "ada@example.com".to_owned(),
+            "hello".to_owned(),
+            "a".to_owned(),
+            "short".to_owned(),
+        ];
+        assert_eq!(
+            registry.invoke("email_send", &args),
+            Err(ToolError::NeedsConfirm {
+                name: "email_send".to_owned(),
+            })
+        );
+        assert_eq!(
+            registry
+                .invoke("email_send", &[])
+                .expect_err("blind")
+                .to_string(),
+            "tool requires confirmation: email_send"
+        );
+        let confirmed = registry
+            .invoke_confirmed("email_send", &args)
+            .expect("confirmed");
+        assert_eq!(confirmed.detail, "");
+        let again = registry
+            .invoke_confirmed("email_send", &args)
+            .expect("pure");
+        assert_eq!(again, confirmed);
+        assert_eq!(
+            parse_email_send_args(&args).expect("parse"),
+            EmailSendArgs {
+                to: "ada@example.com".to_owned(),
+                subject: "hello".to_owned(),
+                body: "a short".to_owned(),
+            }
+        );
+        let spaced = parse_email_send_args(&[
+            " ada@example.com ".to_owned(),
+            "hello there".to_owned(),
+            "line one".to_owned(),
+        ])
+        .expect("spaces");
+        assert_eq!(spaced.to, " ada@example.com ");
+        assert_eq!(spaced.subject, "hello there");
+        assert_eq!(spaced.body, "line one");
+        assert_eq!(
+            parse_email_send_args(&["not-an-address".to_owned(), "s".to_owned(), "b".to_owned(),])
+                .expect("no address check")
+                .to,
+            "not-an-address"
+        );
+        for short in [
+            vec![],
+            vec!["only-to".to_owned()],
+            vec!["only-to".to_owned(), "subject".to_owned()],
+        ] {
+            assert_eq!(
+                registry.invoke_confirmed("email_send", &short),
+                Err(ToolError::InvalidArgs {
+                    name: "email_send".to_owned(),
+                })
+            );
+            assert_eq!(
+                parse_email_send_args(&short)
+                    .expect_err("short")
+                    .to_string(),
+                "email_send needs to, subject, and body"
+            );
+            assert_eq!(
+                registry.invoke("email_send", &short),
+                Err(ToolError::NeedsConfirm {
+                    name: "email_send".to_owned(),
+                })
+            );
+        }
+        let empty_body = parse_email_send_args(&[
+            "ada@example.com".to_owned(),
+            "hello".to_owned(),
+            String::new(),
+        ])
+        .expect("empty body slot");
+        assert_eq!(empty_body.body, "");
     }
 
     #[test]

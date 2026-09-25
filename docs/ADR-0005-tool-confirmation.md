@@ -44,6 +44,8 @@ Wire names are `confirm_tool` and `cancel_tool` on the client, and `tool_confirm
 
 The runtime policy names `echo` (safe), `notify` (confirm), and `shell` (deny), and says that `notify` runs only after `confirm_tool`.
 
+`email_send` is a later confirm-gated tool. Its arguments and the in-memory send are specified in [ADR 0008](ADR-0008-connector-boundary.md). The gate order in this ADR is unchanged.
+
 ## Context
 
 Phase 1 proved a binary allowlist with a pure tool. The next risky tool needs a confirmation path before it can change anything. A microphone is not required to prove that path. `notify` mutates a daemon-owned `Vec` (a ring of lines) and nothing else, so CI can assert "pending does not append" and "confirm appends once".

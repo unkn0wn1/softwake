@@ -452,6 +452,9 @@ fn tool_ipc_error(error: &DispatchError) -> IpcError {
             pending_id: pending_id.clone(),
             state: wire_state(*state),
         },
+        DispatchError::InvalidArgs { .. } | DispatchError::Connector { .. } => {
+            IpcError::protocol(error.to_string())
+        }
     }
 }
 
@@ -896,6 +899,7 @@ mod tests {
         assert!(instructions.contains("test user"));
         assert!(instructions.contains("echo (safe)"));
         assert!(instructions.contains("notify (confirm)"));
+        assert!(instructions.contains("email_send (confirm)"));
         assert_eq!(runtime.applied_instructions(), Some(instructions.as_str()));
 
         soul.write("updated soul\n", "updated user\n");
@@ -919,6 +923,7 @@ mod tests {
         assert!(reopened.contains("updated user"));
         assert!(reopened.contains("echo (safe)"));
         assert!(reopened.contains("notify (confirm)"));
+        assert!(reopened.contains("email_send (confirm)"));
 
         runtime.handle(Command::Hibernate);
         assert_eq!(
@@ -1002,6 +1007,193 @@ mod tests {
             } if pending_id == "1"
         ));
         assert_eq!(runtime.hands.notifications().len(), 1);
+    }
+
+    #[test]
+    fn email_send_confirms_once_onto_the_outbox() {
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        let args = vec![
+            "ada@example.com".to_owned(),
+            "hello there".to_owned(),
+            "line one".to_owned(),
+        ];
+
+        let pending = runtime.invoke_tool("email_send", &args);
+        let status = pending.body.status().expect("pending");
+        assert_eq!(
+            status.message.as_deref(),
+            Some("pending confirmation 1 for email_send")
+        );
+        let waiting = status.pending_tool.clone().expect("pending tool");
+        assert_eq!(waiting.name, "email_send");
+        assert_eq!(waiting.args, args);
+        assert!(runtime.hands.outbox().is_empty());
+        assert!(runtime.hands.notifications().is_empty());
+        assert!(matches!(
+            pending.events.as_slice(),
+            [Event::ToolConfirmPending { name, .. }] if name == "email_send"
+        ));
+        assert!(pending.events.iter().all(|event| !matches!(
+            event,
+            Event::ToolStarted { .. } | Event::ToolFinished { .. }
+        )));
+
+        let short = runtime.invoke_tool("email_send", &["ada@example.com".to_owned()]);
+        assert!(matches!(
+            short.body,
+            ResponseBody::Err {
+                error: IpcError::ConfirmationPending { .. }
+            }
+        ));
+        assert!(runtime.hands.outbox().is_empty());
+
+        let confirmed = runtime.confirm_tool("1", Some("email_send"));
+        let status = confirmed.body.status().expect("confirmed");
+        assert_eq!(status.message.as_deref(), Some("sent 1"));
+        assert!(status.pending_tool.is_none());
+        assert_eq!(runtime.hands.outbox().len(), 1);
+        assert_eq!(runtime.hands.outbox()[0].to, "ada@example.com");
+        assert_eq!(runtime.hands.outbox()[0].subject, "hello there");
+        assert_eq!(runtime.hands.outbox()[0].body, "line one");
+        assert!(runtime.hands.notifications().is_empty());
+        assert!(matches!(
+            confirmed.events.as_slice(),
+            [
+                Event::ToolConfirmResolved {
+                    pending_id,
+                    accepted: true,
+                },
+                Event::ToolStarted { name: started },
+                Event::ToolFinished {
+                    name: finished,
+                    detail: Some(detail),
+                },
+            ] if pending_id == "1"
+                && started == "email_send"
+                && finished == "email_send"
+                && detail == "sent 1"
+        ));
+
+        let again = runtime.confirm_tool("1", None);
+        assert!(matches!(
+            again.body,
+            ResponseBody::Err {
+                error: IpcError::UnknownPending { .. }
+            }
+        ));
+        assert_eq!(runtime.hands.outbox().len(), 1);
+    }
+
+    fn email_body() -> Vec<String> {
+        vec![
+            "ada@example.com".to_owned(),
+            "hello".to_owned(),
+            "body".to_owned(),
+        ]
+    }
+
+    #[test]
+    fn email_send_cancel_sleep_and_short_args_do_not_send() {
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+
+        let short = runtime.invoke_tool(
+            "email_send",
+            &["ada@example.com".to_owned(), "hello".to_owned()],
+        );
+        assert!(matches!(
+            short.body,
+            ResponseBody::Err {
+                error: IpcError::Protocol { ref message }
+            } if message == "email_send needs to, subject, and body"
+        ));
+        assert!(short.events.is_empty());
+        assert!(runtime.hands.pending().is_none());
+        assert!(runtime.hands.outbox().is_empty());
+
+        runtime.invoke_tool("email_send", &email_body());
+        let cancelled = runtime.cancel_tool("1", None);
+        assert!(matches!(
+            cancelled.events.as_slice(),
+            [Event::ToolConfirmResolved {
+                accepted: false,
+                ..
+            }]
+        ));
+        assert!(runtime.hands.outbox().is_empty());
+
+        runtime.invoke_tool("email_send", &email_body());
+        // Leave the pending record in place while the machine is no longer awake.
+        // The sleep command itself clears that record; this is the confirm-forbidden case.
+        runtime
+            .machine
+            .apply(softwake_state::Event::UiSleep)
+            .expect("sleep without clearing");
+        let refused = runtime.confirm_tool("2", None);
+        assert!(matches!(
+            refused.body,
+            ResponseBody::Err {
+                error: IpcError::ConfirmForbidden { .. }
+            }
+        ));
+        assert!(runtime.hands.outbox().is_empty());
+        assert!(runtime.hands.pending().is_some());
+        runtime.cancel_tool("2", None);
+        assert!(runtime.hands.pending().is_none());
+        assert!(runtime.hands.outbox().is_empty());
+
+        let forbidden = runtime.invoke_tool("email_send", &email_body());
+        assert!(matches!(
+            forbidden.body,
+            ResponseBody::Err {
+                error: IpcError::ToolForbidden {
+                    state: VoiceState::Sleep,
+                    ..
+                }
+            }
+        ));
+        assert!(runtime.hands.outbox().is_empty());
+    }
+
+    #[test]
+    fn sleep_and_hibernate_clear_a_pending_email_without_sending() {
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        runtime.invoke_tool("email_send", &email_body());
+
+        let slept = runtime.handle(Command::Sleep);
+        assert!(slept.events.iter().any(|event| matches!(
+            event,
+            Event::ToolConfirmResolved {
+                accepted: false,
+                ..
+            }
+        )));
+        assert!(runtime.hands.pending().is_none());
+        assert!(runtime.hands.outbox().is_empty());
+
+        runtime.machine.advance(Duration::from_millis(800));
+        wake(&mut runtime);
+        runtime.invoke_tool("email_send", &email_body());
+        let hibernated = runtime.handle(Command::Hibernate);
+        assert!(hibernated.events.iter().any(|event| matches!(
+            event,
+            Event::ToolConfirmResolved {
+                accepted: false,
+                ..
+            }
+        )));
+        assert!(runtime.hands.outbox().is_empty());
+        assert!(matches!(
+            runtime.invoke_tool("email_send", &email_body()).body,
+            ResponseBody::Err {
+                error: IpcError::ToolForbidden {
+                    state: VoiceState::Hibernate,
+                    ..
+                }
+            }
+        ));
     }
 
     #[test]

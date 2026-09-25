@@ -574,6 +574,7 @@ fn missing_soul_refuses_wake_until_reload() {
     assert!(applied.contains("State: awake."));
     assert!(applied.contains("echo (safe)"));
     assert!(applied.contains("notify (confirm)"));
+    assert!(applied.contains("email_send (confirm)"));
     assert_eq!(demo.session_phase(), SessionPhase::Open);
     assert_eq!(demo.session_instructions(), Some(applied));
 }
@@ -609,6 +610,7 @@ fn tool_echo_requires_awake_and_the_session_opens_and_closes() {
     assert!(instructions.contains("test user"));
     assert!(instructions.contains("echo (safe)"));
     assert!(instructions.contains("notify (confirm)"));
+    assert!(instructions.contains("email_send (confirm)"));
 
     let ran = demo.handle_line("tool echo Hello", Duration::ZERO);
     assert!(
@@ -907,4 +909,173 @@ fn hear_and_say_need_text() {
     );
     let say = demo.handle_line("say", Duration::ZERO);
     assert!(say.lines.iter().any(|line| line.contains("say needs text")));
+}
+
+#[test]
+fn email_send_waits_for_confirm_and_then_appends_once() {
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    let asleep = demo.handle_line("tool email_send ada@example.com hello body", Duration::ZERO);
+    assert!(
+        asleep
+            .lines
+            .iter()
+            .any(|line| { line.contains("cannot run email_send while sleep") })
+    );
+    assert!(demo.outbox().is_empty());
+
+    demo.handle_line("wake", Duration::ZERO);
+    let short = demo.handle_line("tool email_send ada@example.com hello", Duration::ZERO);
+    assert!(
+        short
+            .lines
+            .iter()
+            .any(|line| { line == "rejected: email_send needs to, subject, and body" })
+    );
+    assert!(short.lines.iter().all(|line| line != "waiting for confirm"));
+    assert!(demo.outbox().is_empty());
+
+    let pending = demo.handle_line(
+        "tool email_send ada@example.com hello a short note",
+        Duration::ZERO,
+    );
+    assert!(pending.lines.iter().any(|line| {
+        line == "pending 1: email_send — Append one message to the in-memory outbox."
+    }));
+    assert!(
+        pending
+            .lines
+            .iter()
+            .any(|line| line == "waiting for confirm")
+    );
+    assert!(
+        pending
+            .lines
+            .iter()
+            .any(|line| { line == "pending: 1 email_send ada@example.com hello a short note" })
+    );
+    assert!(
+        pending
+            .lines
+            .iter()
+            .any(|line| { line == "last tool: email_send confirm pending" })
+    );
+    assert!(pending.lines.iter().all(|line| !line.starts_with("email:")));
+    assert!(demo.outbox().is_empty());
+
+    let echo = demo.handle_line("tool echo hi", Duration::ZERO);
+    assert!(echo.lines.iter().any(|line| line == "tool echo: echo: hi"));
+    assert!(demo.outbox().is_empty());
+
+    let busy = demo.handle_line("tool email_send ada@example.com other note", Duration::ZERO);
+    assert!(
+        busy.lines
+            .iter()
+            .any(|line| { line.contains("confirmation is already pending: 1") })
+    );
+    assert!(demo.outbox().is_empty());
+
+    let confirmed = demo.handle_line("confirm", Duration::ZERO);
+    assert!(
+        confirmed
+            .lines
+            .iter()
+            .any(|line| { line == "confirmed 1: tool email_send: sent 1" })
+    );
+    assert!(
+        confirmed
+            .lines
+            .iter()
+            .any(|line| { line == "last tool: email_send confirm confirmed" })
+    );
+    assert!(
+        confirmed
+            .lines
+            .iter()
+            .any(|line| { line == "email: ada@example.com | hello | a short note" })
+    );
+    assert_eq!(demo.outbox().len(), 1);
+    assert_eq!(demo.outbox()[0].to, "ada@example.com");
+    assert_eq!(demo.outbox()[0].subject, "hello");
+    assert_eq!(demo.outbox()[0].body, "a short note");
+    assert!(demo.notifications().is_empty());
+
+    let spent = demo.handle_line("confirm", Duration::ZERO);
+    assert!(
+        spent
+            .lines
+            .iter()
+            .any(|line| { line.contains("no pending confirmation") })
+    );
+    assert_eq!(demo.outbox().len(), 1);
+
+    let slept = demo.handle_line("sleep", Duration::ZERO);
+    assert!(
+        slept
+            .lines
+            .iter()
+            .any(|line| { line == "email: ada@example.com | hello | a short note" })
+    );
+    assert_eq!(demo.outbox().len(), 1);
+}
+
+#[test]
+fn cancel_sleep_and_hibernate_do_not_send_email() {
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    demo.handle_line("wake", Duration::ZERO);
+    demo.handle_line(
+        "tool email_send ada@example.com hello later",
+        Duration::ZERO,
+    );
+    let cancelled = demo.handle_line("cancel", Duration::ZERO);
+    assert!(
+        cancelled
+            .lines
+            .iter()
+            .any(|line| line == "cancelled 1: email_send")
+    );
+    assert!(
+        cancelled
+            .lines
+            .iter()
+            .all(|line| !line.starts_with("email:"))
+    );
+    assert!(demo.outbox().is_empty());
+
+    demo.handle_line(
+        "tool email_send ada@example.com hello later",
+        Duration::ZERO,
+    );
+    let slept = demo.handle_line("sleep", Duration::ZERO);
+    assert!(
+        slept
+            .lines
+            .iter()
+            .any(|line| line == "cancelled 2: email_send")
+    );
+    assert!(demo.outbox().is_empty());
+
+    demo.handle_line("wake", Duration::ZERO);
+    demo.handle_line(
+        "tool email_send ada@example.com hello later",
+        Duration::ZERO,
+    );
+    let hibernated = demo.handle_line("hibernate", Duration::ZERO);
+    assert!(
+        hibernated
+            .lines
+            .iter()
+            .any(|line| line == "cancelled 3: email_send")
+    );
+    assert!(demo.outbox().is_empty());
+    let refused = demo.handle_line(
+        "tool email_send ada@example.com hello later",
+        Duration::ZERO,
+    );
+    assert!(
+        refused
+            .lines
+            .iter()
+            .any(|line| { line.contains("cannot run email_send while hibernate") })
+    );
+    assert!(demo.outbox().is_empty());
 }

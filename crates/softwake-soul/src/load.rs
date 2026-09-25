@@ -12,11 +12,11 @@ use crate::{SoulError, SoulFile, SoulPaths};
 /// paste before it is decoded.
 pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
 
-// Names and risks match the phase-2 registry. See ADR 0004 and ADR 0005.
+// Names and risks match the tool registry. See ADR 0004, ADR 0005, and ADR 0008.
 const POLICY: &str = "\
 State: awake.
-Tools: echo (safe), notify (confirm), shell (deny).
-Confirm rules: notify runs only after confirm_tool. shell never runs.
+Tools: echo (safe), notify (confirm), email_send (confirm), shell (deny).
+Confirm rules: notify and email_send run only after confirm_tool. shell never runs.
 ";
 
 /// Validated text of `soul.md` and `user.md`.
@@ -45,8 +45,8 @@ impl SoulPack {
     ///
     /// - Identity (`soul.md`)
     /// - User profile (`user.md`)
-    /// - Runtime policy stub: state is awake, `echo` is safe, `notify` waits
-    ///   for confirmation, and `shell` is denied
+    /// - Runtime policy stub: state is awake, `echo` is safe, `notify` and
+    ///   `email_send` wait for confirmation, and `shell` is denied
     #[must_use]
     pub fn render_instructions(&self) -> String {
         format!(
@@ -218,7 +218,7 @@ mod tests {
         assert_eq!(pack.user_profile(), "Name: Ada.\n");
         assert_eq!(
             pack.render_instructions(),
-            "# Identity\n\nI am Softwake.\n\n# User profile\n\nName: Ada.\n\n# Runtime policy\n\nState: awake.\nTools: echo (safe), notify (confirm), shell (deny).\nConfirm rules: notify runs only after confirm_tool. shell never runs.\n"
+            "# Identity\n\nI am Softwake.\n\n# User profile\n\nName: Ada.\n\n# Runtime policy\n\nState: awake.\nTools: echo (safe), notify (confirm), email_send (confirm), shell (deny).\nConfirm rules: notify and email_send run only after confirm_tool. shell never runs.\n"
         );
         let status = SoulStatus::from_result(&Ok(pack));
         assert!(status.is_valid());
