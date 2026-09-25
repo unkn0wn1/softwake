@@ -18,6 +18,7 @@ path = "src/lib.rs"
 softwake-audio.workspace = true
 softwake-connectors.workspace = true
 softwake-ipc.workspace = true
+softwake-memory.workspace = true
 softwake-policy.workspace = true
 softwake-providers.workspace = true
 softwake-session.workspace = true

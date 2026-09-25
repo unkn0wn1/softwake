@@ -2,13 +2,15 @@
 //!
 //! [`Memory`] stores and retrieves text snippets. [`MockMemory`] keeps them
 //! on the value and starts disabled. [`FileMemory`] writes `memory.json` only
-//! after that value is enabled and a remember or forget succeeds. This crate
+//! after that value is enabled and a remember or forget succeeds.
+//! [`recall_for_prompt`] applies the ask/chat snippet budget. This crate
 //! does not open a socket or read credentials. [`MockMemory`] does not create
 //! a directory.
 
 mod file;
 mod memory;
 mod mock;
+mod recall;
 
 pub use file::{
     FileMemory, FileMemoryError, MAX_FILE_BYTES, MEMORY_FILE_NAME, resolve_memory_dir_from,
@@ -16,6 +18,10 @@ pub use file::{
 };
 pub use memory::{MAX_TEXT_BYTES, Memory, MemoryError, MemoryId, Snippet};
 pub use mock::MockMemory;
+pub use recall::{
+    MAX_RECALL_BYTES, MAX_RECALL_SNIPPETS, RECALL_LEAD, budget_recall, recall_for_prompt,
+    render_recall,
+};
 
 #[cfg(test)]
 mod tests {

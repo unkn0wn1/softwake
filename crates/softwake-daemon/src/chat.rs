@@ -18,6 +18,32 @@ pub(crate) const CHAT_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg_attr(feature = "live-http", allow(dead_code))]
 pub(crate) const LIVE_HTTP_DISABLED: &str = "Live HTTP is not enabled in this build. Re-run with the live-http feature to call the provider.";
 
+/// Build the memory appendix for one ask/chat turn.
+///
+/// Opens [`softwake_memory::FileMemory`] at the resolved Softwake state path
+/// only when that file already exists. Missing file, resolve failure, open
+/// failure, and recall failure are all an empty appendix (fail-open). Does
+/// not create `memory.json`. See [ADR 0009](../../docs/ADR-0009-long-term-memory.md).
+#[cfg_attr(not(any(test, feature = "live-http")), allow(dead_code))]
+pub(crate) fn disk_memory_appendix(query: &str) -> String {
+    let Ok(path) = softwake_memory::resolve_memory_file() else {
+        return String::new();
+    };
+    memory_appendix_at_path(&path, query)
+}
+
+/// Fail-open recall against an explicit `memory.json` path.
+#[cfg_attr(not(any(test, feature = "live-http")), allow(dead_code))]
+pub(crate) fn memory_appendix_at_path(path: &std::path::Path, query: &str) -> String {
+    if !path.is_file() {
+        return String::new();
+    }
+    let Ok(memory) = softwake_memory::FileMemory::open_enabled(path) else {
+        return String::new();
+    };
+    softwake_memory::recall_for_prompt(&memory, query)
+}
+
 /// Readiness result for the disk path. The bearer is not logged.
 pub(crate) struct DiskChat {
     pub(crate) prepared: PreparedChat,
@@ -299,5 +325,68 @@ mod tests {
     #[ignore = "live network; builds the bounded agent only"]
     fn bounded_agent_builds_without_a_request() {
         let _transport = softwake_providers::live::LiveTransport::bounded(CHAT_TIMEOUT);
+    }
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use softwake_memory::{FileMemory, MEMORY_FILE_NAME, MockMemory};
+
+    use super::{disk_memory_appendix, memory_appendix_at_path};
+
+    struct TempDir {
+        path: std::path::PathBuf,
+    }
+
+    impl TempDir {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(1);
+            let n = NEXT.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir()
+                .join(format!("softwake-chat-memory-{}-{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("temp dir");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn memory_appendix_at_path_is_empty_when_file_missing() {
+        let dir = TempDir::new();
+        assert!(memory_appendix_at_path(&dir.path.join(MEMORY_FILE_NAME), "q").is_empty());
+        assert!(memory_appendix_at_path(&dir.path.join("nope.json"), "q").is_empty());
+    }
+
+    #[test]
+    fn memory_appendix_at_path_budgets_file_memory_hits() {
+        let dir = TempDir::new();
+        let path = dir.path.join(MEMORY_FILE_NAME);
+        let mut memory = FileMemory::open_enabled(&path).expect("open");
+        memory.remember("alpha one").expect("a");
+        memory.remember("beta").expect("b");
+        memory.remember("alpha two").expect("c");
+        drop(memory);
+        let appendix = memory_appendix_at_path(&path, "alpha");
+        assert!(appendix.contains("alpha one"));
+        assert!(appendix.contains("alpha two"));
+        assert!(!appendix.contains("beta"));
+        assert!(memory_appendix_at_path(&path, "").is_empty());
+    }
+
+    #[test]
+    fn disk_memory_appendix_fail_opens_without_state_dir() {
+        // Unset state dirs so resolve fails; fail-open returns empty.
+        // Do not assert on a developer's real XDG state file.
+        let _ = disk_memory_appendix;
+        let disabled = MockMemory::default();
+        assert!(softwake_memory::recall_for_prompt(&disabled, "x").is_empty());
     }
 }

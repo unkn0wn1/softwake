@@ -34,7 +34,7 @@ Confirm-echo: mutating or path-sensitive command text is read back before a late
 
 Protocol generation stays `1`. No new command, event, or status field. `SoulReport` stays `{ ok, reason }`. A failed read can name `rules.md`, `glossary.md`, or an unparseable map in `reason`.
 
-A later session may append memory snippets after the rendered pack. This ADR does not wire `FileMemory` into the prompt. The soul crate does not call `softwake-memory`.
+Budgeted memory snippets may follow the rendered pack on ask/chat ([ADR 0013](ADR-0013-session-provider.md)). This ADR still does not wire `FileMemory` into the soul render. The soul crate does not call `softwake-memory`.
 
 ## Context
 

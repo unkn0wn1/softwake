@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-25
+- **Amended:** 2026-09-25 (budgeted FileMemory recall on ask/chat)
 
 ## Decision
 
@@ -31,7 +32,7 @@ One completion per ask. The request is the system message plus this user line. P
 
 Ask does not refresh OAuth. An expired access token surfaces as HTTP 401 with the rejection sentence above.
 
-FileMemory is not attached. Snippets, when a later change adds them, go after the rendered pack (ADR 0011 already says that) under an explicit size budget. This ADR does not add the dependency. The follow-up budget, not implemented here: at most 4 snippets, at most 2048 UTF-8 bytes total, query is the user line, disabled or missing memory is zero snippets and not an error, appended after `render_instructions` so the runtime policy stub stays last among pack sections. Snippets do not override rules.
+Assemble order for one ask: rendered pack → budgeted memory snippets → user turn. `TextStubSession::ask` takes a `memory_appendix` string (empty leaves the pack unchanged). The daemon builds that appendix with [`recall_for_prompt`](../crates/softwake-memory/src/recall.rs): at most 4 snippets, at most 2048 UTF-8 bytes of snippet text, query is the user line, oldest-first from `recall`, skip a hit that would blow the remaining byte budget. Disabled memory, missing `memory.json`, resolve/open/recall errors → empty appendix (fail-open). Appended after `render_instructions` so the runtime policy stub stays last among pack sections. Snippets do not override rules. `softwake-session` still does not depend on `softwake-memory`. `softwake-daemon` does.
 
 OpenRouter and a custom OpenAI-compatible base URL stay deferred on ADR 0012's milestone.
 
@@ -48,7 +49,7 @@ ADR 0012 stopped at credentials, Test, the picker, and the handle stub. The cont
 - Require a protocol bump and `ctl ask` in the same PR. Rejected for this slice. The typed demo is the awake entry. A later additive message can sit on generation 1.
 - Call the model with the registry seed when no model is selected. Rejected. Empty-until-Test is the Settings rule.
 - Refresh OAuth inside ask. Rejected here. It writes the secret bag and adds a second call. A 401 is the operator-facing result.
-- Attach `FileMemory` recall. Rejected here. [ADR 0009](ADR-0009-long-term-memory.md) forbids the dependency until a budgeted follow-up.
+- Attach unbounded `FileMemory` recall. Rejected. Budgeted recall (this amendment) keeps the prompt small and fail-open.
 
 ## How to demo
 
