@@ -463,7 +463,8 @@ impl ServerConnection {
             ClientMessage::Request { .. }
             | ClientMessage::ToolRequest { .. }
             | ClientMessage::ConfirmTool { .. }
-            | ClientMessage::CancelTool { .. } => {
+            | ClientMessage::CancelTool { .. }
+            | ClientMessage::Ask { .. } => {
                 let message = "expected a hello message".to_owned();
                 endpoint.write(&ServerMessage::HelloRejected {
                     protocol_version: PROTOCOL_VERSION,
@@ -647,6 +648,27 @@ impl Client {
                 id,
                 name: name.to_owned(),
                 args: args.to_vec(),
+            },
+            id,
+        )
+    }
+
+    /// Send one ask and return its status.
+    ///
+    /// Events that arrive before the matching response are skipped. A refusal
+    /// is [`CallError::Rejected`]. The daemon completes one turn only while awake.
+    /// Assistant text is [`Status::message`]. The bearer is not part of the frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] on transport failure, a mismatched response id,
+    /// or a rejected ask.
+    pub fn call_ask(&mut self, text: &str) -> Result<Status, CallError> {
+        let id = self.allocate_id();
+        self.round_trip(
+            &ClientMessage::Ask {
+                id,
+                text: text.to_owned(),
             },
             id,
         )

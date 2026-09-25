@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-25
-- **Amended:** 2026-09-25 (budgeted FileMemory recall on ask/chat)
+- **Amended:** 2026-09-25 (budgeted FileMemory recall on ask/chat; `ctl ask` on generation 1)
 
 ## Decision
 
@@ -26,7 +26,9 @@ Readiness uses `ProviderHandle` from [ADR 0012](ADR-0012-model-providers.md): Se
 
 `complete_chat` is the chat/completions call. `MockTransport` is the CI client. `LiveTransport::bounded` (30s connect, read, and overall) runs only when `softwake-daemon` is built with `live-http`.
 
-The operator path is `softwaked demo`: `ask` and `chat`. Mic, STT, `serve`, and `ctl` are not on this path. Protocol generation stays 1.
+The operator paths are `softwaked demo` (`ask` and `chat`) and `softwaked ctl ask` / `ctl chat` against a running `softwaked serve`. Both use the same completion. Mic and STT are not on this path. Serve starts in sleep. `ctl resume` lands in sleep. This slice does not wake serve from the microphone or from ctl. A person enters awake with `softwaked demo` and `wake`, which is a different process from serve. Tests call `wake_phrase_for_test` on the serve handle. Protocol generation stays 1.
+
+`ctl ask` and `ctl chat` send [`ClientMessage::Ask`](../crates/softwake-ipc/src/types.rs). Success puts the assistant text in the status `message` field. A refusal is [`IpcError::ChatRejected`](../crates/softwake-ipc/src/types.rs) carrying the sentences in the table above, including the live-HTTP sentence. ctl prints that sentence and exits non-zero. The bearer is not on the wire.
 
 One completion per ask. The request is the system message plus this user line. Prior turns are not replayed. User lines accumulate on the session for the awake period and are dropped on close. Assistant text is the return value and the demo line. It is not stored on the session.
 
@@ -34,7 +36,7 @@ Ask does not refresh OAuth. An expired access token surfaces as HTTP 401 with th
 
 Assemble order for one ask: rendered pack → budgeted memory snippets → user turn. `TextStubSession::ask` takes a `memory_appendix` string (empty leaves the pack unchanged). The daemon builds that appendix with [`recall_for_prompt`](../crates/softwake-memory/src/recall.rs): at most 4 snippets, at most 2048 UTF-8 bytes of snippet text, query is the user line, oldest-first from `recall`, skip a hit that would blow the remaining byte budget. Disabled memory, missing `memory.json`, resolve/open/recall errors → empty appendix (fail-open). Appended after `render_instructions` so the runtime policy stub stays last among pack sections. Snippets do not override rules. `softwake-session` still does not depend on `softwake-memory`. `softwake-daemon` does.
 
-OpenRouter and a custom OpenAI-compatible base URL stay deferred on ADR 0012's milestone.
+OpenRouter and a custom OpenAI-compatible base URL use the same readiness checks ([ADR 0012](ADR-0012-model-providers.md)).
 
 Without `live-http`, a prepared disk ask returns `Live HTTP is not enabled in this build. Re-run with the live-http feature to call the provider.` and does not open a socket. That check happens before the user line is recorded. An HTTP or parse error records the user line, because `ask` records and then calls the completer.
 
@@ -46,7 +48,7 @@ ADR 0012 stopped at credentials, Test, the picker, and the handle stub. The cont
 
 - Amend ADR 0012 in place. Rejected. Settings and the acting turn are different readers of the same handle.
 - Put `ureq` inside `TextStubSession`. Rejected. The session could not be tested without a feature flag, and the daemon would no longer be the crate that chooses live HTTP.
-- Require a protocol bump and `ctl ask` in the same PR. Rejected for this slice. The typed demo is the awake entry. A later additive message can sit on generation 1.
+- Require a protocol bump and `ctl ask` in the session-provider PR. Rejected there. The typed demo was the awake entry, and a later additive message could sit on generation 1. This amendment is that message: `ClientMessage::Ask` and `IpcError::ChatRejected`. `Command` is unchanged.
 - Call the model with the registry seed when no model is selected. Rejected. Empty-until-Test is the Settings rule.
 - Refresh OAuth inside ask. Rejected here. It writes the secret bag and adds a second call. A 401 is the operator-facing result.
 - Attach unbounded `FileMemory` recall. Rejected. Budgeted recall (this amendment) keeps the prompt small and fail-open.
@@ -88,10 +90,19 @@ assistant: <model text>
 
 `chat` is the same command. Sleep and hibernate refuse both.
 
+Start `softwaked serve`, then in another terminal:
+
+```bash
+cargo run -p softwake-daemon -- ctl ask hello
+cargo run -p softwake-daemon -- ctl chat hello there
+```
+
+That daemon starts asleep, so both commands are refused until it is awake. `softwaked demo` and `wake` enter awake in a different process. `ctl resume` lands in sleep. A live answer still needs `softwaked serve` built with `live-http`. The default serve returns the live-HTTP sentence when Settings are ready and does not open a provider socket.
+
 ## Consequences
 
 - `softwake-daemon` depends on `softwake-providers`.
-- Default `softwaked` still has no chat socket. A configured machine that wants a live answer rebuilds the daemon with `live-http`.
+- The socket accepts `ask`. A configured machine that wants a live answer still rebuilds the daemon with `live-http`. Without that feature the turn returns the live-HTTP sentence and does not open a provider socket.
 - Settings Test can still wait on a server that accepts and never sends a body (`LiveTransport::new`). Ask cannot; it uses `bounded`.
 - `o`-series models that reject `max_tokens` fail with `Chat completion failed ({status}).` No special case in this slice.
 - Assistant text is printed on the demo stdout. The bearer is not.

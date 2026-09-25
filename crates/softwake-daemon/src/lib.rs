@@ -7,7 +7,8 @@
 //! performs the real HTTPS call and is off by default
 //! ([ADR 0013](../../docs/ADR-0013-session-provider.md)). `serve` owns the voice-state
 //! machine and listens on a Unix socket. `ctl` sends one command to that
-//! socket. The demo uses mock capture and does not open a microphone.
+//! socket. `ctl ask` and `ctl chat` forward one awake turn to that daemon.
+//! The demo uses mock capture and does not open a microphone.
 //! Native `PipeWire` stays behind the `pipewire-native` feature. While awake, `echo`
 //! runs immediately. `notify` and `email_send` wait for confirmation. `shell` is denied.
 //! Sleep and hibernate refuse every tool. Confirming `email_send` appends one

@@ -10,13 +10,13 @@
 //! Safe tools run only while awake. A confirm-gated tool waits for
 //! `confirm_tool`. `cancel_tool` clears it without running.
 //! Mock STT/TTS act only while awake ([ADR 0007](../../docs/ADR-0007-awake-stt-tts.md)).
+//! `ask` completes one provider turn on the open session while awake
+//! ([ADR 0013](../../docs/ADR-0013-session-provider.md)).
 
 use softwake_audio::{AudioCapture, MockAudioCapture};
 use softwake_ipc::VoiceState as WireState;
 use softwake_ipc::{Command, Event as WireEvent, IpcError, PendingTool, ResponseBody, Status};
-#[cfg(test)]
-use softwake_session::SessionPhase;
-use softwake_session::TextStubSession;
+use softwake_session::{SessionPhase, TextStubSession};
 use softwake_soul::SoulDir;
 use softwake_state::{CooldownConfig, Effect, Event, Machine, StateError, VoiceState};
 use softwake_voice::{MockStt, MockTts, TextToSpeech, TranscriptEvent};
@@ -46,6 +46,9 @@ pub(crate) struct Runtime {
     hands: Hands,
     stt: MockStt,
     tts: MockTts,
+    /// In-test provider. Absent in the serve binary, so ask uses the disk path.
+    #[cfg(test)]
+    chat_fixture: Option<crate::chat::ChatFixture>,
 }
 
 impl Runtime {
@@ -64,6 +67,8 @@ impl Runtime {
             hands: Hands::new(),
             stt: MockStt::default(),
             tts: MockTts::default(),
+            #[cfg(test)]
+            chat_fixture: None,
         }
     }
 
@@ -120,6 +125,120 @@ impl Runtime {
     #[cfg(test)]
     pub(crate) fn session_instructions(&self) -> Option<&str> {
         self.session.instructions()
+    }
+
+    /// User lines recorded on the open session.
+    #[cfg(test)]
+    pub(crate) fn session_turns(&self) -> &[String] {
+        self.session.turns()
+    }
+
+    /// Install the in-test provider. Production serve leaves this unset.
+    #[cfg(test)]
+    pub(crate) fn install_chat_fixture(&mut self, fixture: crate::chat::ChatFixture) {
+        self.chat_fixture = Some(fixture);
+    }
+
+    /// Posts recorded by the in-test transport. Empty when no fixture is installed.
+    #[cfg(test)]
+    pub(crate) fn chat_posts(&self) -> Vec<crate::chat::RecordedPost> {
+        self.chat_fixture
+            .as_ref()
+            .map(|fixture| fixture.transport.posts())
+            .unwrap_or_default()
+    }
+
+    /// Complete one ask while awake.
+    ///
+    /// Blank text is rejected before the voice check. Sleep and hibernate
+    /// refuse the turn before Settings are loaded. The assistant text is
+    /// [`Status::message`]. No event is emitted. The bearer is not copied
+    /// onto the status.
+    pub(crate) fn ask(&mut self, text: &str) -> Outcome {
+        if text.trim().is_empty() {
+            return Self::chat_rejected("ask needs text");
+        }
+        if self.machine.permit_tool_dispatch().is_err() {
+            return Self::chat_rejected(&format!(
+                "ask while {} (chat acts only while awake)",
+                wire_state(self.machine.state())
+            ));
+        }
+        if self.session.phase() != SessionPhase::Open {
+            return Self::chat_rejected("session is closed");
+        }
+        #[cfg(test)]
+        if self.chat_fixture.is_some() {
+            return self.ask_fixture(text);
+        }
+        self.ask_disk(text)
+    }
+
+    fn chat_rejected(message: &str) -> Outcome {
+        Self::rejected(IpcError::ChatRejected {
+            message: message.to_owned(),
+        })
+    }
+
+    fn ask_ok(&self, reply: String) -> Outcome {
+        Outcome {
+            body: ResponseBody::ok(self.snapshot(Some(reply), None)),
+            events: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn ask_fixture(&mut self, text: &str) -> Outcome {
+        let extracted = self.chat_fixture.as_ref().map(|fixture| {
+            let prepared = crate::chat::prepare_fixture(fixture);
+            (prepared, std::sync::Arc::clone(&fixture.transport))
+        });
+        let Some((prepared, transport)) = extracted else {
+            return self.ask_disk(text);
+        };
+        match prepared {
+            Ok((prepared, bearer)) => {
+                let call = prepared.clone();
+                // Disabled memory keeps the appendix empty. A developer
+                // `memory.json` must not change the fixture post.
+                let appendix = crate::chat::appendix_for_ask(
+                    text,
+                    Some(&softwake_memory::MockMemory::default()),
+                );
+                match crate::chat::perform_ask(
+                    &mut self.session,
+                    text,
+                    &appendix,
+                    move |system, user| {
+                        crate::chat::complete_fixture(&transport, &call, &bearer, system, user)
+                    },
+                ) {
+                    Ok(reply) => self.ask_ok(reply),
+                    Err(error) => Self::chat_rejected(error.sentence()),
+                }
+            }
+            Err(message) => Self::chat_rejected(&message),
+        }
+    }
+
+    fn ask_disk(&mut self, text: &str) -> Outcome {
+        let ready = match crate::chat::load_disk_chat() {
+            Ok(ready) => ready,
+            Err(message) => return Self::chat_rejected(&message),
+        };
+        let crate::chat::DiskChat { prepared, bearer } = ready;
+        if let Err(message) = crate::chat::gate_live_http(&prepared, &bearer, text) {
+            return Self::chat_rejected(&message);
+        }
+        let call = prepared.clone();
+        let appendix =
+            crate::chat::appendix_for_ask(text, Option::<&softwake_memory::MockMemory>::None);
+        match crate::chat::perform_ask(&mut self.session, text, &appendix, move |system, user| {
+            crate::chat::finish_prepared_chat(&call, &bearer, system, user)
+        }) {
+            Ok(reply) => self.ask_ok(reply),
+            Err(error) => Self::chat_rejected(error.sentence()),
+        }
     }
 
     /// Run one safe tool, or stage a confirm-gated tool.
@@ -1468,5 +1587,28 @@ mod tests {
         let said = runtime.speak("hello");
         assert!(said.body.status().is_some());
         assert_eq!(runtime.spoken(), &["hello".to_owned()]);
+    }
+
+    #[test]
+    fn ask_rejects_blank_text_before_a_post() {
+        let soul = TestSoulDir::valid();
+        let mut runtime = Runtime::new(soul.soul_dir());
+        wake(&mut runtime);
+        runtime.install_chat_fixture(crate::chat::xai_key_fixture(
+            true,
+            Some("sk-test-secret"),
+            "pong",
+        ));
+        let outcome = runtime.ask("   ");
+        match outcome.body {
+            ResponseBody::Err {
+                error: IpcError::ChatRejected { ref message },
+            } => assert_eq!(message, "ask needs text"),
+            other => panic!("expected chat_rejected, got {other:?}"),
+        }
+        assert!(outcome.events.is_empty());
+        assert!(runtime.chat_posts().is_empty());
+        assert!(runtime.session_turns().is_empty());
+        assert!(!format!("{outcome:?}").contains("sk-test-secret"));
     }
 }

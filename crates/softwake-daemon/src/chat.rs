@@ -9,6 +9,7 @@ use std::time::Duration;
 use softwake_providers::{
     PreparedChat, ProviderHandle, prepare_chat, resolve_providers_file, resolve_secrets_file,
 };
+use softwake_session::{SessionError, SessionPhase, TextStubSession};
 
 /// Connect, read, and overall timeout for one live chat call.
 #[cfg_attr(not(feature = "live-http"), allow(dead_code))]
@@ -42,6 +43,91 @@ pub(crate) fn memory_appendix_at_path(path: &std::path::Path, query: &str) -> St
         return String::new();
     };
     softwake_memory::recall_for_prompt(&memory, query)
+}
+
+/// Why one ask did not return assistant text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AskReject {
+    /// `text` is empty or only whitespace. The completer was not called.
+    NeedsText,
+    /// The session is closed. The completer was not called.
+    Closed,
+    /// The completer failed. The user line stays recorded.
+    Failed(String),
+}
+
+impl AskReject {
+    /// Operator sentence. No `rejected:` prefix and no bearer.
+    #[must_use]
+    pub(crate) fn sentence(&self) -> &str {
+        match self {
+            Self::NeedsText => "ask needs text",
+            Self::Closed => "session is closed",
+            Self::Failed(message) => message,
+        }
+    }
+}
+
+/// Budgeted appendix from `fixture` when present, otherwise the disk file.
+///
+/// A missing file is an empty appendix. This does not create `memory.json`.
+#[must_use]
+pub(crate) fn appendix_for_ask(
+    query: &str,
+    fixture: Option<&impl softwake_memory::Memory>,
+) -> String {
+    match fixture {
+        Some(memory) => softwake_memory::recall_for_prompt(memory, query),
+        None => disk_memory_appendix(query),
+    }
+}
+
+/// Record `text` and call `complete`, unless the line is blank or the session is closed.
+///
+/// Blank text and a closed session do not call `complete`.
+pub(crate) fn perform_ask(
+    session: &mut TextStubSession,
+    text: &str,
+    appendix: &str,
+    complete: impl FnOnce(&str, &str) -> Result<String, String>,
+) -> Result<String, AskReject> {
+    if text.trim().is_empty() {
+        return Err(AskReject::NeedsText);
+    }
+    if session.phase() != SessionPhase::Open {
+        return Err(AskReject::Closed);
+    }
+    session
+        .ask(text, appendix, complete)
+        .map_err(|error| match error {
+            SessionError::Empty => AskReject::NeedsText,
+            SessionError::Closed => AskReject::Closed,
+            SessionError::Complete { message } => AskReject::Failed(message),
+        })
+}
+
+/// Refuse a disk ask before the session records the line when live HTTP is off.
+///
+/// With `live-http` this does nothing, so the caller can record and then complete.
+///
+/// # Errors
+///
+/// [`LIVE_HTTP_DISABLED`] when this binary was built without `live-http`.
+pub(crate) fn gate_live_http(
+    prepared: &PreparedChat,
+    bearer: &str,
+    user: &str,
+) -> Result<(), String> {
+    #[cfg(not(feature = "live-http"))]
+    {
+        finish_prepared_chat(prepared, bearer, "", user)?;
+        Ok(())
+    }
+    #[cfg(feature = "live-http")]
+    {
+        let _ = (prepared, bearer, user);
+        Ok(())
+    }
 }
 
 /// Readiness result for the disk path. The bearer is not logged.
@@ -129,10 +215,12 @@ fn finish_prepared_chat_inner(
 
 #[cfg(test)]
 mod fixture {
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
 
-    use softwake_providers::{HttpResponse, ProviderHandle, Transport, TransportError};
+    use softwake_providers::{
+        HttpResponse, PreparedChat, ProviderHandle, ProviderId, ProviderSettings, SecretBag,
+        TestReport, Transport, TransportError,
+    };
 
     /// One recorded JSON POST. The bearer is not stored.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,19 +231,22 @@ mod fixture {
 
     pub(crate) struct ScriptedTransport {
         response: HttpResponse,
-        posts: RefCell<Vec<RecordedPost>>,
+        posts: Mutex<Vec<RecordedPost>>,
     }
 
     impl ScriptedTransport {
-        fn new(response: HttpResponse) -> Rc<Self> {
-            Rc::new(Self {
+        fn new(response: HttpResponse) -> Arc<Self> {
+            Arc::new(Self {
                 response,
-                posts: RefCell::new(Vec::new()),
+                posts: Mutex::new(Vec::new()),
             })
         }
 
         pub(crate) fn posts(&self) -> Vec<RecordedPost> {
-            self.posts.borrow().clone()
+            self.posts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
         }
     }
 
@@ -180,10 +271,13 @@ mod fixture {
             _bearer: &str,
             body: &str,
         ) -> Result<HttpResponse, TransportError> {
-            self.posts.borrow_mut().push(RecordedPost {
-                url: url.to_owned(),
-                body: body.to_owned(),
-            });
+            self.posts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(RecordedPost {
+                    url: url.to_owned(),
+                    body: body.to_owned(),
+                });
             Ok(self.response.clone())
         }
     }
@@ -194,7 +288,69 @@ mod fixture {
         pub(crate) settings_file_present: bool,
         pub(crate) env_xai: Option<String>,
         pub(crate) env_openai: Option<String>,
-        pub(crate) transport: Rc<ScriptedTransport>,
+        pub(crate) transport: Arc<ScriptedTransport>,
+    }
+
+    /// Readiness for one in-test ask. Env fallbacks stay unset.
+    ///
+    /// # Errors
+    ///
+    /// The provider sentence. No post is made.
+    pub(crate) fn prepare_fixture(fixture: &ChatFixture) -> Result<(PreparedChat, String), String> {
+        softwake_providers::prepare_chat(
+            &fixture.handle,
+            fixture.settings_file_present,
+            fixture.env_xai.as_deref(),
+            fixture.env_openai.as_deref(),
+            None,
+            None,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    /// One completion on the scripted transport.
+    ///
+    /// # Errors
+    ///
+    /// The chat-completion sentence. The text does not include the bearer.
+    pub(crate) fn complete_fixture(
+        transport: &ScriptedTransport,
+        prepared: &PreparedChat,
+        bearer: &str,
+        system: &str,
+        user: &str,
+    ) -> Result<String, String> {
+        softwake_providers::complete_chat(transport, prepared, bearer, system, user)
+            .map_err(|error| error.to_string())
+    }
+
+    /// xAI API-key fixture with a scripted assistant `content` body.
+    ///
+    /// `key` is a test bearer. It is not a live credential.
+    pub(crate) fn xai_key_fixture(test_ok: bool, key: Option<&str>, content: &str) -> ChatFixture {
+        let mut settings = ProviderSettings {
+            selected_provider: ProviderId::XaiKey,
+            selected_model: "grok-4.5".to_owned(),
+            ..ProviderSettings::default()
+        };
+        settings.store_models(ProviderId::XaiKey, vec!["grok-4.5".to_owned()], 1);
+        settings.store_test(
+            ProviderId::XaiKey,
+            TestReport {
+                ok: test_ok,
+                message: "recorded".to_owned(),
+            },
+        );
+        let mut bag = SecretBag::empty();
+        bag.xai_api_key = key.map(str::to_owned);
+        let response = HttpResponse {
+            status: 200,
+            body: serde_json::json!({
+                "choices": [{"message": {"role": "assistant", "content": content}}]
+            })
+            .to_string(),
+        };
+        ChatFixture::new(ProviderHandle::from_parts(settings, bag), true, response)
     }
 
     impl std::fmt::Debug for ChatFixture {
@@ -231,7 +387,9 @@ mod fixture {
 }
 
 #[cfg(test)]
-pub(crate) use fixture::{ChatFixture, RecordedPost};
+pub(crate) use fixture::{
+    ChatFixture, RecordedPost, complete_fixture, prepare_fixture, xai_key_fixture,
+};
 
 #[cfg(test)]
 mod tests {

@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-24
-- **Amended:** 2026-09-25 — `reload_soul` re-reads the four-file pack from [ADR 0011](ADR-0011-context-pack.md); protocol generation stays 1.
+- **Amended:** 2026-09-25 — `reload_soul` re-reads the four-file pack from [ADR 0011](ADR-0011-context-pack.md). Clients may send `ask`. Protocol generation stays 1.
 
 ## Decision
 
@@ -30,6 +30,8 @@ Clients may also send `tool_request` (`id`, `name`, and `args`). `args` defaults
 `confirm_tool` and `cancel_tool` carry `id`, `pending_id`, and an optional `name`. Confirm runs the pending tool once while awake and broadcasts `tool_confirm_resolved` (`accepted: true`), then `tool_started` and `tool_finished`. Cancel clears it in any voice state (`accepted: false`) and does not run the tool. A missing id is `unknown_pending`. A name that does not match is `pending_mismatch`. Confirm while not awake, when the record is still there, is `confirm_forbidden`. Sleep and hibernate clear a pending confirmation first, so a later confirm for that id is `unknown_pending`.
 
 Status may include `pending_tool` and `last_tool`. Both are omitted when absent, so older payloads still decode. These messages are additive. The protocol generation stays `1`. See [ADR 0004](ADR-0004-first-safe-tool.md) and [ADR 0005](ADR-0005-tool-confirmation.md).
+
+Clients may send `ask` (`id`, `text`). The daemon completes one chat turn only while awake. Success is `status: ok` and `message` holds the assistant text. Refusal is `status: err` and `kind: chat_rejected`. No event is broadcast. The bearer is not on the wire. `ctl chat` uses this same message. The hello handshake is unchanged. See [ADR 0013](ADR-0013-session-provider.md).
 
 Lines longer than 1 MiB, including the newline, are rejected.
 

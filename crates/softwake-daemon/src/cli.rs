@@ -175,6 +175,9 @@ Usage:
                             run the pending confirm-gated tool
   softwaked ctl cancel-tool ID
                             drop the pending confirmation without running it
+  softwaked ctl ask TEXT... send one line while the daemon is awake
+  softwaked ctl chat TEXT...
+                            same socket message as ctl ask
   softwaked --help          print this help
 
 The demo reads typed commands only and prints "> " before each line.
@@ -188,7 +191,8 @@ Demo commands, one per line:
 `hear TEXT` injects a mock transcript while awake. `say TEXT` records mock speech.
 `ask TEXT` and `chat TEXT` send one typed line to the selected provider while
 awake. Sleep and hibernate refuse those commands. The default build does not
-open a socket for `ask` or `chat`.
+open a provider socket for `ask` or `chat`. `ctl ask` and `ctl chat` send that
+same turn to a running `softwaked serve`.
 
 `tool echo` returns pong. `tool echo hello` returns "echo: hello".
 `tool notify hello` waits until `confirm` (or `confirm-tool ID`).
@@ -224,6 +228,13 @@ ctl exits non-zero when the daemon rejects the command or cannot be reached.
 reload-soul re-reads the soul pack from disk. The daemon keeps the pack it
 already applied until the next awake session. Status reports whether that
 read is ok or missing.
+
+`ctl ask TEXT` and `ctl chat TEXT` send one typed line to the running daemon.
+Both use the same socket message. The daemon must already be awake. `ctl resume`
+lands in sleep and does not enter awake. Serve does not wake from the microphone.
+The default build does not call the provider. A live answer needs the daemon
+built with live-http. The assistant text is printed after the status lines.
+A refusal exits non-zero.
 
 `ctl tool` asks the running daemon to run one tool while it is awake.
 `echo` runs immediately. `notify` and `email_send` return a pending id and
@@ -333,13 +344,14 @@ fn parse_ctl(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
 fn ctl_command(positional: &[String]) -> Result<CtlAction, String> {
     match positional {
         [] => Err(
-            "ctl needs a command: status, hibernate, resume, sleep, reload-soul, tool, confirm-tool, cancel-tool"
+            "ctl needs a command: status, hibernate, resume, sleep, reload-soul, tool, confirm-tool, cancel-tool, ask, chat"
                 .to_owned(),
         ),
         [name] if name == "tool" => Err("ctl tool needs a tool name".to_owned()),
         [name] if name == "confirm-tool" || name == "cancel-tool" => {
             Err(format!("ctl {name} needs a pending id"))
         }
+        [name] if name == "ask" || name == "chat" => Err(format!("ctl {name} needs text")),
         [name, tool_name, tool_args @ ..] if name == "tool" => Ok(CtlAction::Tool {
             name: tool_name.to_ascii_lowercase(),
             args: tool_args.to_vec(),
@@ -352,6 +364,17 @@ fn ctl_command(positional: &[String]) -> Result<CtlAction, String> {
         }),
         [name, _, extra, ..] if name == "confirm-tool" || name == "cancel-tool" => {
             Err(format!("ctl {name} takes one pending id (got extra {extra})"))
+        }
+        [name, words @ ..] if name == "ask" || name == "chat" => {
+            let text = words.join(" ");
+            if text.trim().is_empty() {
+                return Err(format!("ctl {name} needs text"));
+            }
+            if name == "ask" {
+                Ok(CtlAction::Ask { text })
+            } else {
+                Ok(CtlAction::Chat { text })
+            }
         }
         [name] => CtlAction::parse(name).ok_or_else(|| format!("unknown ctl argument {name}")),
         [first, second, ..] => {
@@ -503,6 +526,9 @@ mod tests {
         assert!(help.contains("alias map"));
         assert!(help.contains("1 MiB"));
         assert!(help.contains("applies on the next awake"));
+        assert!(help.contains("ctl ask"));
+        assert!(help.contains("ctl chat"));
+        assert!(help.contains("live-http"));
         assert!(help.contains("ctl tool"));
         assert!(help.contains("tool echo"));
         assert!(help.contains("pong"));
@@ -653,6 +679,47 @@ mod tests {
                 "status".to_owned()
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn ctl_ask_and_chat_join_words_and_reject_blank_text() {
+        assert_eq!(
+            parse_args(["ctl".to_owned(), "ask".to_owned()]).expect_err("blank"),
+            "ctl ask needs text"
+        );
+        assert_eq!(
+            parse_args(["ctl".to_owned(), "chat".to_owned(), "   ".to_owned()]).expect_err("blank"),
+            "ctl chat needs text"
+        );
+        assert_eq!(
+            parse_args([
+                "ctl".to_owned(),
+                "ask".to_owned(),
+                "hello".to_owned(),
+                "there".to_owned()
+            ]),
+            Ok(Mode::Ctl {
+                socket: None,
+                command: CtlAction::Ask {
+                    text: "hello there".to_owned(),
+                }
+            })
+        );
+        assert_eq!(
+            parse_args([
+                "ctl".to_owned(),
+                "--socket".to_owned(),
+                "/tmp/sw.sock".to_owned(),
+                "chat".to_owned(),
+                "hello".to_owned()
+            ]),
+            Ok(Mode::Ctl {
+                socket: Some(PathBuf::from("/tmp/sw.sock")),
+                command: CtlAction::Chat {
+                    text: "hello".to_owned(),
+                }
+            })
         );
     }
 

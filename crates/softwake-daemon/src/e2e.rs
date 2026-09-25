@@ -539,3 +539,127 @@ fn ctl_email_send_confirms_once() {
     drop(watcher);
     drop(server);
 }
+
+#[test]
+fn ctl_ask_is_refused_until_awake_then_returns_the_fixture_reply() {
+    let temp = TempSocket::new();
+    let soul = TestSoulDir::valid();
+    let server = serve::spawn(temp.path.clone(), soul.soul_dir()).expect("serve");
+    server.install_chat_fixture_for_test(crate::chat::xai_key_fixture(
+        true,
+        Some("sk-test-secret"),
+        "pong",
+    ));
+
+    let asleep = ctl::call_ask(temp.path(), "hello").expect_err("asleep");
+    assert_eq!(
+        asleep.to_string(),
+        "ask while sleep (chat acts only while awake)"
+    );
+    assert!(server.chat_posts_for_test().is_empty());
+    assert!(server.session_turns_for_test().is_empty());
+    assert!(!asleep.to_string().contains("sk-test-secret"));
+
+    let woke = server.wake_phrase_for_test();
+    assert!(woke.body.status().is_some(), "wake should apply: {woke:?}");
+
+    let mut watcher = Client::connect(temp.path()).expect("watcher");
+    watcher
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .expect("timeout");
+
+    let asked = ctl::call_ask(temp.path(), "hello").expect("ask");
+    assert_eq!(asked.state, VoiceState::Awake);
+    assert_eq!(asked.message.as_deref(), Some("pong"));
+    assert!(asked.detail.is_none());
+    let printed = ctl::format_status(&asked);
+    assert!(printed.contains("pong"), "{printed}");
+    assert!(!printed.contains("sk-test-secret"), "{printed}");
+    assert_eq!(server.session_turns_for_test(), vec!["hello".to_owned()]);
+
+    let posts = server.chat_posts_for_test();
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].url, "https://api.x.ai/v1/chat/completions");
+    let body: serde_json::Value = serde_json::from_str(&posts[0].body).expect("json");
+    assert_eq!(
+        body["messages"][0]["content"].as_str(),
+        server.session_instructions_for_test().as_deref()
+    );
+    assert_eq!(body["messages"][1]["content"].as_str(), Some("hello"));
+    assert!(!posts[0].body.contains("sk-test-secret"));
+
+    let quiet = watcher.read().expect_err("ask does not broadcast");
+    assert!(
+        quiet.to_string().contains("timed out"),
+        "expected no event, got {quiet}"
+    );
+
+    let chatted = ctl::run(
+        temp.path(),
+        &ctl::CtlAction::Chat {
+            text: "hello there".to_owned(),
+        },
+    )
+    .expect("chat");
+    assert!(chatted.contains("pong"), "{chatted}");
+    assert!(!chatted.contains("sk-test-secret"), "{chatted}");
+    let posts = server.chat_posts_for_test();
+    assert_eq!(posts.len(), 2);
+    let body: serde_json::Value = serde_json::from_str(&posts[1].body).expect("json");
+    assert_eq!(body["messages"][1]["content"].as_str(), Some("hello there"));
+
+    watcher
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("timeout");
+    let slept = ctl::call(temp.path(), Command::Sleep).expect("sleep");
+    assert_eq!(slept.state, VoiceState::Sleep);
+    match watcher.read().expect("state") {
+        ServerMessage::Event {
+            body: Event::StateChanged { state, .. },
+        } => assert_eq!(state, VoiceState::Sleep),
+        other => panic!("expected state_changed after ask, got {other:?}"),
+    }
+
+    drop(watcher);
+    drop(server);
+}
+
+#[test]
+fn ctl_ask_rejects_a_failed_test_and_a_missing_bearer() {
+    let temp = TempSocket::new();
+    let soul = TestSoulDir::valid();
+    let server = serve::spawn(temp.path.clone(), soul.soul_dir()).expect("serve");
+    let woke = server.wake_phrase_for_test();
+    assert!(woke.body.status().is_some(), "wake should apply: {woke:?}");
+
+    server.install_chat_fixture_for_test(crate::chat::xai_key_fixture(
+        false,
+        Some("sk-test-secret"),
+        "pong",
+    ));
+    let failed = ctl::call_ask(temp.path(), "hello").expect_err("test");
+    assert_eq!(
+        failed.to_string(),
+        "Test has not succeeded for xai-key. Run Test in Settings."
+    );
+    assert!(server.chat_posts_for_test().is_empty());
+    assert!(server.session_turns_for_test().is_empty());
+    assert!(!failed.to_string().contains("sk-test-secret"));
+
+    server.install_chat_fixture_for_test(crate::chat::xai_key_fixture(true, None, "pong"));
+    let missing = ctl::call_ask(temp.path(), "hello").expect_err("bearer");
+    assert_eq!(missing.to_string(), "No xAI API key is configured.");
+    assert!(server.chat_posts_for_test().is_empty());
+    assert!(server.session_turns_for_test().is_empty());
+
+    let hibernated = ctl::call(temp.path(), Command::Hibernate).expect("hibernate");
+    assert_eq!(hibernated.state, VoiceState::Hibernate);
+    let refused = ctl::call_ask(temp.path(), "hello").expect_err("hibernate");
+    assert_eq!(
+        refused.to_string(),
+        "ask while hibernate (chat acts only while awake)"
+    );
+    assert!(server.chat_posts_for_test().is_empty());
+
+    drop(server);
+}
