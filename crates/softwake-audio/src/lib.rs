@@ -10,14 +10,17 @@
 //!
 //! [`AudioFormat::WAKE`] is 16 kHz mono `i16`. [`AudioCapture::poll_frame`]
 //! pulls one [`AudioFrame`] for the mock and for a future native stream.
+//! [`rms_level`] turns a frame into a `0.0..=1.0` capture level for status/HUD.
 
 mod frame;
+mod level;
 mod mock;
 #[cfg(feature = "pipewire")]
 mod pipewire;
 mod traits;
 
 pub use frame::{AudioFormat, AudioFrame};
+pub use level::rms_level;
 pub use mock::MockAudioCapture;
 #[cfg(feature = "pipewire")]
 pub use pipewire::{PipeWireCapture, PipeWireError};

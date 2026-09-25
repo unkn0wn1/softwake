@@ -201,6 +201,7 @@ mod tests {
                 body: ResponseBody::ok(Status {
                     state: VoiceState::Hibernate,
                     capture_running: false,
+                    capture_level: None,
                     soul_reload_pending: false,
                     soul: None,
                     message: None,

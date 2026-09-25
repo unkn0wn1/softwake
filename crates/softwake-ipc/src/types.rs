@@ -335,12 +335,18 @@ pub struct PendingTool {
 }
 
 /// Voice state returned by a successful command.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Status {
     /// Current voice state.
     pub state: VoiceState,
     /// Whether capture is running after the command.
     pub capture_running: bool,
+    /// Peak-normalized RMS of the latest capture window, when PCM was scored.
+    ///
+    /// Absent when capture is stopped or no frame has been drained yet. Additive
+    /// on protocol generation 1; older peers omit it and newer peers may skip it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_level: Option<f32>,
     /// A `reload_soul` has not yet been applied on an awake entry.
     ///
     /// Cleared only after a valid pack is applied while entering awake. A
@@ -364,7 +370,7 @@ pub struct Status {
 }
 
 /// Successful status or a structured error.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ResponseBody {
     /// The command was applied, or status was read.
@@ -552,7 +558,7 @@ pub enum ClientMessage {
 }
 
 /// Daemon messages after a client connects.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
     /// The versions matched. Further messages may be requests.
@@ -609,6 +615,7 @@ mod tests {
         Status {
             state: VoiceState::Sleep,
             capture_running: true,
+            capture_level: None,
             soul_reload_pending: false,
             soul: Some(SoulReport {
                 ok: true,
@@ -870,6 +877,7 @@ mod tests {
         let with_pending = Status {
             state: VoiceState::Awake,
             capture_running: true,
+            capture_level: None,
             soul_reload_pending: false,
             soul: None,
             message: Some("pending confirmation 1 for notify".to_owned()),
@@ -909,6 +917,40 @@ mod tests {
         assert!(status.pending_tool.is_none());
         assert!(status.last_tool.is_none());
         assert!(status.soul_reload_pending);
+        assert!(status.capture_level.is_none());
+    }
+
+    #[test]
+    fn capture_level_round_trips_and_omits_when_absent() {
+        let with_level = Status {
+            state: VoiceState::Sleep,
+            capture_running: true,
+            capture_level: Some(0.42),
+            soul_reload_pending: false,
+            soul: None,
+            message: None,
+            detail: None,
+            pending_tool: None,
+            last_tool: None,
+        };
+        assert_round_trip(&with_level);
+        let json = serde_json::to_string(&with_level).expect("encode");
+        assert!(json.contains("capture_level"));
+
+        let without = Status {
+            state: VoiceState::Sleep,
+            capture_running: true,
+            capture_level: None,
+            soul_reload_pending: false,
+            soul: None,
+            message: None,
+            detail: None,
+            pending_tool: None,
+            last_tool: None,
+        };
+        let json = serde_json::to_string(&without).expect("encode");
+        assert!(!json.contains("capture_level"));
+        assert_round_trip(&without);
     }
 
     #[test]
@@ -916,6 +958,7 @@ mod tests {
         let missing = Status {
             state: VoiceState::Sleep,
             capture_running: true,
+            capture_level: None,
             soul_reload_pending: true,
             soul: Some(SoulReport {
                 ok: false,
@@ -931,6 +974,7 @@ mod tests {
         let ok = Status {
             state: VoiceState::Sleep,
             capture_running: true,
+            capture_level: None,
             soul_reload_pending: false,
             soul: Some(SoulReport {
                 ok: true,

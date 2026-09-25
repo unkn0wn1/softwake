@@ -292,7 +292,7 @@ The soul directory is the first match of `--soul-dir PATH` (on `serve` and `demo
 
 ## Window
 
-`softwake-ui` opens a **system tray** icon, a small **always-on-top HUD capsule**, and a resizable Settings window (860 by 680). Closing Settings hides it; Quit from the tray exits. The HUD shows blooming particles driven by a mock listening level while capture runs, and a click opens a type strip that fades when idle ([ADR 0015](docs/ADR-0015-tray-hud.md)). Real microphone RMS is deferred to the audio spike. A left nav has four panes. Status is selected when the Settings window opens.
+`softwake-ui` opens a **system tray** icon, a small **always-on-top HUD capsule**, and a resizable Settings window (860 by 680). Closing Settings hides it; Quit from the tray exits. The HUD shows blooming particles driven by capture level while listening ([ADR 0015](docs/ADR-0015-tray-hud.md), [ADR 0016](docs/ADR-0016-capture-level-hud.md)): the daemon sends peak-normalized RMS on `Status` when PCM is scored, and the UI falls back to a local sine only when that field is absent. A left nav has four panes. Status is selected when the Settings window opens.
 
 **Status** shows the daemon state, whether capture is running, whether the soul pack is `ok` or `missing` (and the reason when the daemon sent one), whether a soul reload is pending, the latest tool line, and a confirm-gated tool when one is waiting. Buttons are Hibernate, Wake (leave hibernate into sleep), Sleep, Reload soul, Confirm, and Cancel. The Status Wake button is `wake_from_ui` / `ctl resume` (hibernate → sleep). `softwaked ctl wake` is the separate command that enters awake from sleep and requires a valid soul pack. Reload reads `soul.md`, `user.md`, `rules.md`, and `glossary.md`. The new text applies on the next awake. The status snapshot does not include the socket path. The window uses the same default socket as `softwaked ctl`. Start `softwaked serve` first. Provider commands are not socket commands.
 
@@ -307,6 +307,35 @@ cargo run -p softwake-ui
 ```
 
 On Linux the window links WebKitGTK. The packages used in CI are `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `patchelf`, `libxdo-dev`, and `libssl-dev`.
+
+
+## Trying audio
+
+Default builds stay mic-free: mock capture, no `libpipewire`, no sherpa weights.
+
+1. Copy the soul templates if needed, then start the daemon:
+
+```bash
+mkdir -p ~/.config/softwake/soul
+cp soul/*.md ~/.config/softwake/soul/
+cargo run -p softwake-daemon -- serve
+```
+
+2. In another terminal, open the UI (tray + HUD):
+
+```bash
+cargo run -p softwake-ui
+```
+
+3. Leave Softwake in **sleep** or **awake** (capture running). The HUD particles should breathe from **daemon capture levels** (mock listening tones scored as RMS). `softwaked ctl status` prints `capture level: …` while listening. Hibernate stops capture; the level disappears and particles quiet down.
+
+4. Optional PipeWire stub (still no device stream in this build; CI does not enable it):
+
+```bash
+cargo test -p softwake-audio --features pipewire-native
+```
+
+A later native stream needs `libpipewire-0.3-dev` and stays out of the default CI job. Full STT / wake weights are not part of this spike.
 
 ## Docs
 
@@ -333,3 +362,5 @@ On Linux the window links WebKitGTK. The packages used in CI are `libwebkit2gtk-
 | [docs/ADR-0012-model-providers.md](docs/ADR-0012-model-providers.md) | Provider Settings: xAI sign-in, API keys, Test, chat and voice/STT pickers |
 | [docs/ADR-0013-session-provider.md](docs/ADR-0013-session-provider.md) | Awake session chat to the selected provider |
 | [docs/ADR-0014-skills-hub.md](docs/ADR-0014-skills-hub.md) | Skills hub, refine loop, and webhook wake (direction) |
+| [docs/ADR-0015-tray-hud.md](docs/ADR-0015-tray-hud.md) | System tray and always-on-top HUD |
+| [docs/ADR-0016-capture-level-hud.md](docs/ADR-0016-capture-level-hud.md) | Capture level on Status → HUD particles |

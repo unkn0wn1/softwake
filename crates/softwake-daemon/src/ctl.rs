@@ -5,6 +5,8 @@
 
 use std::path::Path;
 
+use std::fmt::Write;
+
 use softwake_ipc::{CallError, Client, Command, Status};
 
 /// Subcommand of `softwaked ctl`.
@@ -177,6 +179,9 @@ pub(crate) fn format_status(status: &Status) -> String {
         "state: {}\ncapture: {capture}\nsoul: {soul}\nsoul reload: {reload}\n",
         status.state
     );
+    if let Some(level) = status.capture_level {
+        let _ = writeln!(text, "capture level: {level:.3}");
+    }
     if let Some(pending) = &status.pending_tool {
         text.push_str("pending: ");
         text.push_str(&pending.pending_id);

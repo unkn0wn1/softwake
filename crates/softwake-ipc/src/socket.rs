@@ -957,6 +957,7 @@ mod tests {
                     body: ResponseBody::ok(Status {
                         state: VoiceState::Sleep,
                         capture_running: true,
+                        capture_level: None,
                         soul_reload_pending: false,
                         soul: None,
                         message: None,
