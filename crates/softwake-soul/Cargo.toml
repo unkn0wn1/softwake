@@ -7,6 +7,8 @@ rust-version.workspace = true
 description = "Load and validate the four-file context pack, and render system instructions."
 
 [dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror.workspace = true
 
 [lints]

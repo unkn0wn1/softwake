@@ -2,7 +2,7 @@
 
 Voice-first local conductor: asleep until hailed, awake with tools, hibernate when you want silence.
 
-Rust end-to-end (daemon + Tauri UI). Phase 1 nails reliable **wake / sleep / hibernate** and a single safe tool loop. Phase 2 adds a confirmation gate for one risky tool. Personality and rules live in a **soul pack** (`soul.md`, `user.md`, `rules.md`, `glossary.md`). Long-term memory is a separate local trait ([ADR 0009](docs/ADR-0009-long-term-memory.md)), off by default, and not required to run the daemon.
+Rust end-to-end (daemon + Tauri UI). Phase 1 nails reliable **wake / sleep / hibernate** and a single safe tool loop. Phase 2 adds a confirmation gate for one risky tool. Personality and rules live in a **soul pack** (`soul.md`, `user.md`, `rules.md`, `glossary.md`) with multi-profile support under Settings → Profiles ([ADR 0017](docs/ADR-0017-profiles.md)). Long-term memory is a separate local trait ([ADR 0009](docs/ADR-0009-long-term-memory.md)), off by default, and not required to run the daemon.
 
 ## Status
 

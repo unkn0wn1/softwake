@@ -10,7 +10,7 @@ const confirmBtn = document.querySelector("#confirm");
 const cancelBtn = document.querySelector("#cancel");
 const navStatus = document.querySelector("#nav-status");
 
-const panes = ["general", "providers", "email", "status"];
+const panes = ["general", "profiles", "providers", "email", "status"];
 
 const providerSelect = document.querySelector("#provider-select");
 const keyPanel = document.querySelector("#key-panel");
@@ -442,8 +442,15 @@ voiceModelSelect.addEventListener("change", () => {
   providerAction("provider_set_voice_model", { modelId: voiceModelSelect.value });
 });
 
-let packLoaded = false;
-let packRequesting = false;
+let profilesLoaded = false;
+let profilesSnap = null;
+let selectedProfileId = "";
+
+const profilesListEl = document.querySelector("#profiles-list");
+const profilesConfigDirEl = document.querySelector("#profiles-config-dir");
+const profileNameInput = document.querySelector("#profile-name");
+const profileNewNameInput = document.querySelector("#profile-new-name");
+const profileActiveBadge = document.querySelector("#profile-active-badge");
 
 function setPackEditable(on) {
   document.querySelector("#pack-save").disabled = !on;
@@ -485,10 +492,103 @@ function applyPackSnapshot(snap, statusText) {
   setPackEditable(true);
 }
 
-async function loadPack(statusText) {
+function renderProfilesList(snap) {
+  profilesListEl.innerHTML = "";
+  for (const row of snap.profiles || []) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "profile-row";
+    btn.setAttribute("role", "option");
+    btn.setAttribute("aria-selected", row.id === snap.selected_id ? "true" : "false");
+    btn.dataset.profileId = row.id;
+    const title = document.createElement("span");
+    title.textContent = row.name || row.id;
+    btn.appendChild(title);
+    const meta = document.createElement("span");
+    meta.className = "profile-meta";
+    const bits = [row.id];
+    if (row.active) bits.push("active");
+    if (!row.pack_ok) bits.push("invalid pack");
+    meta.textContent = bits.join(" · ");
+    btn.appendChild(meta);
+    btn.addEventListener("click", () => {
+      loadProfiles(row.id);
+    });
+    li.appendChild(btn);
+    profilesListEl.appendChild(li);
+  }
+}
+
+function applyProfilesSnapshot(snap, statusText) {
+  profilesSnap = snap;
+  selectedProfileId = snap.selected_id || "";
+  profilesConfigDirEl.textContent = "Config: " + (snap.config_dir || "");
+  profileNameInput.value = snap.selected_name || "";
+  profileActiveBadge.textContent = "Active: " + (snap.active_id || "");
+  renderProfilesList(snap);
+  applyPackSnapshot(snap.pack || {}, statusText || "");
+  profilesLoaded = true;
+}
+
+async function loadProfiles(selectedId, statusText) {
   try {
-    applyPackSnapshot(await invoke("pack_snapshot"), statusText || "");
-    packLoaded = true;
+    const args = {};
+    if (selectedId) args.selectedId = selectedId;
+    applyProfilesSnapshot(await invoke("profiles_snapshot", args), statusText || "");
+  } catch (error) {
+    packErrorEl.textContent = errorText(error);
+  }
+}
+
+async function createProfile() {
+  const name = (profileNewNameInput.value || "").trim();
+  if (!name) {
+    packErrorEl.textContent = "Enter a name for the new profile.";
+    return;
+  }
+  packErrorEl.textContent = "";
+  try {
+    applyProfilesSnapshot(await invoke("profile_create", { name }), "Created profile.");
+    profileNewNameInput.value = "";
+  } catch (error) {
+    packErrorEl.textContent = errorText(error);
+  }
+}
+
+async function saveProfileName() {
+  if (!selectedProfileId) return;
+  const name = (profileNameInput.value || "").trim();
+  if (!name) {
+    packErrorEl.textContent = "Agent name cannot be empty.";
+    return;
+  }
+  packErrorEl.textContent = "";
+  try {
+    applyProfilesSnapshot(
+      await invoke("profile_rename", { id: selectedProfileId, name }),
+      "Saved agent name."
+    );
+  } catch (error) {
+    packErrorEl.textContent = errorText(error);
+  }
+}
+
+async function setActiveProfile() {
+  if (!selectedProfileId) return;
+  packErrorEl.textContent = "";
+  try {
+    const snap = await invoke("profile_set_active", { id: selectedProfileId });
+    applyProfilesSnapshot(snap, "Active profile updated.");
+    if (snap.pack && snap.pack.ok) {
+      try {
+        await invoke("reload_soul");
+        packStatusEl.textContent = "Active profile set; reload recorded — applies on next awake.";
+        refresh();
+      } catch (error) {
+        packErrorEl.textContent = "Active set, but reload soul failed: " + errorText(error);
+      }
+    }
   } catch (error) {
     packErrorEl.textContent = errorText(error);
   }
@@ -501,29 +601,37 @@ async function savePack() {
   packErrorEl.textContent = "";
   try {
     const snap = await invoke("pack_save", {
+      profileId: selectedProfileId || null,
       soul: packEditors.soul.value,
       user: packEditors.user.value,
       rules: packEditors.rules.value,
       glossary: packEditors.glossary.value,
     });
-    if (snap.ok) {
+    const profiles = await invoke("profiles_snapshot", {
+      selectedId: selectedProfileId || null,
+    });
+    profiles.pack = snap;
+    if (snap.ok && profiles.active_id === selectedProfileId) {
       try {
         await invoke("reload_soul");
-        applyPackSnapshot(snap, "Saved and reload recorded — applies on next awake.");
+        applyProfilesSnapshot(profiles, "Saved and reload recorded — applies on next awake.");
         refresh();
       } catch (error) {
-        applyPackSnapshot(snap, "");
+        applyProfilesSnapshot(profiles, "");
         packErrorEl.textContent = "Saved, but reload soul failed: " + errorText(error);
       }
       return;
     }
-    applyPackSnapshot(snap, "Saved. Reload soul was not called.");
+    applyProfilesSnapshot(
+      profiles,
+      snap.ok ? "Saved. Reload soul was not called (profile is not active)." : "Saved. Reload soul was not called."
+    );
   } catch (error) {
     packErrorEl.textContent = errorText(error);
   }
 }
 
-async function reloadSoulFromGeneral() {
+async function reloadSoulFromProfiles() {
   packErrorEl.textContent = "";
   try {
     await invoke("reload_soul");
@@ -545,11 +653,23 @@ document.querySelector("#pack-save").addEventListener("click", () => {
 });
 
 document.querySelector("#pack-reload-disk").addEventListener("click", () => {
-  loadPack("Reloaded from disk.");
+  loadProfiles(selectedProfileId, "Reloaded from disk.");
 });
 
 document.querySelector("#pack-reload-soul").addEventListener("click", () => {
-  reloadSoulFromGeneral();
+  reloadSoulFromProfiles();
+});
+
+document.querySelector("#profile-create").addEventListener("click", () => {
+  createProfile();
+});
+
+document.querySelector("#profile-save-name").addEventListener("click", () => {
+  saveProfileName();
+});
+
+document.querySelector("#profile-set-active").addEventListener("click", () => {
+  setActiveProfile();
 });
 
 
@@ -640,11 +760,8 @@ function showPane(name) {
       nav.removeAttribute("aria-current");
     }
   }
-  if (name === "general" && !packLoaded && !packRequesting) {
-    packRequesting = true;
-    loadPack().finally(() => {
-      packRequesting = false;
-    });
+  if (name === "profiles" && !profilesLoaded) {
+    loadProfiles(selectedProfileId);
   }
   if (name === "email") {
     refreshEmail();
