@@ -32,3 +32,53 @@ commands.allow = ["confirm_tool"]
 identifier = "allow-cancel-tool"
 description = "Cancel a pending tool."
 commands.allow = ["cancel_tool"]
+
+[[permission]]
+identifier = "allow-provider-snapshot"
+description = "Read provider Settings. The snapshot has no keys or tokens."
+commands.allow = ["provider_snapshot"]
+
+[[permission]]
+identifier = "allow-provider-select"
+description = "Select the acting provider."
+commands.allow = ["provider_select"]
+
+[[permission]]
+identifier = "allow-provider-set-key"
+description = "Save an API key into the local secret bag."
+commands.allow = ["provider_set_key"]
+
+[[permission]]
+identifier = "allow-provider-set-base-url"
+description = "Save the OpenAI-compatible base URL."
+commands.allow = ["provider_set_base_url"]
+
+[[permission]]
+identifier = "allow-provider-clear-cred"
+description = "Clear the saved credential for a provider."
+commands.allow = ["provider_clear_cred"]
+
+[[permission]]
+identifier = "allow-provider-oauth-start"
+description = "Start xAI device-code sign-in."
+commands.allow = ["provider_oauth_start"]
+
+[[permission]]
+identifier = "allow-provider-oauth-poll"
+description = "Poll xAI device-code sign-in."
+commands.allow = ["provider_oauth_poll"]
+
+[[permission]]
+identifier = "allow-provider-oauth-sign-out"
+description = "Clear saved xAI sign-in."
+commands.allow = ["provider_oauth_sign_out"]
+
+[[permission]]
+identifier = "allow-provider-test"
+description = "Run Settings Test for the selected provider."
+commands.allow = ["provider_test"]
+
+[[permission]]
+identifier = "allow-provider-set-model"
+description = "Save the selected model id."
+commands.allow = ["provider_set_model"]

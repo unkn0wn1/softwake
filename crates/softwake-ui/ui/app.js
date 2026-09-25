@@ -8,6 +8,9 @@ const pendingEl = document.querySelector("#pending");
 const errorEl = document.querySelector("#error");
 const confirmBtn = document.querySelector("#confirm");
 const cancelBtn = document.querySelector("#cancel");
+const navStatus = document.querySelector("#nav-status");
+
+const panes = ["general", "providers", "email", "status"];
 
 const providerSelect = document.querySelector("#provider-select");
 const keyPanel = document.querySelector("#key-panel");
@@ -68,8 +71,10 @@ function showPending(status) {
     pendingEl.textContent = "pending: none";
     confirmBtn.disabled = true;
     cancelBtn.disabled = true;
+    navStatus.classList.remove("has-pending");
     return;
   }
+  navStatus.classList.add("has-pending");
   pendingId = pending.pending_id;
   const args = (pending.args || []).join(" ");
   const tail = args ? ` ${args}` : "";
@@ -117,6 +122,7 @@ async function refresh() {
     pendingId = null;
     confirmBtn.disabled = true;
     cancelBtn.disabled = true;
+    navStatus.classList.remove("has-pending");
     showError(error);
   }
 }
@@ -336,6 +342,28 @@ modelSelect.addEventListener("change", () => {
   providerAction("provider_set_model", { modelId: modelSelect.value });
 });
 
+function showPane(name) {
+  for (const pane of panes) {
+    const section = document.querySelector(`#pane-${pane}`);
+    const nav = document.querySelector(`#nav-${pane}`);
+    const on = pane === name;
+    section.classList.toggle("hidden", !on);
+    section.hidden = !on;
+    if (on) {
+      nav.setAttribute("aria-current", "page");
+    } else {
+      nav.removeAttribute("aria-current");
+    }
+  }
+}
+
+for (const pane of panes) {
+  document.querySelector(`#nav-${pane}`).addEventListener("click", () => {
+    showPane(pane);
+  });
+}
+
+showPane("status");
 refresh();
 setInterval(refresh, 1000);
 refreshProviders();

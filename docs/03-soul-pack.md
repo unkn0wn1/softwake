@@ -21,7 +21,7 @@ Check order is `soul.md`, then `user.md`, then `rules.md`, then `glossary.md`. T
 |-------|------|
 | Long-term memory | Separate crate `softwake-memory` ([ADR 0009](ADR-0009-long-term-memory.md)). Thin local store behind a trait. Off until the operator enables a backend. The durable backend is an opt-in JSON file. Honcho is not the default |
 | `tools.md` or policy TOML | Human-readable tool policy mirroring allowlists. A later file may only raise a known row's risk, or be refused ([ADR 0010](ADR-0010-policy-engine.md)) |
-| In-window editors | The window reloads the four files. It does not edit them yet |
+| In-window editors | Still later. The General pane says the editors are coming. Status reloads the four files and does not edit them |
 
 The runtime policy stub names `echo` (safe), `notify` (confirm), `email_send` (confirm), and `shell` (deny). `email_send` runs only after `confirm_tool` ([ADR 0008](ADR-0008-connector-boundary.md)). `rules.md` does not feed `PolicyEngine`. A sentence that allows `shell` does not make `shell` runnable.
 

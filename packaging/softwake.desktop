@@ -6,7 +6,7 @@
 Type=Application
 Version=1.0
 Name=Softwake
-Comment=Show Softwake state and send commands to the local daemon
+Comment=Softwake settings window for the local daemon
 Exec=softwake-ui
 Icon=softwake
 Terminal=false

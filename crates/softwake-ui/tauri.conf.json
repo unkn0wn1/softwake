@@ -12,8 +12,10 @@
       {
         "label": "main",
         "title": "Softwake",
-        "width": 420,
-        "height": 560,
+        "width": 860,
+        "height": 680,
+        "minWidth": 720,
+        "minHeight": 560,
         "resizable": true
       }
     ]

@@ -7,74 +7,101 @@
     <link rel="stylesheet" href="app.css" />
   </head>
   <body>
-    <main>
-      <p class="eyebrow">Softwake</p>
-      <h1 id="state">…</h1>
-      <p id="capture" class="meta"></p>
-      <p id="soul" class="meta"></p>
-      <p id="reload" class="meta"></p>
-      <p class="meta">Reload reads soul.md, user.md, rules.md, and glossary.md.</p>
-      <p id="detail" class="detail"></p>
-      <p id="last-tool" class="meta"></p>
-      <p id="pending" class="detail"></p>
-      <p id="error" class="error" role="status"></p>
-      <div class="actions">
-        <button type="button" id="hibernate">Hibernate</button>
-        <button type="button" id="wake">Wake</button>
-        <button type="button" id="sleep">Sleep</button>
-        <button type="button" id="reload-soul">Reload soul</button>
-        <button type="button" id="confirm" disabled>Confirm</button>
-        <button type="button" id="cancel" disabled>Cancel</button>
-      </div>
+    <div class="shell">
+      <nav class="rail glass" aria-label="Settings">
+        <p class="eyebrow">Softwake</p>
+        <button type="button" class="nav" id="nav-general" data-pane="general">General</button>
+        <button type="button" class="nav" id="nav-providers" data-pane="providers">Providers</button>
+        <button type="button" class="nav" id="nav-email" data-pane="email">Email</button>
+        <button type="button" class="nav" id="nav-status" data-pane="status" aria-current="page">Status</button>
+      </nav>
+      <div class="content">
+        <section id="pane-general" class="pane glass hidden" hidden aria-labelledby="general-title">
+          <h2 id="general-title">General</h2>
+          <p class="meta">Preferences for this window live here.</p>
+          <p class="meta">
+            Pack editors are coming. This window does not edit soul.md, user.md, rules.md, or
+            glossary.md. Reload soul on Status re-reads those files from the soul directory. A
+            valid pack applies on the next awake.
+          </p>
+        </section>
 
-      <section class="settings" aria-labelledby="settings-title">
-        <h2 id="settings-title">Model providers</h2>
-        <p class="meta">
-          Pick a provider, save a key or sign in, press Test, then choose a model. The
-          model list stays empty until Test succeeds.
-        </p>
-        <label class="field">
-          <span>Provider</span>
-          <select id="provider-select"></select>
-        </label>
-        <div id="key-panel" class="stack hidden">
-          <label id="base-url-field" class="field hidden">
-            <span>Base URL</span>
-            <input id="base-url" type="url" placeholder="https://host/v1" autocomplete="off" spellcheck="false" />
-          </label>
+        <section id="pane-providers" class="pane glass hidden" hidden aria-labelledby="providers-title">
+          <h2 id="providers-title">Providers</h2>
+          <p class="meta">
+            Pick a provider, save a key or sign in, press Test, then choose a model. The
+            model list stays empty until Test succeeds.
+          </p>
           <label class="field">
-            <span>API key</span>
-            <input id="api-key" type="password" autocomplete="off" spellcheck="false" />
+            <span>Provider</span>
+            <select id="provider-select"></select>
           </label>
-          <div class="row">
-            <button type="button" id="save-key">Save key</button>
-            <button type="button" id="save-base-url" class="hidden">Save base URL</button>
-            <button type="button" id="clear-key">Clear saved</button>
+          <div id="key-panel" class="stack hidden">
+            <label id="base-url-field" class="field hidden">
+              <span>Base URL</span>
+              <input id="base-url" type="url" placeholder="https://host/v1" autocomplete="off" spellcheck="false" />
+            </label>
+            <label class="field">
+              <span>API key</span>
+              <input id="api-key" type="password" autocomplete="off" spellcheck="false" />
+            </label>
+            <div class="row">
+              <button type="button" class="btn-primary" id="save-key">Save key</button>
+              <button type="button" class="btn-primary hidden" id="save-base-url">Save base URL</button>
+              <button type="button" id="clear-key">Clear saved</button>
+            </div>
           </div>
-        </div>
-        <div id="oauth-panel" class="stack hidden">
-          <p id="oauth-status" class="meta">Not signed in.</p>
-          <p id="oauth-code" class="detail"></p>
-          <div class="row">
-            <button type="button" id="oauth-start">Start sign-in</button>
-            <button type="button" id="oauth-poll" disabled>Poll</button>
-            <button type="button" id="oauth-sign-out">Sign out</button>
+          <div id="oauth-panel" class="stack hidden">
+            <p id="oauth-status" class="meta">Not signed in.</p>
+            <p id="oauth-code" class="detail"></p>
+            <div class="row">
+              <button type="button" class="btn-primary" id="oauth-start">Start sign-in</button>
+              <button type="button" id="oauth-poll" disabled>Poll</button>
+              <button type="button" id="oauth-sign-out">Sign out</button>
+            </div>
           </div>
-        </div>
-        <div class="row">
-          <button type="button" id="provider-test">Test</button>
-        </div>
-        <p id="test-status" class="meta">Test: not run</p>
-        <label class="field">
-          <span>Model</span>
-          <select id="model-select" disabled>
-            <option value="">Test to load models</option>
-          </select>
-        </label>
-        <p id="provider-error" class="error" role="status"></p>
-        <p id="plaintext-warning" class="detail"></p>
-      </section>
-    </main>
+          <div class="row">
+            <button type="button" class="btn-primary" id="provider-test">Test</button>
+          </div>
+          <p id="test-status" class="meta">Test: not run</p>
+          <label class="field">
+            <span>Model</span>
+            <select id="model-select" disabled>
+              <option value="">Test to load models</option>
+            </select>
+          </label>
+          <p id="provider-error" class="error" role="status"></p>
+          <p id="plaintext-warning" class="detail"></p>
+        </section>
+
+        <section id="pane-email" class="pane glass hidden" hidden aria-labelledby="email-title">
+          <h2 id="email-title">Email</h2>
+          <p class="meta">Live email is coming later. This window does not send, list, or delete mail.</p>
+        </section>
+
+        <section id="pane-status" class="pane glass" aria-labelledby="status-title">
+          <h2 id="status-title">Status</h2>
+          <h1 id="state">…</h1>
+          <p id="capture" class="meta"></p>
+          <p id="soul" class="meta"></p>
+          <p id="reload" class="meta"></p>
+          <p class="meta">Reload reads soul.md, user.md, rules.md, and glossary.md.</p>
+          <p class="meta">Socket: same default as ctl. The status snapshot does not include the path.</p>
+          <p id="detail" class="detail"></p>
+          <p id="last-tool" class="meta"></p>
+          <p id="pending" class="detail"></p>
+          <p id="error" class="error" role="status"></p>
+          <div class="actions">
+            <button type="button" id="hibernate">Hibernate</button>
+            <button type="button" id="wake">Wake</button>
+            <button type="button" id="sleep">Sleep</button>
+            <button type="button" id="reload-soul">Reload soul</button>
+            <button type="button" class="btn-primary" id="confirm" disabled>Confirm</button>
+            <button type="button" id="cancel" disabled>Cancel</button>
+          </div>
+        </section>
+      </div>
+    </div>
     <script src="app.js"></script>
   </body>
 </html>
