@@ -84,11 +84,33 @@ impl SoulPack {
     ///
     /// File bodies are [`str::trim_end`]ed. The lead-in sentences and the
     /// policy block are not taken from the files.
+    /// Render instructions using [`DEFAULT_AGENT_NAME`](crate::DEFAULT_AGENT_NAME).
     #[must_use]
     pub fn render_instructions(&self) -> String {
+        self.render_instructions_as(crate::DEFAULT_AGENT_NAME)
+    }
+
+    /// Render instructions with a code-owned agent name line in Identity.
+    ///
+    /// The first line of the Identity section is always `Your name is {name}.`
+    /// so the operator-chosen profile name cannot be dropped by editing
+    /// `soul.md`. Phrase wake on that name is out of scope for this crate.
+    #[must_use]
+    pub fn render_instructions_as(&self, name: &str) -> String {
+        let name = name.trim();
+        let name = if name.is_empty() {
+            crate::DEFAULT_AGENT_NAME
+        } else {
+            name
+        };
+        let identity_body = self.identity.trim_end();
+        let identity = if identity_body.is_empty() {
+            format!("Your name is {name}.")
+        } else {
+            format!("Your name is {name}.\n\n{identity_body}")
+        };
         format!(
             "# Identity\n\n{identity}\n\n# User profile\n\n{profile}\n\n# Rules\n\n{RULES_LEAD}\n\n{rules}\n\n# Glossary\n\n{GLOSSARY_LEAD}\n\n{glossary}\n\n# Runtime policy\n\n{POLICY}",
-            identity = self.identity.trim_end(),
             profile = self.profile.trim_end(),
             rules = self.rules.trim_end(),
             glossary = self.glossary.trim_end(),
@@ -303,6 +325,11 @@ mod tests {
         let policy = heading_at(&text, "# Runtime policy");
         assert!(identity < profile && profile < rules && rules < glossary && glossary < policy);
         assert!(text[identity..profile].contains("I am Softwake."));
+        assert!(text[identity..profile].contains("Your name is Softwake."));
+        let named = pack.render_instructions_as("Ada");
+        assert!(named.contains("Your name is Ada."));
+        assert!(named.contains("I am Softwake."));
+
         assert!(text[profile..rules].contains("Name: Ada."));
         let lead = text
             .find("Rules in this section override the identity section. Personality cannot loosen them.")

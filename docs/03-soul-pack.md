@@ -62,12 +62,13 @@ Accept replies are `yes`, `execute`, and `continue`. Any other non-empty reply i
 
 First match wins:
 
-1. `--soul-dir PATH` on `softwaked serve` and `softwaked demo`
-2. `SOFTWAKE_SOUL_DIR`
-3. `$XDG_CONFIG_HOME/softwake/soul` when `XDG_CONFIG_HOME` is set and not blank
-4. `~/.config/softwake/soul/` otherwise (`$HOME/.config/softwake/soul`)
+1. `--soul-dir PATH` on `softwaked serve` and `softwaked demo` (raw pack dir; skips profiles)
+2. `SOFTWAKE_SOUL_DIR` (same)
+3. Active profile pack: `$XDG_CONFIG_HOME/softwake/profiles/<id>/` (or `~/.config/softwake/profiles/<id>/`), after migrate from legacy `soul/` when needed
 
-The directory does not have to exist at startup. Serve and the demo still start; status reports the pack as missing until the files are in place and re-read.
+`softwake.json` holds `active_profile`. Each profile directory has `profile.json` (`id`, `name`) plus the four markdown files. See [ADR 0017](ADR-0017-profiles.md).
+
+The directory does not have to exist at startup when a flag or env override is used. Profile resolution creates the default profile on first use. Status reports the pack as missing until the files are valid.
 
 ## Reload
 

@@ -101,4 +101,19 @@ pub enum SoulError {
         /// Why the alias map was refused, such as `duplicate alias docs`.
         detail: String,
     },
+    /// App or profile Settings JSON could not be read or parsed.
+    #[error("invalid Softwake config ({path}): {detail}")]
+    InvalidConfig {
+        /// Path that was read or written.
+        path: PathBuf,
+        /// Parse or validation detail.
+        detail: String,
+    },
+
+    /// Active or requested profile id is not present under `profiles/`.
+    #[error("unknown profile `{id}`")]
+    UnknownProfile {
+        /// Profile id that was requested.
+        id: String,
+    },
 }

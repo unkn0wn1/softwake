@@ -15,7 +15,7 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use softwake_soul::{MAX_FILE_BYTES, SoulPaths, resolve_soul_dir, try_load};
+use softwake_soul::{MAX_FILE_BYTES, SoulPaths, try_load};
 
 /// Editor buffers plus whether [`try_load`] accepts the directory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -79,39 +79,6 @@ pub fn write_pack(
     atomic_write(paths.rules(), rules.as_bytes())?;
     atomic_write(paths.glossary(), glossary.as_bytes())?;
     Ok(read_pack(dir))
-}
-
-/// Read the four pack files from the resolved soul directory.
-///
-/// # Errors
-///
-/// Returns an error when the soul directory cannot be resolved.
-#[tauri::command]
-pub fn pack_snapshot() -> Result<PackSnapshot, String> {
-    let resolved = resolve_soul_dir(None).map_err(|error| error.to_string())?;
-    Ok(read_pack(resolved.path()))
-}
-
-/// Write the four pack files in the resolved soul directory.
-///
-/// # Errors
-///
-/// Returns an error when the directory cannot be resolved, a body exceeds
-/// [`MAX_FILE_BYTES`], or a file cannot be written. An invalid pack is not an
-/// error: the snapshot carries `ok: false` and the files stay on disk.
-#[tauri::command]
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "Tauri deserializes command arguments as owned values"
-)]
-pub fn pack_save(
-    soul: String,
-    user: String,
-    rules: String,
-    glossary: String,
-) -> Result<PackSnapshot, String> {
-    let resolved = resolve_soul_dir(None).map_err(|error| error.to_string())?;
-    write_pack(resolved.path(), &soul, &user, &rules, &glossary)
 }
 
 fn snapshot(

@@ -2,7 +2,7 @@
 //!
 //! Buttons and the status line call [`softwake_ipc`]. Provider Settings call
 //! [`softwake_providers`] in this process. Email Settings call
-//! [`softwake_connectors`] and the secret bag in this process. The General pane reads and writes
+//! [`softwake_connectors`] and the secret bag in this process. The Profiles pane reads and writes
 //! the soul pack through [`softwake_soul`] in this process. This crate does
 //! not decide whether a voice-state transition is legal.
 
@@ -10,6 +10,7 @@ mod commands;
 mod email;
 mod oauth_open;
 mod pack;
+mod profiles;
 mod providers;
 mod tray;
 
@@ -55,8 +56,12 @@ pub fn run() {
             email::email_save,
             email::email_clear_password,
             email::email_test,
-            pack::pack_snapshot,
-            pack::pack_save,
+            profiles::profiles_snapshot,
+            profiles::profile_create,
+            profiles::profile_rename,
+            profiles::profile_set_active,
+            profiles::pack_snapshot,
+            profiles::pack_save,
         ])
         .setup(|app| {
             tray::install(app.handle())?;
@@ -180,6 +185,10 @@ mod tests {
         "email_save",
         "email_clear_password",
         "email_test",
+        "profiles_snapshot",
+        "profile_create",
+        "profile_rename",
+        "profile_set_active",
         "pack_snapshot",
         "pack_save",
     ];
@@ -213,6 +222,10 @@ mod tests {
         "allow-email-save",
         "allow-email-clear-password",
         "allow-email-test",
+        "allow-profiles-snapshot",
+        "allow-profile-create",
+        "allow-profile-rename",
+        "allow-profile-set-active",
         "allow-pack-snapshot",
         "allow-pack-save",
     ];

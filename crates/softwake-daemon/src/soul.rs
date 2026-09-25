@@ -94,7 +94,8 @@ impl LoadedSoul {
         let Some(pack) = &self.pack else {
             return;
         };
-        self.applied = Some(pack.render_instructions());
+        let name = softwake_soul::profile_name_in(self.dir.path());
+        self.applied = Some(pack.render_instructions_as(&name));
         self.reload_pending = false;
     }
 

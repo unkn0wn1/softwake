@@ -115,12 +115,12 @@ commands.allow = ["email_test"]
 
 [[permission]]
 identifier = "allow-pack-snapshot"
-description = "Read the four soul-pack files for the General editors."
+description = "Read the four soul-pack files for a profile in the Profiles editors."
 commands.allow = ["pack_snapshot"]
 
 [[permission]]
 identifier = "allow-pack-save"
-description = "Write the four soul-pack files from the General editors."
+description = "Write the four soul-pack files for a profile in the Profiles editors."
 commands.allow = ["pack_save"]
 
 [[permission]]
@@ -147,3 +147,23 @@ commands.allow = ["hud_ask"]
 identifier = "allow-hud-set-layout"
 description = "Resize and re-anchor the HUD capsule when expanding or collapsing."
 commands.allow = ["hud_set_layout"]
+
+[[permission]]
+identifier = "allow-profiles-snapshot"
+description = "List Softwake profiles and load the selected pack into the Profiles editors."
+commands.allow = ["profiles_snapshot"]
+
+[[permission]]
+identifier = "allow-profile-create"
+description = "Create a new Softwake profile from starter pack templates."
+commands.allow = ["profile_create"]
+
+[[permission]]
+identifier = "allow-profile-rename"
+description = "Rename the agent for a Softwake profile."
+commands.allow = ["profile_rename"]
+
+[[permission]]
+identifier = "allow-profile-set-active"
+description = "Switch the active Softwake profile used on the next awake."
+commands.allow = ["profile_set_active"]

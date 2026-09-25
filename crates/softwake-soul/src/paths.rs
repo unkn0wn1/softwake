@@ -101,20 +101,23 @@ impl SoulPaths {
     }
 }
 
-/// Soul directory from a flag, then the environment, then XDG.
+/// Soul directory from a flag, then the environment, then the active profile.
 ///
 /// Order:
 ///
-/// 1. `flag`, when it is set and not empty
-/// 2. `SOFTWAKE_SOUL_DIR`, when it is set and not empty
-/// 3. `$XDG_CONFIG_HOME/softwake/soul`, when `XDG_CONFIG_HOME` is set and not empty
-/// 4. `$HOME/.config/softwake/soul`, when `HOME` is set and not empty
+/// 1. `flag`, when it is set and not empty (raw pack dir; skips profiles)
+/// 2. `SOFTWAKE_SOUL_DIR`, when it is set and not empty (same)
+/// 3. Active profile pack under `$XDG_CONFIG_HOME/softwake/profiles/<id>/`,
+///    after an idempotent migrate from legacy `soul/` when needed
+/// 4. Same under `$HOME/.config/softwake/profiles/<id>/`
 ///
-/// The directory does not have to exist yet.
+/// The directory does not have to exist yet when a flag or env override is
+/// used. Profile resolution creates the default profile on first use.
 ///
 /// # Errors
 ///
-/// Returns [`SoulError::Unresolved`] when every source is unset.
+/// Returns [`SoulError::Unresolved`] when every source is unset, or a profile
+/// config I/O error from migrate.
 pub fn resolve_soul_dir(flag: Option<&Path>) -> Result<SoulDir, SoulError> {
     let env_dir = path_from_env("SOFTWAKE_SOUL_DIR");
     let xdg = path_from_env("XDG_CONFIG_HOME");
@@ -142,15 +145,8 @@ pub fn resolve_soul_dir_from(
     if let Some(path) = nonempty(env_dir) {
         return Ok(SoulDir::new(path.to_path_buf()));
     }
-    if let Some(path) = nonempty(xdg_config_home) {
-        return Ok(SoulDir::new(path.join("softwake").join("soul")));
-    }
-    if let Some(path) = nonempty(home) {
-        return Ok(SoulDir::new(
-            path.join(".config").join("softwake").join("soul"),
-        ));
-    }
-    Err(SoulError::Unresolved)
+    let pack = crate::profile::resolve_active_pack_dir(xdg_config_home, home)?;
+    Ok(SoulDir::new(pack))
 }
 
 fn path_from_env(key: &str) -> Option<PathBuf> {
@@ -173,7 +169,9 @@ fn nonempty(path: Option<&Path>) -> Option<&Path> {
 #[cfg(test)]
 mod tests {
     use std::ffi::OsStr;
+    use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{SoulDir, SoulPaths, path_from_env_value, resolve_soul_dir_from};
     use crate::SoulError;
@@ -228,35 +226,61 @@ mod tests {
         assert_eq!(dir.path(), Path::new("from-env"));
     }
 
-    #[test]
-    fn xdg_config_home_appends_softwake_soul() {
-        let dir = resolve_soul_dir_from(
-            None,
-            None,
-            Some(Path::new("from-xdg")),
-            Some(Path::new("from-home")),
-        )
-        .expect("xdg");
-        assert_eq!(dir.path(), Path::new("from-xdg/softwake/soul"));
+    fn temp_root(label: &str) -> PathBuf {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("softwake-paths-{label}-{}-{n}", std::process::id()));
+        fs::create_dir_all(&path).expect("temp root");
+        path
     }
 
     #[test]
-    fn home_uses_dot_config_when_xdg_is_unset() {
-        let dir =
-            resolve_soul_dir_from(None, None, None, Some(Path::new("from-home"))).expect("home");
-        assert_eq!(dir.path(), Path::new("from-home/.config/softwake/soul"));
+    fn xdg_config_home_uses_active_profile_pack() {
+        let xdg = temp_root("xdg");
+        let home = temp_root("home-unused");
+        let dir = resolve_soul_dir_from(None, None, Some(xdg.as_path()), Some(home.as_path()))
+            .expect("xdg");
+        assert_eq!(
+            dir.path(),
+            xdg.join("softwake").join("profiles").join("default")
+        );
+        let _ = fs::remove_dir_all(&xdg);
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn home_uses_active_profile_when_xdg_is_unset() {
+        let home = temp_root("home");
+        let dir = resolve_soul_dir_from(None, None, None, Some(home.as_path())).expect("home");
+        assert_eq!(
+            dir.path(),
+            home.join(".config")
+                .join("softwake")
+                .join("profiles")
+                .join("default")
+        );
+        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
     fn empty_paths_are_skipped() {
+        let home = temp_root("empty");
         let dir = resolve_soul_dir_from(
             Some(Path::new("")),
             Some(Path::new("")),
             Some(Path::new("")),
-            Some(Path::new("from-home")),
+            Some(home.as_path()),
         )
         .expect("home");
-        assert_eq!(dir.path(), Path::new("from-home/.config/softwake/soul"));
+        assert_eq!(
+            dir.path(),
+            home.join(".config")
+                .join("softwake")
+                .join("profiles")
+                .join("default")
+        );
+        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
