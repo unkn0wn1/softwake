@@ -1,7 +1,7 @@
 {
   "identifier": "default",
-  "description": "The main window may read daemon status, send voice-state commands, confirm tools, edit the soul pack, and use provider Settings.",
-  "windows": ["main"],
+  "description": "The Settings and HUD windows may read daemon status, send voice-state and ask commands, confirm tools, edit the soul pack, and use provider Settings.",
+  "windows": ["main", "hud"],
   "permissions": [
     "core:default",
     "allow-status",
@@ -11,6 +11,10 @@
     "allow-reload-soul",
     "allow-confirm-tool",
     "allow-cancel-tool",
+    "allow-wake",
+    "allow-ask",
+    "allow-hud-snapshot",
+    "allow-hud-ask",
     "allow-provider-snapshot",
     "allow-provider-select",
     "allow-provider-set-key",

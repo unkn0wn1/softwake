@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Softwake</title>
+    <link rel="stylesheet" href="hud.css" />
+  </head>
+  <body>
+    <div id="capsule" class="capsule" role="button" tabindex="0" aria-label="Softwake listening capsule">
+      <canvas id="bloom" width="320" height="88" aria-hidden="true"></canvas>
+      <div id="strip" class="strip" hidden>
+        <form id="ask-form" autocomplete="off">
+          <input
+            id="ask-input"
+            type="text"
+            maxlength="2000"
+            placeholder="Ask Softwake…"
+            aria-label="Ask Softwake"
+          />
+          <button type="submit" id="ask-send">Send</button>
+        </form>
+        <p id="reply" class="reply" role="status"></p>
+      </div>
+      <p id="hint" class="hint">click to type</p>
+    </div>
+    <script src="hud.js"></script>
+  </body>
+</html>

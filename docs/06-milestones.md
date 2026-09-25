@@ -64,6 +64,7 @@
    - [x] `softwaked ctl wake` enters awake on a running `softwaked serve` (same soul gate as demo `wake`). `ctl resume` still lands in sleep. No microphone. Protocol generation stays 1.
 3. [ ] Live email, Drive, and calendar connectors (still open from phase 3)
 4. [x] In-window editors for `soul.md`, `user.md`, `rules.md`, and `glossary.md` (reload stays how a pack is applied)
+5. [x] System tray + always-on-top HUD capsule with mock listening level ([ADR 0015](ADR-0015-tray-hud.md)); real mic RMS deferred
 
 ## Deferred ideas (do not pull into phase 1)
 

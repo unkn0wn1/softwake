@@ -102,3 +102,23 @@ commands.allow = ["pack_snapshot"]
 identifier = "allow-pack-save"
 description = "Write the four soul-pack files from the General editors."
 commands.allow = ["pack_save"]
+
+[[permission]]
+identifier = "allow-wake"
+description = "Enter awake from sleep when the soul pack is valid."
+commands.allow = ["wake"]
+
+[[permission]]
+identifier = "allow-ask"
+description = "Send one typed ask while the daemon is awake."
+commands.allow = ["ask"]
+
+[[permission]]
+identifier = "allow-hud-snapshot"
+description = "Read voice state and a mock listening level for the HUD capsule."
+commands.allow = ["hud_snapshot"]
+
+[[permission]]
+identifier = "allow-hud-ask"
+description = "Submit a typed line from the HUD (wake then ask from sleep)."
+commands.allow = ["hud_ask"]
