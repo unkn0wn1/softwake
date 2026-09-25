@@ -9,7 +9,9 @@
 //! parallel tests, so production is the only code that constructs `keyring::Entry`.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{OnceLock, mpsc};
+use std::thread;
+use std::time::Duration;
 
 use crate::secrets::{
     self, KEYRING_PROBE_USER, KEYRING_SERVICE, KEYRING_USER, KeyringClient, SecretBag, SecretStore,
@@ -126,12 +128,44 @@ fn persist_keyring(
     write_pointer(path)
 }
 
+/// How long startup waits for a Secret Service probe before treating keyring as unavailable.
+const PROBE_BUDGET: Duration = Duration::from_millis(1500);
+
 /// Probe once per process. Both success and failure are cached.
 ///
 /// A keyring that appears later is picked up on the next process start.
+///
+/// Secret Service Unlock prompts can block `Entry` calls forever on D-Bus. The
+/// probe runs on a helper thread and is abandoned after [`PROBE_BUDGET`] so
+/// `softwaked serve` / Settings still start when the session keyring is sticky.
 pub(crate) fn cached_probe() -> bool {
     static PROBE: OnceLock<bool> = OnceLock::new();
-    *PROBE.get_or_init(probe_secret_service)
+    *PROBE.get_or_init(|| {
+        if let Some(ok) = run_keyring_probe_with_budget(PROBE_BUDGET) {
+            ok
+        } else {
+            eprintln!(
+                "softwake: secret service probe timed out after {}ms — treating keyring as unavailable",
+                PROBE_BUDGET.as_millis()
+            );
+            false
+        }
+    })
+}
+
+/// Run [`probe_secret_service`] with a deadline. `None` means the budget elapsed.
+fn run_keyring_probe_with_budget(budget: Duration) -> Option<bool> {
+    let (tx, rx) = mpsc::sync_channel(1);
+    if thread::Builder::new()
+        .name("softwake-keyring-probe".into())
+        .spawn(move || {
+            let _ = tx.send(probe_secret_service());
+        })
+        .is_err()
+    {
+        return Some(false);
+    }
+    rx.recv_timeout(budget).ok()
 }
 
 fn probe_secret_service() -> bool {
@@ -173,8 +207,37 @@ fn reject_in_memory_mock_store() {
 
 #[cfg(test)]
 mod tests {
-    use super::KeyringSecretStore;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use super::{KeyringSecretStore, run_keyring_probe_with_budget};
     use crate::secrets::{KeyringClient, SecretStoreError};
+
+    #[test]
+    fn keyring_probe_budget_is_none_when_worker_never_replies() {
+        // Mirror run_keyring_probe_with_budget's channel contract without
+        // touching dbus: a worker that never sends must yield None quickly.
+        let (tx, rx) = mpsc::sync_channel::<bool>(1);
+        thread::spawn(move || {
+            let _ = tx; // drop without send after sleep past budget
+            thread::sleep(Duration::from_secs(30));
+        });
+        let started = Instant::now();
+        assert!(rx.recv_timeout(Duration::from_millis(40)).ok().is_none());
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn keyring_probe_budget_helper_returns_within_deadline() {
+        // Live Secret Service may be sticky; the helper must still return.
+        let started = Instant::now();
+        let _ = run_keyring_probe_with_budget(Duration::from_millis(200));
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "run_keyring_probe_with_budget must respect its deadline"
+        );
+    }
 
     /// The default test run does not construct `keyring::Entry`. This ignored test
     /// is the only live round-trip, and it uses its own account.

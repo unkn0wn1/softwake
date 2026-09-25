@@ -84,15 +84,18 @@ pub(crate) fn spawn(
     soul_dir: SoulDir,
     capture: CaptureKind,
 ) -> Result<ServeHandle, ServeError> {
+    // Build the runtime *before* binding. A sticky Secret Service Unlock (or any
+    // other init stall) must not leave a listening socket that queues clients
+    // forever with no accept thread.
+    let shared = Arc::new(Shared::new(soul_dir, capture)?);
+    #[cfg(test)]
+    let shared_for_handle = Arc::clone(&shared);
     let listener = Listener::bind(&path)?;
     if listener.replaced_stale() {
         eprintln!("softwaked: removed stale socket {}", path.display());
     }
     let shutdown = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&shutdown);
-    let shared = Arc::new(Shared::new(soul_dir, capture)?);
-    #[cfg(test)]
-    let shared_for_handle = Arc::clone(&shared);
     let join = thread::Builder::new()
         .name("softwake-accept".to_owned())
         .spawn(move || accept_loop(&listener, &flag, &shared))
