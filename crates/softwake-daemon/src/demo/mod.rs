@@ -178,7 +178,7 @@ impl Demo {
             last_pcm_hit: None,
             soul: LoadedSoul::open(soul_dir),
             session: TextStubSession::default(),
-            hands: Hands::new(),
+            hands: Hands::from_disk(),
             stt: MockStt::default(),
             tts: MockTts::default(),
             last_transcripts: Vec::new(),

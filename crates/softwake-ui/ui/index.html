@@ -109,7 +109,52 @@
 
         <section id="pane-email" class="pane glass hidden" hidden aria-labelledby="email-title">
           <h2 id="email-title">Email</h2>
-          <p class="meta">Live email is coming later. This window does not send, list, or delete mail.</p>
+          <p class="meta">
+            Live email is off by default. Softwake still uses the in-memory mock outbox until you
+            enable live email. Sending stays confirm-gated on the Status pane; this pane never
+            sends mail. Draft-only mode stores a local draft after confirm. Real SMTP is not wired
+            in this scaffold.
+          </p>
+          <label class="field row-check">
+            <input id="email-live-enabled" type="checkbox" />
+            <span>Enable live email (opt-in)</span>
+          </label>
+          <label class="field">
+            <span>SMTP host</span>
+            <input id="email-smtp-host" type="text" autocomplete="off" spellcheck="false" placeholder="smtp.example.com" />
+          </label>
+          <label class="field">
+            <span>SMTP port</span>
+            <input id="email-smtp-port" type="number" min="1" max="65535" value="587" />
+          </label>
+          <label class="field">
+            <span>Username</span>
+            <input id="email-username" type="text" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="field">
+            <span>From address</span>
+            <input id="email-from" type="text" autocomplete="off" spellcheck="false" placeholder="you@example.com" />
+          </label>
+          <label class="field">
+            <span>Mode</span>
+            <select id="email-mode">
+              <option value="draft_only">Draft only (default)</option>
+              <option value="send">Send (scaffold — not wired)</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>SMTP password</span>
+            <input id="email-password" type="password" autocomplete="off" spellcheck="false" placeholder="Saved in the secret bag" />
+          </label>
+          <p id="email-password-status" class="meta">Password: not saved</p>
+          <div class="row">
+            <button type="button" class="btn-primary" id="email-save">Save</button>
+            <button type="button" id="email-clear-password">Clear password</button>
+            <button type="button" class="btn-primary" id="email-test">Test connection</button>
+          </div>
+          <p id="email-test-status" class="meta">Test: not run</p>
+          <p id="email-storage" class="detail"></p>
+          <p id="email-error" class="error" role="status"></p>
         </section>
 
         <section id="pane-status" class="pane glass" aria-labelledby="status-title">

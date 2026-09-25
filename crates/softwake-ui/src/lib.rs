@@ -1,11 +1,13 @@
 //! Softwake settings window, system tray, and always-on-top HUD.
 //!
 //! Buttons and the status line call [`softwake_ipc`]. Provider Settings call
-//! [`softwake_providers`] in this process. The General pane reads and writes
+//! [`softwake_providers`] in this process. Email Settings call
+//! [`softwake_connectors`] and the secret bag in this process. The General pane reads and writes
 //! the soul pack through [`softwake_soul`] in this process. This crate does
 //! not decide whether a voice-state transition is legal.
 
 mod commands;
+mod email;
 mod oauth_open;
 mod pack;
 mod providers;
@@ -46,6 +48,10 @@ pub fn run() {
             providers::provider_set_model,
             providers::provider_set_voice_model,
             providers::provider_opt_in_plaintext,
+            email::email_snapshot,
+            email::email_save,
+            email::email_clear_password,
+            email::email_test,
             pack::pack_snapshot,
             pack::pack_save,
         ])
@@ -123,6 +129,10 @@ mod tests {
         "provider_set_model",
         "provider_set_voice_model",
         "provider_opt_in_plaintext",
+        "email_snapshot",
+        "email_save",
+        "email_clear_password",
+        "email_test",
         "pack_snapshot",
         "pack_save",
     ];
@@ -151,6 +161,10 @@ mod tests {
         "allow-provider-set-model",
         "allow-provider-set-voice-model",
         "allow-provider-opt-in-plaintext",
+        "allow-email-snapshot",
+        "allow-email-save",
+        "allow-email-clear-password",
+        "allow-email-test",
         "allow-pack-snapshot",
         "allow-pack-save",
     ];

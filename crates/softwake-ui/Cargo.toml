@@ -19,6 +19,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 serde = { workspace = true }
+softwake-connectors.workspace = true
 softwake-ipc.workspace = true
 softwake-providers = { workspace = true }
 softwake-soul.workspace = true

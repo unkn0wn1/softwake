@@ -281,3 +281,14 @@ a.oauth-open:hover {
 .hidden {
   display: none;
 }
+
+.row-check {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.row-check input {
+  width: auto;
+}

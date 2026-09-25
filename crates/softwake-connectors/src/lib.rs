@@ -5,19 +5,32 @@
 //! [`invoke`](ConnectorRegistry::invoke) never sends or lists.
 //! [`authorize_confirmed`](ConnectorRegistry::authorize_confirmed) does not send
 //! or list either: it only reports that a confirm action may proceed.
-//! [`MockEmail`] stores outbound messages in memory. [`MockDrive`] and
-//! [`MockCalendar`] list entries stored on that value. This crate does not open
-//! a socket and does not read credentials.
+//! [`MockEmail`] stores outbound messages in memory. [`LiveEmail`] is an opt-in
+//! scaffold (off by default) that can store drafts after confirm and does not
+//! open a socket. [`MockDrive`] and [`MockCalendar`] list entries stored on that
+//! value. Default builds do not read credentials for connectors; the live email
+//! password lives in the provider secret bag and is only checked as a bool here.
 
 mod calendar;
 mod drive;
 mod email;
+mod email_settings;
+mod live_email;
 mod mock;
 mod registry;
 
 pub use calendar::{CalendarConnector, CalendarEvent};
 pub use drive::{DriveConnector, DriveFile};
 pub use email::{EmailConnector, OutboundEmail, SendReceipt};
+pub use email_settings::{
+    DEFAULT_SMTP_PORT, EMAIL_FILE_NAME, EmailSettings, EmailSettingsError, FileEmailSettings,
+    LiveEmailMode, MAX_EMAIL_SETTINGS_BYTES, parse_live_email_mode, resolve_email_file,
+    resolve_email_file_from,
+};
+pub use live_email::{
+    EmailBackend, LIVE_EMAIL_DISABLED, LIVE_EMAIL_NOT_CONFIGURED, LIVE_EMAIL_TEST_DRAFT_OK,
+    LIVE_EMAIL_TEST_SEND_SCAFFOLD, LIVE_EMAIL_TRANSPORT_NOT_WIRED, LiveEmail, LiveEmailError,
+};
 pub use mock::{MockCalendar, MockDrive, MockEmail};
 pub use registry::{
     CALENDAR, CALENDAR_DELETE, CALENDAR_LIST, ConnectorError, ConnectorMeta, ConnectorRegistry,

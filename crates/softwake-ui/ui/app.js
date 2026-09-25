@@ -35,6 +35,20 @@ const testStatus = document.querySelector("#test-status");
 const modelSelect = document.querySelector("#model-select");
 const voiceModelSelect = document.querySelector("#voice-model-select");
 const providerError = document.querySelector("#provider-error");
+const emailLiveEnabled = document.querySelector("#email-live-enabled");
+const emailSmtpHost = document.querySelector("#email-smtp-host");
+const emailSmtpPort = document.querySelector("#email-smtp-port");
+const emailUsername = document.querySelector("#email-username");
+const emailFrom = document.querySelector("#email-from");
+const emailMode = document.querySelector("#email-mode");
+const emailPassword = document.querySelector("#email-password");
+const emailPasswordStatus = document.querySelector("#email-password-status");
+const emailTestStatus = document.querySelector("#email-test-status");
+const emailStorage = document.querySelector("#email-storage");
+const emailError = document.querySelector("#email-error");
+const emailSaveBtn = document.querySelector("#email-save");
+const emailClearPasswordBtn = document.querySelector("#email-clear-password");
+const emailTestBtn = document.querySelector("#email-test");
 const plaintextWarning = document.querySelector("#plaintext-warning");
 const usePlaintextBtn = document.querySelector("#use-plaintext-file");
 
@@ -538,6 +552,81 @@ document.querySelector("#pack-reload-soul").addEventListener("click", () => {
   reloadSoulFromGeneral();
 });
 
+
+let emailSnap = null;
+
+function showEmailError(error) {
+  const text = error && error.message ? error.message : String(error || "");
+  emailError.textContent = text;
+}
+
+function renderEmail(snap) {
+  emailSnap = snap;
+  emailError.textContent = "";
+  emailLiveEnabled.checked = !!snap.live_enabled;
+  emailSmtpHost.value = snap.smtp_host || "";
+  emailSmtpPort.value = String(snap.smtp_port || 587);
+  emailUsername.value = snap.username || "";
+  emailFrom.value = snap.from_address || "";
+  emailMode.value = snap.mode || "draft_only";
+  emailPassword.value = "";
+  emailPasswordStatus.textContent = snap.has_password
+    ? "Password: saved in the secret bag"
+    : "Password: not saved";
+  if (snap.last_test_ok === true) {
+    emailTestStatus.textContent = "Test: ok — " + (snap.last_test_message || "");
+  } else if (snap.last_test_ok === false) {
+    emailTestStatus.textContent = "Test: failed — " + (snap.last_test_message || "");
+  } else {
+    emailTestStatus.textContent = "Test: not run";
+  }
+  emailStorage.textContent = snap.storage_message || "";
+}
+
+async function refreshEmail() {
+  try {
+    renderEmail(await invoke("email_snapshot"));
+  } catch (error) {
+    showEmailError(error);
+  }
+}
+
+async function emailAction(command, args) {
+  try {
+    renderEmail(await invoke(command, args));
+  } catch (error) {
+    showEmailError(error);
+    try {
+      renderEmail(await invoke("email_snapshot"));
+      showEmailError(error);
+    } catch (snapError) {
+      showEmailError(snapError);
+    }
+  }
+}
+
+emailSaveBtn.addEventListener("click", () => {
+  const port = Number(emailSmtpPort.value);
+  const password = emailPassword.value;
+  emailAction("email_save", {
+    liveEnabled: emailLiveEnabled.checked,
+    smtpHost: emailSmtpHost.value,
+    smtpPort: Number.isFinite(port) && port > 0 ? port : 587,
+    username: emailUsername.value,
+    fromAddress: emailFrom.value,
+    mode: emailMode.value,
+    password: password ? password : null,
+  });
+});
+
+emailClearPasswordBtn.addEventListener("click", () => {
+  emailAction("email_clear_password");
+});
+
+emailTestBtn.addEventListener("click", () => {
+  emailAction("email_test");
+});
+
 function showPane(name) {
   for (const pane of panes) {
     const section = document.querySelector(`#pane-${pane}`);
@@ -557,6 +646,9 @@ function showPane(name) {
       packRequesting = false;
     });
   }
+  if (name === "email") {
+    refreshEmail();
+  }
 }
 
 for (const pane of panes) {
@@ -569,3 +661,4 @@ showPane("status");
 refresh();
 setInterval(refresh, 1000);
 refreshProviders();
+refreshEmail();

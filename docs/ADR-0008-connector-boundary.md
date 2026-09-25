@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-25
-- **Amended:** 2026-09-25 (`email_send` on the tool bus); 2026-09-25 (Drive and calendar list mocks)
+- **Amended:** 2026-09-25 (`email_send` on the tool bus); 2026-09-25 (Drive and calendar list mocks); 2026-09-25 (live email opt-in scaffold)
 
 ## Decision
 
@@ -33,11 +33,11 @@ The registry is a static table. There is no method that inserts a row.
 
 Lookup is the pair `(connector, action)`. Matching is case-sensitive. `gmail` / `send` is unknown: the registry names the capability `email`, and a later vendor client would implement `EmailConnector` under that same action.
 
-The default build has no live Gmail, Drive, or Calendar client, no OAuth types, and no connector feature flag. The Drive and calendar values are in-memory mocks, not clients. CI does not set credentials and does not enable a network backend.
+The default build has no live Gmail, Drive, or Calendar client and no connector Cargo feature flag. Drive and calendar stay in-memory mocks. Live email is an **opt-in Settings scaffold** (off by default): non-secret fields in `email.json`, SMTP password in the provider secret bag, Test connection that does not open a socket, and a `LiveEmail` backend behind `EmailConnector`. CI does not set credentials and does not enable a network backend.
 
 `email_send` is the confirm-gated tool on the bus from [ADR 0005](ADR-0005-tool-confirmation.md). Its arguments are `to`, `subject`, and `body`: the first argument, the second argument, and the rest joined by one space. Fewer than three arguments is refused while awake and does not stage a confirmation. The strings are stored unchanged.
 
-The handler lives on daemon `Hands`, beside the notification sink. `Hands` holds a `MockEmail` and a `ConnectorRegistry`. `permit_tool_dispatch` runs first. A blind request stages one pending confirmation and does not send. After the operator accepts, the handler parses the stored arguments, calls `invoke_confirmed`, then `authorize_confirmed` for `email` / `send`, then `EmailConnector::send`. The pending record is cleared only after that append. Cancel, and leaving awake, clear the record and do not send.
+The handler lives on daemon `Hands`, beside the notification sink. `Hands` holds an `EmailBackend` (`Mock` by default, or `Live` when Settings enable live email) and a `ConnectorRegistry`. Tests construct `Hands` with the mock. Serve and the typed demo load Settings from disk and fall back to the mock when live is off or load fails. `permit_tool_dispatch` runs first. A blind request stages one pending confirmation and does not send. After the operator accepts, the handler parses the stored arguments, calls `invoke_confirmed`, then `authorize_confirmed` for `email` / `send`, then `EmailBackend::send`. The pending record is cleared only after that append. Cancel, and leaving awake, clear the record and do not send. Live draft-only mode stores a local draft and reports `draft {id}`; mock mode still reports `sent {id}`. Live send mode still requires confirm and then returns a clear not-wired error until a later transport ADR. Softwake does not auto-send; Settings never sends without the Status confirm path.
 
 `softwake-tools` parses those arguments and does not depend on `softwake-connectors`. `softwake-connectors` does not depend on `softwake-tools`. The email mock value stays in the daemon. The daemon does not construct `MockDrive` or `MockCalendar`.
 
@@ -97,9 +97,29 @@ cargo test -p softwake-policy
 ## Consequences
 
 - Callers can classify an action, store a fake outbound message, and read files or events kept on a mock value. They cannot reach a mailbox, a Drive account, or a calendar from this build.
-- A live backend, when it exists, is a non-default feature, off in CI, behind a follow-up ADR, and it implements the existing trait under the same connector name.
+- A live email scaffold exists as Settings opt-in (off by default, off in CI). It implements `EmailConnector` under the same `email` / `send` name. Real SMTP or Gmail OAuth is a later transport; this scaffold is config + Test + draft-only (or not-wired send).
 - `email` / `delete`, `drive` / `delete`, and `calendar` / `delete` stay deny until a later change to this ADR adds a backend and changes the row on purpose.
-- The daemon calls `MockEmail` only. It does not construct `MockDrive` or `MockCalendar`.
+- The daemon default and CI path call `MockEmail` via `EmailBackend::Mock`. An opted-in live Settings file selects `EmailBackend::Live`. The daemon does not construct `MockDrive` or `MockCalendar`.
 - The in-memory outbox and the in-memory file and event lists die with the value. This slice does not write a mailbox or a Drive or calendar file.
 - Confirming `email_send` appends one message on the daemon's `MockEmail`. A second confirm of that id does not append again.
 - Clients that speak protocol generation 1 see no new message kinds. `email_send` is a name on the existing tool messages. Connector actions are not socket commands.
+
+## Amendment — live email opt-in scaffold (2026-09-25)
+
+### Decision
+
+Add an opt-in live email **scaffold** without turning Softwake into a Gmail product and without giving CI a key:
+
+1. **Off by default.** `EmailSettings.live_enabled` defaults to `false`. Missing `email.json` is the mock path. Workspace CI runs mock-only sends.
+2. **Settings surface.** The Email pane offers enable toggle, SMTP host/port/username/from, mode (`draft_only` default, or `send`), password into the secret bag, Save, Clear password, and Test connection. The pane does not call `email_send` and does not confirm-send.
+3. **Backend shape.** `LiveEmail` implements `EmailConnector`. Test and send check configuration only; they do not open a socket in this build. Draft-only appends to an in-process draft list after the existing confirm gate. Send mode returns a fixed not-wired error after confirm so the operator is never surprised by a silent network send.
+4. **Secret bag.** `email_smtp_password` is a new field on the provider secret bag (keyring or opt-in plaintext). The connector only sees a boolean “password present”.
+5. **No auto-send.** Rules and skills still cannot auto-send ([ADR 0014](ADR-0014-skills-hub.md)). Confirm stays mandatory. Spencer’s default product stance remains drafts / confirm-gated.
+6. **Gmail OAuth / real SMTP** are explicitly later. This ADR does not add OAuth types for mail.
+
+### Alternatives (this amendment)
+
+- Live Gmail on by default. Rejected. CI would need a token or network.
+- Settings Send button that bypasses confirm. Rejected. Confirm stays on the tool bus.
+- Full SMTP client in this PR. Rejected. Scaffold first; transport needs its own review.
+- Cargo feature flag instead of Settings toggle. Rejected for the operator path; Settings is how providers already opt into live HTTPS. A Cargo feature is unnecessary while the scaffold opens no socket.
