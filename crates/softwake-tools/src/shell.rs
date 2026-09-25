@@ -146,8 +146,10 @@ pub fn run_shell_with(
     }
 
     let (timed_out, exit_code) = wait_with_timeout(&mut child, timeout);
-    let (stdout_bytes, out_trunc) = rx_out.recv().unwrap_or_default();
-    let (stderr_bytes, err_trunc) = rx_err.recv().unwrap_or_default();
+    // Bound pipe drains so a stuck reader cannot hang the daemon (or CI) forever.
+    let drain_budget = Duration::from_secs(2);
+    let (stdout_bytes, out_trunc) = rx_out.recv_timeout(drain_budget).unwrap_or_default();
+    let (stderr_bytes, err_trunc) = rx_err.recv_timeout(drain_budget).unwrap_or_default();
     Ok(ShellOutput {
         stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
         stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
