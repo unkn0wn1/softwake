@@ -2779,6 +2779,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "softwake-memory"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "softwake-session"
 version = "0.1.0"
 dependencies = [

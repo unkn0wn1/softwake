@@ -1,0 +1,13 @@
+[package]
+name = "softwake-memory"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Long-term memory boundary. Trait and in-memory mock. Off until enabled."
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true
