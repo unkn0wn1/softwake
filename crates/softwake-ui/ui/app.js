@@ -10,7 +10,7 @@ const confirmBtn = document.querySelector("#confirm");
 const cancelBtn = document.querySelector("#cancel");
 const navStatus = document.querySelector("#nav-status");
 
-const panes = ["general", "profiles", "providers", "email", "status"];
+const panes = ["general", "profiles", "providers", "tools", "email", "status"];
 
 const providerSelect = document.querySelector("#provider-select");
 const keyPanel = document.querySelector("#key-panel");
@@ -49,6 +49,11 @@ const emailTestStatus = document.querySelector("#email-test-status");
 const emailStorage = document.querySelector("#email-storage");
 const emailError = document.querySelector("#email-error");
 const emailSaveBtn = document.querySelector("#email-save");
+const toolsShellEnabled = document.querySelector("#tools-shell-enabled");
+const toolsConfirmPolicy = document.querySelector("#tools-confirm-policy");
+const toolsSaveBtn = document.querySelector("#tools-save");
+const toolsStatus = document.querySelector("#tools-status");
+const toolsError = document.querySelector("#tools-error");
 const emailClearPasswordBtn = document.querySelector("#email-clear-password");
 const emailTestBtn = document.querySelector("#email-test");
 const plaintextWarning = document.querySelector("#plaintext-warning");
@@ -793,6 +798,49 @@ emailTestBtn.addEventListener("click", () => {
   emailAction("email_test");
 });
 
+
+function showToolsError(error) {
+  toolsError.textContent =
+    typeof error === "string" ? error : error && error.message ? error.message : "request failed";
+}
+
+function renderTools(snap) {
+  toolsShellEnabled.checked = !!snap.shell_enabled;
+  toolsConfirmPolicy.value = snap.confirm_policy || "always";
+  toolsStatus.textContent = snap.shell_enabled
+    ? "Shell enabled — confirm policy: " + (snap.confirm_policy || "always")
+    : "Shell off (default). Softwake cannot run shell until you enable it.";
+  toolsError.textContent = "";
+}
+
+async function refreshTools() {
+  try {
+    renderTools(await invoke("tools_snapshot"));
+  } catch (error) {
+    showToolsError(error);
+  }
+}
+
+toolsSaveBtn.addEventListener("click", async () => {
+  try {
+    renderTools(
+      await invoke("tools_save", {
+        shellEnabled: toolsShellEnabled.checked,
+        confirmPolicy: toolsConfirmPolicy.value,
+      })
+    );
+    toolsStatus.textContent = "Tools Settings saved.";
+  } catch (error) {
+    showToolsError(error);
+    try {
+      renderTools(await invoke("tools_snapshot"));
+      showToolsError(error);
+    } catch (statusError) {
+      showToolsError(statusError);
+    }
+  }
+});
+
 function showPane(name) {
   for (const pane of panes) {
     const section = document.querySelector(`#pane-${pane}`);
@@ -818,6 +866,9 @@ function showPane(name) {
   }
   if (name === "email") {
     refreshEmail();
+  }
+  if (name === "tools") {
+    refreshTools();
   }
 }
 

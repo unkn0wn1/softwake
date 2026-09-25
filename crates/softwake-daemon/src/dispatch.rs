@@ -23,10 +23,12 @@ use softwake_connectors::{
     OutboundEmail, resolve_email_file,
 };
 use softwake_policy::{PolicyDecision, PolicyEngine, Subject, permits_confirmed_connector};
+use softwake_soul::Glossary;
 use softwake_state::{Machine, StateError, VoiceState};
 use softwake_tools::{
-    EMAIL_SEND_TOOL, NOTIFY_TOOL, ToolError, ToolRegistry, ToolResult, ToolRisk,
-    parse_email_send_args,
+    EMAIL_SEND_TOOL, FileToolsSettings, NOTIFY_TOOL, SHELL_TOOL, ToolError, ToolRegistry,
+    ToolResult, ToolRisk, ToolsSettings, format_shell_output, parse_email_send_args,
+    resolve_tools_file, run_shell,
 };
 
 use crate::email_tool::{commit_detail, commit_email_send};
@@ -113,6 +115,15 @@ pub(crate) enum DispatchError {
     #[error("{message}")]
     Connector {
         /// Registry text for the refused pair.
+        message: String,
+    },
+
+    /// Shell did not start or returned an operator-safe failure before spawn completed.
+    ///
+    /// The pending record stays when this happens on confirm.
+    #[error("{message}")]
+    Shell {
+        /// Operator-facing error (no command line, no secrets).
         message: String,
     },
 }
@@ -223,7 +234,7 @@ struct Pending {
     id: String,
     name: String,
     args: Vec<String>,
-    description: &'static str,
+    description: String,
 }
 
 /// Policy engine, registries, one pending confirmation, the notification sink, the email outbox, and the tool log.
@@ -233,6 +244,9 @@ pub(crate) struct Hands {
     registry: ToolRegistry,
     connectors: ConnectorRegistry,
     email: EmailBackend,
+    glossary: Glossary,
+    /// Test-only Tools Settings override. Production always reads disk.
+    tools_settings_override: Option<ToolsSettings>,
     pending: Option<Pending>,
     sink: VecDeque<String>,
     log: VecDeque<ToolLogEntry>,
@@ -259,6 +273,8 @@ impl Hands {
             registry: ToolRegistry::phase2(),
             connectors: ConnectorRegistry::phase3(),
             email,
+            glossary: Glossary::parse("").expect("empty glossary"),
+            tools_settings_override: None,
             pending: None,
             sink: VecDeque::new(),
             log: VecDeque::new(),
@@ -276,6 +292,23 @@ impl Hands {
         Self::with_email(email_backend_from_disk())
     }
 
+    /// Replace the glossary used for shell alias expansion.
+    pub(crate) fn set_glossary(&mut self, glossary: Glossary) {
+        self.glossary = glossary;
+    }
+
+    /// Glossary currently used for shell expansion.
+    #[must_use]
+    pub(crate) fn glossary(&self) -> &Glossary {
+        &self.glossary
+    }
+
+    /// Override Tools Settings (tests). `None` restores disk loads.
+    #[cfg(test)]
+    pub(crate) fn set_tools_settings_for_test(&mut self, settings: Option<ToolsSettings>) {
+        self.tools_settings_override = settings;
+    }
+
     /// The confirmation that is waiting, if any.
     #[must_use]
     pub(crate) fn pending(&self) -> Option<PendingToolCall> {
@@ -283,7 +316,7 @@ impl Hands {
             pending_id: pending.id.clone(),
             name: pending.name.clone(),
             args: pending.args.clone(),
-            description: pending.description.to_owned(),
+            description: pending.description.clone(),
         })
     }
 
@@ -373,7 +406,6 @@ impl Hands {
                 let Some(meta) = self.registry.lookup(name) else {
                     return Err(self.unknown_tool(name));
                 };
-                let description = meta.description;
                 if let Some(pending_id) = self.pending.as_ref().map(|pending| pending.id.clone()) {
                     self.record(
                         name,
@@ -383,25 +415,29 @@ impl Hands {
                     );
                     return Err(DispatchError::Busy { pending_id });
                 }
+                if name == SHELL_TOOL {
+                    return self.request_shell(args);
+                }
                 if name == EMAIL_SEND_TOOL {
                     if let Err(error) = parse_email_send_args(args) {
                         return Err(self.fail_tool(error));
                     }
                 }
+                let description = meta.description.to_owned();
                 self.next_pending = self.next_pending.saturating_add(1);
                 let pending_id = self.next_pending.to_string();
                 self.pending = Some(Pending {
                     id: pending_id.clone(),
                     name: name.to_owned(),
                     args: args.to_vec(),
-                    description,
+                    description: description.clone(),
                 });
                 self.record(name, Some(ToolRisk::Confirm), ToolOutcome::Pending, None);
                 Ok(RequestOutcome::Pending(PendingToolCall {
                     pending_id,
                     name: name.to_owned(),
                     args: args.to_vec(),
-                    description: description.to_owned(),
+                    description,
                 }))
             }
         }
@@ -609,6 +645,9 @@ impl Hands {
             };
             return Ok(commit_detail(&self.email, receipt));
         }
+        if pending.name == SHELL_TOOL {
+            return self.run_confirmed_shell(pending);
+        }
         let detail = match self.registry.invoke_confirmed(&pending.name, &pending.args) {
             Ok(ToolResult { detail }) => detail,
             Err(error) => return Err(self.fail_tool(error)),
@@ -617,6 +656,99 @@ impl Hands {
             self.push_notification(detail.clone());
         }
         Ok(detail)
+    }
+
+    /// Stage or auto-run shell after Tools Settings + glossary expand + confirm policy.
+    fn request_shell(&mut self, args: &[String]) -> Result<RequestOutcome, DispatchError> {
+        let settings = load_tools_settings(self.tools_settings_override.as_ref());
+        if !settings.shell_enabled {
+            self.record(
+                SHELL_TOOL,
+                Some(ToolRisk::Deny),
+                ToolOutcome::Denied,
+                Some("shell disabled in Tools Settings".to_owned()),
+            );
+            return Err(DispatchError::Denied {
+                name: SHELL_TOOL.to_owned(),
+            });
+        }
+        let original = args.join(" ");
+        if original.trim().is_empty() {
+            return Err(DispatchError::InvalidArgs {
+                name: SHELL_TOOL.to_owned(),
+            });
+        }
+        let echo = self.glossary.confirm_echo(&original);
+        let expanded_args = vec![echo.expanded.clone()];
+        if settings.confirm_policy.must_confirm(echo.requires_readback) {
+            let description = echo.readback.trim_end().to_owned();
+            self.next_pending = self.next_pending.saturating_add(1);
+            let pending_id = self.next_pending.to_string();
+            self.pending = Some(Pending {
+                id: pending_id.clone(),
+                name: SHELL_TOOL.to_owned(),
+                args: expanded_args.clone(),
+                description: description.clone(),
+            });
+            self.record(
+                SHELL_TOOL,
+                Some(ToolRisk::Confirm),
+                ToolOutcome::Pending,
+                Some(echo.expanded),
+            );
+            return Ok(RequestOutcome::Pending(PendingToolCall {
+                pending_id,
+                name: SHELL_TOOL.to_owned(),
+                args: expanded_args,
+                description,
+            }));
+        }
+        // Quiet path (mutating_only / allowlisted_quiet with no readback).
+        match run_shell(&echo.expanded) {
+            Ok(output) => {
+                let detail = format_shell_output(&output);
+                self.record(
+                    SHELL_TOOL,
+                    Some(ToolRisk::Confirm),
+                    ToolOutcome::Ran,
+                    Some(detail.clone()),
+                );
+                Ok(RequestOutcome::Ran(RanTool {
+                    name: SHELL_TOOL.to_owned(),
+                    detail,
+                }))
+            }
+            Err(error) => {
+                let message = error.to_string();
+                self.record(
+                    SHELL_TOOL,
+                    Some(ToolRisk::Confirm),
+                    ToolOutcome::Unknown,
+                    Some(message.clone()),
+                );
+                Err(DispatchError::Shell { message })
+            }
+        }
+    }
+
+    fn run_confirmed_shell(&mut self, pending: &Pending) -> Result<String, DispatchError> {
+        if let Err(error) = self.registry.invoke_confirmed(&pending.name, &pending.args) {
+            return Err(self.fail_tool(error));
+        }
+        let command = pending.args.join(" ");
+        match run_shell(&command) {
+            Ok(output) => Ok(format_shell_output(&output)),
+            Err(error) => {
+                let message = error.to_string();
+                self.record(
+                    SHELL_TOOL,
+                    Some(ToolRisk::Confirm),
+                    ToolOutcome::Unknown,
+                    Some(message.clone()),
+                );
+                Err(DispatchError::Shell { message })
+            }
+        }
     }
 
     fn fail_tool(&mut self, error: ToolError) -> DispatchError {
@@ -681,6 +813,16 @@ impl Hands {
             outcome,
             detail,
         });
+    }
+}
+
+fn load_tools_settings(override_settings: Option<&ToolsSettings>) -> ToolsSettings {
+    if let Some(settings) = override_settings {
+        return settings.clone();
+    }
+    match resolve_tools_file().and_then(FileToolsSettings::new) {
+        Ok(store) => store.load().unwrap_or_default(),
+        Err(_) => ToolsSettings::default(),
     }
 }
 
@@ -933,6 +1075,36 @@ mod tests {
             hands.request(&asleep, "volume", &[]),
             Err(DispatchError::Forbidden { .. })
         ));
+    }
+
+    #[test]
+    fn shell_enabled_expands_glossary_and_stages_confirm() {
+        let mut hands = Hands::new();
+        let settings = softwake_tools::ToolsSettings {
+            shell_enabled: true,
+            confirm_policy: softwake_tools::ConfirmPolicy::Always,
+            ..softwake_tools::ToolsSettings::default()
+        };
+        hands.set_tools_settings_for_test(Some(settings));
+        hands.set_glossary(
+            softwake_soul::Glossary::parse("aau → echo hello-tools\n").expect("glossary"),
+        );
+        let machine = awake();
+        let outcome = hands
+            .request(&machine, "shell", &["aau".to_owned()])
+            .expect("pending");
+        let RequestOutcome::Pending(pending) = outcome else {
+            panic!("expected pending shell");
+        };
+        assert_eq!(pending.name, "shell");
+        assert_eq!(pending.args, vec!["echo hello-tools".to_owned()]);
+        assert!(pending.description.contains("echo hello-tools"));
+
+        let confirmed = hands
+            .confirm(&machine, &pending.pending_id, Some("shell"))
+            .expect("confirm");
+        assert_eq!(confirmed.name, "shell");
+        assert!(confirmed.detail.contains("hello-tools"));
     }
 
     #[test]

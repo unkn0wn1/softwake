@@ -78,6 +78,9 @@ const MUTATING_FIRST: &[&str] = &[
     "unlink", "delete", "send", "write",
 ];
 
+/// Remote or privileged first tokens — always require confirm-echo readback for shell.
+const REMOTE_FIRST: &[&str] = &["ssh", "scp", "rsync", "sudo"];
+
 impl Glossary {
     /// Parse alias rows from `glossary.md`.
     ///
@@ -259,12 +262,14 @@ fn is_alias_token(alias: &str) -> bool {
 
 fn requires_readback(glossary: &Glossary, command: &str, expanded: &str) -> bool {
     let mut original = command.split_whitespace();
-    let first_is_mutating = original.next().is_some_and(|token| {
+    let first = original.next();
+    let first_is_sensitive = first.is_some_and(|token| {
         MUTATING_FIRST
             .iter()
+            .chain(REMOTE_FIRST.iter())
             .any(|name| token.eq_ignore_ascii_case(name))
     });
-    if first_is_mutating {
+    if first_is_sensitive {
         return true;
     }
     if command
@@ -399,6 +404,11 @@ notes -> /path/to/notes
         assert!(glossary.confirm_echo("rm notes").requires_readback);
         assert!(glossary.confirm_echo("RM file").requires_readback);
         assert!(glossary.confirm_echo("send docs").requires_readback);
+        assert!(glossary.confirm_echo("ssh aau").requires_readback);
+        assert!(glossary.confirm_echo("SSH host").requires_readback);
+        assert!(glossary.confirm_echo("sudo id").requires_readback);
+        assert!(glossary.confirm_echo("scp a b").requires_readback);
+        assert!(glossary.confirm_echo("rsync a b").requires_readback);
 
         let quiet = glossary.confirm_echo("cat README.md");
         assert!(quiet.readback.starts_with("readback: cat README.md\n"));

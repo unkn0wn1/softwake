@@ -8,6 +8,22 @@
 //! spawns a process, writes a file, or opens a socket. The notification sink
 //! and the email outbox live in the daemon. This crate classifies names and
 //! shapes `email_send` arguments. It does not send.
+//!
+//! [`SHELL_TOOL`] is confirm-gated. The daemon refuses it until Tools Settings
+//! enable shell, expands glossary aliases, confirm-echoes, then may spawn
+//! `/bin/sh -c` via [`shell`]. This crate still does not spawn on invoke.
+
+mod settings;
+mod shell;
+
+pub use settings::{
+    ConfirmPolicy, FileToolsSettings, TOOLS_FILE_NAME, ToolsSettings, ToolsSettingsError,
+    parse_confirm_policy, resolve_tools_file, resolve_tools_file_from,
+};
+pub use shell::{
+    DEFAULT_OUTPUT_CAP, DEFAULT_SHELL_TIMEOUT, ShellError, ShellOutput, format_shell_output,
+    run_shell, run_shell_with,
+};
 
 /// Name of the safe tool. Behaviour matches phase 1.
 pub const ECHO_TOOL: &str = "echo";
@@ -18,7 +34,7 @@ pub const NOTIFY_TOOL: &str = "notify";
 /// Confirm-gated send. The daemon appends one in-memory message after confirm.
 pub const EMAIL_SEND_TOOL: &str = "email_send";
 
-/// Registered deny name. It is never runnable.
+/// Confirm-gated shell. Off until Tools Settings enable it; the daemon spawns after confirm.
 pub const SHELL_TOOL: &str = "shell";
 
 /// How the daemon may treat a registered tool.
@@ -79,8 +95,8 @@ const PHASE2: &[ToolMeta] = &[
     },
     ToolMeta {
         name: SHELL_TOOL,
-        risk: ToolRisk::Deny,
-        description: "Run a shell. Denied.",
+        risk: ToolRisk::Confirm,
+        description: "Run a shell command after confirm. Off until enabled in Tools Settings.",
     },
 ];
 
@@ -245,7 +261,7 @@ impl Default for ToolRegistry {
 fn render(name: &str, args: &[String]) -> String {
     match name {
         ECHO_TOOL => echo_detail(args),
-        NOTIFY_TOOL => args.join(" "),
+        NOTIFY_TOOL | SHELL_TOOL => args.join(" "),
         _ => String::new(),
     }
 }
@@ -331,13 +347,13 @@ mod tests {
                 (ECHO_TOOL, ToolRisk::Safe),
                 (NOTIFY_TOOL, ToolRisk::Confirm),
                 (EMAIL_SEND_TOOL, ToolRisk::Confirm),
-                (SHELL_TOOL, ToolRisk::Deny),
+                (SHELL_TOOL, ToolRisk::Confirm),
             ]
         );
         assert_eq!(registry.risk("echo"), Some(ToolRisk::Safe));
         assert_eq!(registry.risk("notify"), Some(ToolRisk::Confirm));
         assert_eq!(registry.risk("email_send"), Some(ToolRisk::Confirm));
-        assert_eq!(registry.risk("shell"), Some(ToolRisk::Deny));
+        assert_eq!(registry.risk("shell"), Some(ToolRisk::Confirm));
         assert_eq!(registry.risk("Email_Send"), None);
         assert_eq!(registry.risk("volume"), None);
         assert_eq!(registry.risk("Echo"), None);
@@ -504,22 +520,28 @@ mod tests {
     }
 
     #[test]
-    fn shell_is_denied_from_both_entry_points() {
+    fn shell_is_confirm_gated_and_invoke_confirmed_returns_command() {
         let registry = registry();
-        let denied = ToolError::Denied {
-            name: "shell".to_owned(),
-        };
+        let args = vec!["echo".to_owned(), "hi".to_owned()];
         assert_eq!(
-            registry.invoke("shell", &["rm".to_owned()]),
-            Err(denied.clone())
+            registry.invoke("shell", &args),
+            Err(ToolError::NeedsConfirm {
+                name: "shell".to_owned()
+            })
         );
         assert_eq!(
-            registry.invoke_confirmed("shell", &["rm".to_owned()]),
-            Err(denied)
+            registry
+                .invoke_confirmed("shell", &args)
+                .expect("confirmed")
+                .detail,
+            "echo hi"
         );
         assert_eq!(
-            registry.invoke("shell", &[]).expect_err("deny").to_string(),
-            "tool denied: shell"
+            registry
+                .invoke("shell", &[])
+                .expect_err("confirm")
+                .to_string(),
+            "tool requires confirmation: shell"
         );
     }
 

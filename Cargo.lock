@@ -3922,6 +3922,8 @@ dependencies = [
 name = "softwake-tools"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "thiserror 2.0.19",
 ]
 
@@ -3935,6 +3937,7 @@ dependencies = [
  "softwake-ipc",
  "softwake-providers",
  "softwake-soul",
+ "softwake-tools",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",

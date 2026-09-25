@@ -197,3 +197,13 @@ commands.allow = ["profile_rename"]
 identifier = "allow-profile-set-active"
 description = "Switch the active Softwake profile used on the next awake."
 commands.allow = ["profile_set_active"]
+
+[[permission]]
+identifier = "allow-tools-snapshot"
+description = "Load Tools Settings."
+commands.allow = ["tools_snapshot"]
+
+[[permission]]
+identifier = "allow-tools-save"
+description = "Save Tools Settings."
+commands.allow = ["tools_save"]

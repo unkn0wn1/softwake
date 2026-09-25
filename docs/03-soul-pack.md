@@ -22,7 +22,7 @@ Check order is `soul.md`, then `user.md`, then `rules.md`, then `glossary.md`. T
 | Long-term memory | Separate crate `softwake-memory` ([ADR 0009](ADR-0009-long-term-memory.md)). Thin local store behind a trait. Off until the operator enables a backend. The durable backend is an opt-in JSON file. Honcho is not the default |
 | `tools.md` or policy TOML | Human-readable tool policy mirroring allowlists. A later file may only raise a known row's risk, or be refused ([ADR 0010](ADR-0010-policy-engine.md)) |
 
-The runtime policy stub names `echo` (safe), `notify` (confirm), `email_send` (confirm), and `shell` (deny). `email_send` runs only after `confirm_tool` ([ADR 0008](ADR-0008-connector-boundary.md)). `rules.md` does not feed `PolicyEngine`. A sentence that allows `shell` does not make `shell` runnable.
+The runtime policy stub names `echo` (safe), `notify` (confirm), `email_send` (confirm), and `shell` (confirm, off until Tools Settings). `email_send` runs only after `confirm_tool` ([ADR 0008](ADR-0008-connector-boundary.md)). `rules.md` does not feed `PolicyEngine`. A sentence that allows `shell` does not make `shell` runnable.
 
 Memory is a **separate module** ([ADR 0009](ADR-0009-long-term-memory.md)) with `remember`, `recall`, and `forget`. Do not stuff memory retrieval into `softwake-soul` parsing. Soul pack renders instructions. The session layer attaches retrieved snippets, and it does not attach them yet. The durable backend is `FileMemory`. This pack does not load `memory.json`.
 
@@ -52,7 +52,7 @@ Expand splits on whitespace and replaces a token only when it equals an alias. O
 
 ## Confirm-echo
 
-`Glossary::confirm_echo` and `SoulPack::confirm_echo` build a readback for command text. They do not run a command. The daemon does not call them. `shell` stays deny.
+`Glossary::confirm_echo` and `SoulPack::confirm_echo` build a readback for command text. The daemon calls them for gated `shell` ([ADR 0018](ADR-0018-tools-settings-shell.md)). Echo text still does not authorize a run.
 
 `requires_readback` is true when the first token is a mutating verb, when any original token is an alias, or when any expanded token is `~`, starts with `~/`, or starts with `/`. A quiet safe read can skip showing the text. The string is still built.
 
