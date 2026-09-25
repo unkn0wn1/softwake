@@ -30,7 +30,13 @@ function soulLine(status) {
   if (!status.soul) {
     return "soul: unknown";
   }
-  return status.soul.ok ? "soul: ok" : "soul: missing";
+  if (status.soul.ok) {
+    return "soul: ok";
+  }
+  if (status.soul.reason) {
+    return "soul: missing — " + status.soul.reason;
+  }
+  return "soul: missing";
 }
 
 function showPending(status) {

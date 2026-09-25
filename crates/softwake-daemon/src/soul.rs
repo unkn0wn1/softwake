@@ -123,7 +123,7 @@ impl LoadedSoul {
 /// Operator-facing reload reply.
 pub(crate) fn reload_message(ok: bool, reason: Option<&str>) -> String {
     if ok {
-        "reloaded soul pack; applies on next awake".to_owned()
+        "reloaded soul pack; applies on next awake. Read soul.md, user.md, rules.md, and glossary.md.".to_owned()
     } else {
         let reason = reason.unwrap_or("unreadable");
         format!("soul pack invalid ({reason}); applies on next awake once the pack is valid")
@@ -155,10 +155,20 @@ impl TestSoulDir {
         dir
     }
 
-    /// Replace both required files.
+    /// Replace the four required files.
+    ///
+    /// `rules.md` and `glossary.md` reset to the defaults. A test that needs
+    /// a custom or broken file writes it after this call.
     pub(crate) fn write(&self, soul: &str, user: &str) {
         fs::write(self.path.join("soul.md"), soul).expect("write soul.md");
         fs::write(self.path.join("user.md"), user).expect("write user.md");
+        fs::write(
+            self.path.join("rules.md"),
+            "No email send. Hand drafts to the operator.\n",
+        )
+        .expect("write rules.md");
+        fs::write(self.path.join("glossary.md"), "docs → /path/to/docs\n")
+            .expect("write glossary.md");
     }
 
     /// Directory the daemon should open.

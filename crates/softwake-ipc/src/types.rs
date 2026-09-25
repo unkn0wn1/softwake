@@ -295,8 +295,10 @@ impl IpcError {
 
 /// Last soul-pack read.
 ///
-/// Older peers omit this object. `ok` is false when `soul.md` or `user.md`
-/// is missing or failed validation. `reason` is a short sentence in that case.
+/// Older peers omit this object. `ok` is false when any of `soul.md`,
+/// `user.md`, `rules.md`, or `glossary.md` is missing, fails validation,
+/// or the glossary map does not parse. `reason` is a short sentence in
+/// that case. The fields are unchanged.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SoulReport {
     /// The last read passed validation.

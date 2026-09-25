@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-24
+- **Amended:** 2026-09-25 — `reload_soul` re-reads the four-file pack from [ADR 0011](ADR-0011-context-pack.md); protocol generation stays 1.
 
 ## Decision
 

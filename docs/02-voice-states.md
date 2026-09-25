@@ -18,7 +18,7 @@ Three states. Names are fixed vocabulary for UI, logs, and docs.
 ## Awake
 
 - Entered when local wake engine accepts a wake phrase (and optional confidence / cooldown rules) **and** the loaded soul pack is valid.
-- A missing or invalid `soul.md` / `user.md` refuses the transition. The machine stays in sleep (capture still running). Hibernate, sleep, and UI resume are not blocked.
+- A missing or invalid `soul.md`, `user.md`, `rules.md`, or `glossary.md` refuses the transition, including an unparseable glossary. The machine stays in sleep (capture still running). Hibernate, sleep, and UI resume are not blocked.
 - Acting session starts. Phase 1 opens a text session and stores the rendered soul instructions. It can record a synthetic user turn. It does not call a model.
 - Streaming STT/TTS may act ([ADR 0007](ADR-0007-awake-stt-tts.md)). The default path is mock inject (`hear`) and mock record (`say`). Prefer silence for TTS outside awake.
 - The soul pack last read at startup or by `reload_soul` is applied as system instructions for this session. A reload during awake waits for the next awake entry and does not replace the instructions already stored on the open session.
