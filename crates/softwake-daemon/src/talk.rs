@@ -12,7 +12,9 @@ use softwake_voice::TalkBuffer;
 #[cfg(feature = "live-http")]
 use softwake_voice::{PLAYBACK_TIMEOUT, PlaybackMode, play_audio};
 
-use crate::chat::{DiskChat, LIVE_HTTP_DISABLED};
+use crate::chat::DiskChat;
+#[cfg(not(feature = "live-http"))]
+use crate::chat::LIVE_HTTP_DISABLED;
 
 /// Shown when the held clip is shorter than the minimum.
 pub(crate) const TALK_TOO_SHORT: &str = "hold the mic a little longer";
