@@ -35,6 +35,7 @@ Keep crates small and single-purpose. Exact names can shift; responsibilities sh
 | `softwake-session` | Text session for one awake period. Stores rendered soul instructions. No model client yet |
 | `softwake-tools` | Tool registry with safe, confirm, and deny metadata. `echo` is safe, `notify` and `email_send` wait for confirmation, `shell` is denied |
 | `softwake-connectors` | World I/O boundary. Email trait and in-memory mock. Registry is confirm or deny. No live cloud client in the default build ([ADR 0008](ADR-0008-connector-boundary.md)) |
+| `softwake-memory` | Long-term memory boundary. `Memory` trait and in-memory mock, off until enabled. The daemon does not call it ([ADR 0009](ADR-0009-long-term-memory.md)) |
 | `softwake-soul` | Load/validate soul pack; render system instructions |
 | `softwake-ipc` | Shared protocol: newline-delimited JSON over a Unix socket |
 | `softwake-ui` | Tauri window (thin). Status and buttons call the daemon |
@@ -46,7 +47,7 @@ Do not put PipeWire types into `softwake-soul`. Do not put HTTP clients into `so
 1. **UI is untrusted for action.** It may request hibernate/wake and edit config; the daemon enforces policy.
 2. **Tools run out-of-process** where practical, with explicit argv/env and timeouts. Phase 1's `echo` tool stays in-process because it performs no I/O.
 3. **Secrets** stay in OS keychain / env; never in soul markdown committed to git.
-4. **Network** only from session and explicitly allowed tools — not from the wake engine. A connector backend may use the network only in a future opt-in feature. The default mock does not open a socket.
+4. **Network** only from session and explicitly allowed tools — not from the wake engine. A connector backend may use the network only in a future opt-in feature. The default mock does not open a socket. The memory mock does not use the network.
 
 ## Audio path
 
@@ -93,6 +94,10 @@ Unix domain socket and newline-delimited JSON, protocol version 1. The path, fra
 ## Connectors
 
 World I/O is a library boundary in `softwake-connectors` ([ADR 0008](ADR-0008-connector-boundary.md)). The daemon calls that crate from `Hands` when a confirmed `email_send` runs: `authorize_confirmed` for `email` / `send`, then `EmailConnector::send` on a `MockEmail`. The registry is confirm or deny: `email` / `send` is confirm, and `email` / `delete`, `drive` / `list`, and `calendar` / `list` are deny. `MockEmail` appends to an in-memory outbox when the caller sends after authorization. The registry methods themselves do not send. A live backend, when one exists, is an opt-in feature that CI does not enable. The default mock does not open a socket. Protocol generation stays 1; connector actions are not socket commands.
+
+## Memory
+
+Long-term memory is a library boundary in `softwake-memory` ([ADR 0009](ADR-0009-long-term-memory.md)). `Memory` is the trait (`remember`, `recall`, `forget`). `MockMemory` is the default backend. It stores snippets on the value only after that value is enabled, and it does not open a socket or write a file. The daemon and `softwake-session` do not call it. Soul rendering stays instruction-only. A durable backend, when one exists, writes under `$XDG_STATE_HOME/softwake` when that variable is set and non-blank, and under `~/.local/state/softwake` otherwise. This change does not create that directory. Honcho is not a dependency.
 
 ## Config layout (draft)
 

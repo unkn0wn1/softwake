@@ -9,6 +9,7 @@ members = [
     "crates/softwake-session",
     "crates/softwake-tools",
     "crates/softwake-connectors",
+    "crates/softwake-memory",
     "crates/softwake-soul",
     "crates/softwake-ipc",
     "crates/softwake-ui",
@@ -27,6 +28,7 @@ thiserror = "2"
 tracing = "0.1"
 softwake-audio = { path = "crates/softwake-audio" }
 softwake-connectors = { path = "crates/softwake-connectors" }
+softwake-memory = { path = "crates/softwake-memory" }
 softwake-ipc = { path = "crates/softwake-ipc" }
 softwake-session = { path = "crates/softwake-session" }
 softwake-soul = { path = "crates/softwake-soul" }
