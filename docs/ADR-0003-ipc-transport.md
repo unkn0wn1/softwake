@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-24
-- **Amended:** 2026-09-25 — `reload_soul` re-reads the four-file pack from [ADR 0011](ADR-0011-context-pack.md). Clients may send `ask`. Protocol generation stays 1.
+- **Amended:** 2026-09-25 — `reload_soul` re-reads the four-file pack from [ADR 0011](ADR-0011-context-pack.md). Clients may send `ask`. Clients may send `wake`. Protocol generation stays 1.
 
 ## Decision
 
@@ -32,6 +32,8 @@ Clients may also send `tool_request` (`id`, `name`, and `args`). `args` defaults
 Status may include `pending_tool` and `last_tool`. Both are omitted when absent, so older payloads still decode. These messages are additive. The protocol generation stays `1`. See [ADR 0004](ADR-0004-first-safe-tool.md) and [ADR 0005](ADR-0005-tool-confirmation.md).
 
 Clients may send `ask` (`id`, `text`). The daemon completes one chat turn only while awake. Success is `status: ok` and `message` holds the assistant text. Refusal is `status: err` and `kind: chat_rejected`. No event is broadcast. The bearer is not on the wire. `ctl chat` uses this same message. The hello handshake is unchanged. See [ADR 0013](ADR-0013-session-provider.md).
+
+Clients may send `wake` (`id` only). The daemon calls the existing wake-phrase path. Success is `status: ok` and a `state_changed` broadcast. Refusal is `status: err` and `kind: protocol`. `wake_from_ui` is unchanged: it leaves hibernate and lands in sleep. The protocol generation stays `1`.
 
 Lines longer than 1 MiB, including the newline, are rejected.
 

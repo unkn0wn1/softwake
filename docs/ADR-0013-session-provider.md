@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-25
-- **Amended:** 2026-09-25 (budgeted FileMemory recall on ask/chat; `ctl ask` on generation 1)
+- **Amended:** 2026-09-25 (budgeted FileMemory recall on ask/chat; `ctl ask` on generation 1; `ctl wake` on generation 1)
 
 ## Decision
 
@@ -26,7 +26,7 @@ Readiness uses `ProviderHandle` from [ADR 0012](ADR-0012-model-providers.md): Se
 
 `complete_chat` is the chat/completions call. `MockTransport` is the CI client. `LiveTransport::bounded` (30s connect, read, and overall) runs only when `softwake-daemon` is built with `live-http`.
 
-The operator paths are `softwaked demo` (`ask` and `chat`) and `softwaked ctl ask` / `ctl chat` against a running `softwaked serve`. Both use the same completion. Mic and STT are not on this path. Serve starts in sleep. `ctl resume` lands in sleep. This slice does not wake serve from the microphone or from ctl. A person enters awake with `softwaked demo` and `wake`, which is a different process from serve. Tests call `wake_phrase_for_test` on the serve handle. Protocol generation stays 1.
+The operator paths are `softwaked demo` (`ask` and `chat`) and `softwaked ctl ask` / `ctl chat` against a running `softwaked serve`. Both use the same completion. Mic and STT are not on this path. Serve starts in sleep. `ctl wake` enters awake on that serve through the same soul gate. `ctl resume` still lands in sleep. There is still no microphone. `wake_phrase_for_test` calls the same runtime method. Protocol generation stays 1.
 
 `ctl ask` and `ctl chat` send [`ClientMessage::Ask`](../crates/softwake-ipc/src/types.rs). Success puts the assistant text in the status `message` field. A refusal is [`IpcError::ChatRejected`](../crates/softwake-ipc/src/types.rs) carrying the sentences in the table above, including the live-HTTP sentence. ctl prints that sentence and exits non-zero. The bearer is not on the wire.
 
@@ -93,11 +93,12 @@ assistant: <model text>
 Start `softwaked serve`, then in another terminal:
 
 ```bash
+cargo run -p softwake-daemon -- ctl wake
 cargo run -p softwake-daemon -- ctl ask hello
 cargo run -p softwake-daemon -- ctl chat hello there
 ```
 
-That daemon starts asleep, so both commands are refused until it is awake. `softwaked demo` and `wake` enter awake in a different process. `ctl resume` lands in sleep. A live answer still needs `softwaked serve` built with `live-http`. The default serve returns the live-HTTP sentence when Settings are ready and does not open a provider socket.
+That daemon starts asleep, so `ctl ask` and `ctl chat` are refused until `ctl wake` has entered awake. `ctl wake` needs a valid soul pack. `ctl resume` lands in sleep. A live answer still needs `softwaked serve` built with `live-http`. The default serve returns the live-HTTP sentence when Settings are ready and does not open a provider socket.
 
 ## Consequences
 

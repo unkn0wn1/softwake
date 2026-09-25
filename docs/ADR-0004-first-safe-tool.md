@@ -50,7 +50,7 @@ cargo run -p softwake-daemon -- demo
 
 `sleep` inside the 800 ms phrase cooldown stays awake. `hibernate` from awake does not wait for that cooldown. It closes the session and stops capture.
 
-`softwaked ctl tool echo hello` talks to a running `softwaked serve`. The daemon starts in sleep, so the call is refused until something has entered awake. The typed demo is the path that enters awake today. Serve does not yet feed capture into the wake engine.
+`softwaked ctl tool echo hello` talks to a running `softwaked serve`. The daemon starts in sleep, so the call is refused until something has entered awake. `ctl wake` is the serve path that enters awake. Serve does not yet feed capture into the wake engine.
 
 ## Consequences
 

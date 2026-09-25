@@ -13,6 +13,8 @@
 //! `ask` completes one provider turn on the open session while awake
 //! ([ADR 0013](../../docs/ADR-0013-session-provider.md)).
 
+use std::time::Instant;
+
 use softwake_audio::{AudioCapture, MockAudioCapture};
 use softwake_ipc::VoiceState as WireState;
 use softwake_ipc::{Command, Event as WireEvent, IpcError, PendingTool, ResponseBody, Status};
@@ -36,6 +38,8 @@ pub(crate) struct Outcome {
 
 pub(crate) struct Runtime {
     machine: Machine,
+    /// Wall clock for [`Self::tick`]. Phrase cooldowns use machine time only.
+    last_tick: Instant,
     capture: MockAudioCapture,
     pcm: NullDetector,
     /// Last PCM score from [`Self::drain_pcm`]. `None` means the queue was empty.
@@ -59,6 +63,7 @@ impl Runtime {
         let Ok(()) = capture.start();
         Self {
             machine: Machine::new(CooldownConfig::default()),
+            last_tick: Instant::now(),
             capture,
             pcm: NullDetector,
             last_pcm_hit: None,
@@ -96,17 +101,28 @@ impl Runtime {
     /// An invalid pack does not change the voice state. The pack applied here
     /// is the last startup or `reload_soul` read, not a fresh disk read.
     ///
-    /// Serve does not open a microphone. [`Self::drain_pcm`] still scores any
-    /// frame already queued. The typed demo applies the same [`LoadedSoul`]
-    /// gate itself; this is the serve entry for a wake phrase, and tests call it.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Serve does not open a microphone. This method does not call
+    /// [`Self::drain_pcm`]. The typed demo applies the same [`LoadedSoul`]
+    /// gate on its own machine.
     pub(crate) fn wake_phrase(&mut self) -> Outcome {
+        self.tick();
         if let Some(reason) = self.soul.refusal() {
             return Self::rejected(IpcError::protocol(reason));
         }
         self.apply_voice(Event::WakePhrase, |error| {
             IpcError::protocol(error.to_string())
         })
+    }
+
+    /// Move the phrase clock forward by the wall time since the previous tick.
+    ///
+    /// Called at the start of [`Self::wake_phrase`] and [`Self::transition`].
+    /// A rejection still advances the clock and does not re-arm the gate.
+    fn tick(&mut self) {
+        let now = Instant::now();
+        self.machine
+            .advance(now.saturating_duration_since(self.last_tick));
+        self.last_tick = now;
     }
 
     /// Instructions stored the last time awake was entered successfully.
@@ -352,6 +368,7 @@ impl Runtime {
     }
 
     fn transition(&mut self, command: Command) -> Outcome {
+        self.tick();
         let event = match command {
             Command::Hibernate => Event::UiHibernate,
             Command::WakeFromUi => Event::UiResume,
@@ -680,6 +697,58 @@ mod tests {
                 ..
             }]
         ));
+    }
+
+    #[test]
+    fn wake_after_sleep_and_resume_respects_the_phrase_cooldown() {
+        let (mut runtime, _soul) = valid_runtime();
+        let woke = runtime.wake_phrase();
+        assert_eq!(woke.body.status().expect("awake").state, VoiceState::Awake);
+
+        runtime.handle(Command::Sleep);
+        let cooled = runtime.wake_phrase();
+        match cooled.body {
+            ResponseBody::Err {
+                error: IpcError::Protocol { message },
+            } => assert!(
+                message.contains("cannot apply wake phrase during cooldown"),
+                "{message}"
+            ),
+            other => panic!("expected cooldown, got {other:?}"),
+        }
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Sleep);
+
+        runtime.machine.advance(Duration::from_millis(800));
+        let again = runtime.wake_phrase();
+        assert_eq!(
+            again.body.status().expect("awake after cooldown").state,
+            VoiceState::Awake
+        );
+
+        runtime.handle(Command::Hibernate);
+        let resumed = runtime.handle(Command::WakeFromUi);
+        assert_eq!(
+            resumed.body.status().expect("resume").state,
+            VoiceState::Sleep
+        );
+        let cooled = runtime.wake_phrase();
+        match cooled.body {
+            ResponseBody::Err {
+                error: IpcError::Protocol { message },
+            } => assert!(message.contains("during cooldown"), "{message}"),
+            other => panic!("expected cooldown after resume, got {other:?}"),
+        }
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Sleep);
+
+        runtime.machine.advance(Duration::from_millis(800));
+        let woke = runtime.wake_phrase();
+        assert_eq!(
+            woke.body
+                .status()
+                .expect("awake after resume cooldown")
+                .state,
+            VoiceState::Awake
+        );
     }
 
     #[test]

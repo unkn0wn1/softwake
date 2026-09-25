@@ -25,7 +25,7 @@ No deploy pipeline in phase 1. Tag releases later.
 
 ## Product gates (phase 1)
 
-Manual checklist. Run it after clone + soul templates. The typed demo (`softwaked demo`) is the supported path that enters awake. Default builds use mock capture and do not open a microphone. Native PipeWire is the `pipewire-native` feature and CI does not enable it. Wake and sleep phrases in the demo are typed commands that feed the same state machine. The PCM detector still sees a silent frame on that path ([ADR 0006](ADR-0006-on-device-wake.md)).
+Manual checklist. Run it after clone + soul templates. The typed demo (`softwaked demo`) enters awake in its own process. `softwaked ctl wake` is the serve path into awake. Default builds use mock capture and do not open a microphone. Native PipeWire is the `pipewire-native` feature and CI does not enable it. Wake and sleep phrases in the demo are typed commands that feed the same state machine. The PCM detector still sees a silent frame on that path ([ADR 0006](ADR-0006-on-device-wake.md)).
 
 Copy templates first:
 
@@ -43,11 +43,11 @@ cargo run -p softwake-daemon -- demo
 | Gate | Pass condition | How to check today |
 |------|----------------|--------------------|
 | Sleep silence | Ambient speech produces **zero** tool calls for N minutes | Automated in unit tests for the asleep refuse path. Live ambient speech waits on a real mic (out of phase 1). Typed demo: `tool echo` while asleep is rejected. |
-| Wake | Configured phrase transitions sleep → awake within agreed latency budget | Typed demo: `wake` (or the configured wake phrase path). Needs a valid soul pack. |
+| Wake | Configured phrase transitions sleep → awake within agreed latency budget | Typed demo: `wake` (or the configured wake phrase path). Needs a valid soul pack. `ctl wake` against `serve` moves sleep to awake when the pack is valid. |
 | Sleep phrase | Awake → sleep; tools stop; mic stays up | Typed demo: `sleep` after the post-wake cooldown. Capture stays running. Session closes. Further `tool` calls are rejected. |
 | Hibernate | UI hibernate stops capture (no frames); voice cannot wake | Typed demo / UI / `ctl hibernate`: capture stopped; `wake` is rejected until `resume`. |
 | UI wake | Hibernate → sleep via UI | UI button or `ctl resume` / demo `resume`. Lands in sleep, not awake. |
-| Soul required | Missing any of `soul.md`, `user.md`, `rules.md`, or `glossary.md` blocks awake with a clear error | Remove a pack file and `wake`; status shows that file missing and state stays sleep. Hibernate / resume / sleep still work. |
+| Soul required | Missing any of `soul.md`, `user.md`, `rules.md`, or `glossary.md` blocks awake with a clear error | Remove a pack file and typed `wake` or `ctl wake`; status shows that file missing and state stays sleep. Hibernate / resume / sleep still work. |
 | Safe tool | One safe tool succeeds end-to-end while awake | Typed demo while awake: `tool echo hello` → `echo: hello`; `tool echo` → `pong`. Unknown names (`tool volume`) are rejected. `ctl tool echo hello` works against `serve` only after the daemon is awake. |
 | Confirm tool | A confirm-gated tool does not run until confirm | Typed demo while awake: `tool notify hello` prints `waiting for confirm` and does not append; `confirm` appends `hello`; `cancel` appends nothing. `tool email_send ada@example.com hello a short note` stays empty until `confirm`, which appends one in-memory message. `tool shell` is denied. Sleep or hibernate clears a pending confirmation. |
 

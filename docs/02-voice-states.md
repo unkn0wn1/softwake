@@ -17,7 +17,7 @@ Three states. Names are fixed vocabulary for UI, logs, and docs.
 
 ## Awake
 
-- Entered when local wake engine accepts a wake phrase (and optional confidence / cooldown rules) **and** the loaded soul pack is valid.
+- Entered when local wake engine accepts a wake phrase (and optional confidence / cooldown rules) **and** the loaded soul pack is valid. `softwaked ctl wake` is the serve entry for that same wake phrase, including the soul-pack refusal. `ctl resume` still lands in sleep.
 - A missing or invalid `soul.md`, `user.md`, `rules.md`, or `glossary.md` refuses the transition, including an unparseable glossary. The machine stays in sleep (capture still running). Hibernate, sleep, and UI resume are not blocked.
 - Acting session starts. The text session stores the rendered context pack and, on typed `ask` / `chat`, sends it to the selected provider ([ADR 0013](ADR-0013-session-provider.md)). Sleep and hibernate still close the session and do not call the model.
 - Streaming STT/TTS may act ([ADR 0007](ADR-0007-awake-stt-tts.md)). The default path is mock inject (`hear`) and mock record (`say`). Prefer silence for TTS outside awake.
