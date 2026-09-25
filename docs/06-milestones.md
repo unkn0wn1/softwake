@@ -44,14 +44,19 @@
 
 ## Phase 4 — Context pack, then provider access
 
-**Goal:** The acting session loads a four-file context pack. Provider sign-in and live connectors stay later slices.
+**Goal:** The acting session loads a four-file context pack. Provider sign-in fills a model picker after Test. Live connectors stay later slices.
 
 1. [x] Context pack and confirm-echo foundation ([ADR 0011](ADR-0011-context-pack.md))
    - [x] `softwake-soul` loads `rules.md` and `glossary.md` with `soul.md` and `user.md`. All four are required. A missing or invalid pack, including an unparseable glossary, refuses awake. `reload_soul` re-reads the pack and applies on the next awake.
    - [x] Render order: Identity, User profile, Rules, Glossary, runtime policy stub. The rules section states that rules override soul. A glossary alias does not change tool risk.
    - [x] Repo templates `soul/rules.md` and `soul/glossary.md` use placeholder paths only.
    - [x] Alias expand and confirm-echo readback are library functions with unit tests. No shell. Protocol generation stays 1.
-2. [ ] Provider OAuth settings (xAI / OpenAI)
+2. [x] Provider settings foundation ([ADR 0012](ADR-0012-model-providers.md))
+   - [x] `softwake-providers`: xAI device-code OAuth, xAI API key, OpenAI API key. Secret bag under XDG state (plaintext v1 warning). Settings JSON under XDG config. Model picker empty until Test.
+   - [x] Mock `Transport` for CI. `live-http` (ureq) is opt-in on the crate; `softwake-ui` enables it by default for Settings Test and sign-in.
+   - [x] Thin Settings panel in `softwake-ui`. Protocol generation stays 1. Daemon and session do not call a chat model yet (`ProviderHandle` stub only).
+   - [ ] OpenRouter and OpenAI-compatible base URL
+   - [ ] Wire awake session chat to the selected provider
 3. [ ] Live email, Drive, and calendar connectors (still open from phase 3)
 4. [ ] In-window editors for `soul.md`, `user.md`, `rules.md`, and `glossary.md` (reload stays how a pack is applied)
 

@@ -36,10 +36,11 @@ Keep crates small and single-purpose. Exact names can shift; responsibilities sh
 | `softwake-tools` | Tool registry with safe, confirm, and deny metadata. `echo` is safe, `notify` and `email_send` wait for confirmation, `shell` is denied |
 | `softwake-connectors` | World I/O boundary. Email, Drive, and calendar traits with in-memory mocks. Registry is confirm or deny. No live cloud client in the default build. The daemon calls the email mock only ([ADR 0008](ADR-0008-connector-boundary.md)) |
 | `softwake-policy` | Classifies tool names and connector pairs. Unknown subjects are denied. Overrides may only tighten. The daemon asks it before a tool runs ([ADR 0010](ADR-0010-policy-engine.md)) |
+| `softwake-providers` | Model credentials, xAI device-code OAuth, Test probes, secret bag. Mock transport by default; `live-http` for real HTTPS ([ADR 0012](ADR-0012-model-providers.md)) |
 | `softwake-memory` | Long-term memory boundary. `Memory` trait, in-memory mock, and opt-in JSON file. Off until enabled. The daemon does not call it ([ADR 0009](ADR-0009-long-term-memory.md)) |
 | `softwake-soul` | Load four files (`soul.md`, `user.md`, `rules.md`, `glossary.md`), render instructions, and expand glossary aliases ([ADR 0011](ADR-0011-context-pack.md)) |
 | `softwake-ipc` | Shared protocol: newline-delimited JSON over a Unix socket |
-| `softwake-ui` | Tauri window (thin). Status and buttons call the daemon |
+| `softwake-ui` | Tauri window (thin). Status and buttons call the daemon. Provider Settings call `softwake-providers` in-process |
 
 Do not put PipeWire types into `softwake-soul`. Do not put HTTP clients into `softwake-state`.
 
@@ -95,6 +96,10 @@ Unix domain socket and newline-delimited JSON, protocol version 1. The path, fra
 ## Connectors
 
 World I/O is a library boundary in `softwake-connectors` ([ADR 0008](ADR-0008-connector-boundary.md)). The daemon calls that crate from `Hands` when a confirmed `email_send` runs: `authorize_confirmed` for `email` / `send`, then `EmailConnector::send` on a `MockEmail`. The registry is confirm or deny: `email` / `send`, `drive` / `list`, and `calendar` / `list` are confirm; `email` / `delete`, `drive` / `delete`, and `calendar` / `delete` are deny. `MockEmail` appends to an in-memory outbox when the caller sends after authorization. `MockDrive::list` and `MockCalendar::list` return what that value stores. The daemon does not call those list mocks. The registry methods themselves do not send or list. Before the email send, `softwake-policy` must evaluate `email` / `send` as confirm. A live backend, when one exists, is an opt-in feature that CI does not enable. The default mocks do not open a socket. Protocol generation stays 1; connector actions are not socket commands.
+
+## Model providers
+
+Credentials and Settings Test live in `softwake-providers` ([ADR 0012](ADR-0012-model-providers.md)). Three kinds ship: xAI device-code OAuth, xAI API key, and OpenAI API key. Secrets are a plaintext-at-rest bag under `$XDG_STATE_HOME/softwake/secrets.json` (mode `0600`) with a documented warning. Non-secret selection and the Test model cache are `$XDG_CONFIG_HOME/softwake/providers.json`. The model dropdown stays empty until Test succeeds. Default crate tests use `MockTransport` and do not open a socket. The `live-http` feature enables `ureq`. The window Settings panel talks to this crate through Tauri commands. IPC protocol generation stays 1. The daemon and text session do not call a chat model yet.
 
 ## Policy
 

@@ -86,3 +86,52 @@ button:disabled {
   opacity: 0.45;
   cursor: default;
 }
+
+.settings {
+  margin-top: 36px;
+  padding-top: 24px;
+  border-top: 1px solid #3c3948;
+}
+
+.settings h2 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+  font-weight: 560;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+}
+
+.field span {
+  color: #b7b1c4;
+  font-size: 0.85rem;
+}
+
+select,
+input[type="password"] {
+  appearance: none;
+  border: 1px solid #3c3948;
+  border-radius: 10px;
+  background: #1b1a22;
+  color: inherit;
+  font: inherit;
+  padding: 12px;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 8px 0 12px;
+}
+
+.stack {
+  margin: 8px 0 12px;
+}
+
+.hidden {
+  display: none;
+}

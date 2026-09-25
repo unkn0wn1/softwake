@@ -10,6 +10,7 @@ members = [
     "crates/softwake-tools",
     "crates/softwake-connectors",
     "crates/softwake-policy",
+    "crates/softwake-providers",
     "crates/softwake-memory",
     "crates/softwake-soul",
     "crates/softwake-ipc",
@@ -31,6 +32,7 @@ softwake-audio = { path = "crates/softwake-audio" }
 softwake-connectors = { path = "crates/softwake-connectors" }
 softwake-memory = { path = "crates/softwake-memory" }
 softwake-policy = { path = "crates/softwake-policy" }
+softwake-providers = { path = "crates/softwake-providers" }
 softwake-ipc = { path = "crates/softwake-ipc" }
 softwake-session = { path = "crates/softwake-session" }
 softwake-soul = { path = "crates/softwake-soul" }

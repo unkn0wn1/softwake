@@ -26,6 +26,49 @@
         <button type="button" id="confirm" disabled>Confirm</button>
         <button type="button" id="cancel" disabled>Cancel</button>
       </div>
+
+      <section class="settings" aria-labelledby="settings-title">
+        <h2 id="settings-title">Model providers</h2>
+        <p class="meta">
+          Pick a provider, save a key or sign in, press Test, then choose a model. The
+          model list stays empty until Test succeeds.
+        </p>
+        <label class="field">
+          <span>Provider</span>
+          <select id="provider-select"></select>
+        </label>
+        <div id="key-panel" class="stack hidden">
+          <label class="field">
+            <span>API key</span>
+            <input id="api-key" type="password" autocomplete="off" spellcheck="false" />
+          </label>
+          <div class="row">
+            <button type="button" id="save-key">Save key</button>
+            <button type="button" id="clear-key">Clear saved</button>
+          </div>
+        </div>
+        <div id="oauth-panel" class="stack hidden">
+          <p id="oauth-status" class="meta">Not signed in.</p>
+          <p id="oauth-code" class="detail"></p>
+          <div class="row">
+            <button type="button" id="oauth-start">Start sign-in</button>
+            <button type="button" id="oauth-poll" disabled>Poll</button>
+            <button type="button" id="oauth-sign-out">Sign out</button>
+          </div>
+        </div>
+        <div class="row">
+          <button type="button" id="provider-test">Test</button>
+        </div>
+        <p id="test-status" class="meta">Test: not run</p>
+        <label class="field">
+          <span>Model</span>
+          <select id="model-select" disabled>
+            <option value="">Test to load models</option>
+          </select>
+        </label>
+        <p id="provider-error" class="error" role="status"></p>
+        <p id="plaintext-warning" class="detail"></p>
+      </section>
     </main>
     <script src="app.js"></script>
   </body>
