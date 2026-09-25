@@ -1,12 +1,15 @@
-//! Gate a tool call on the voice state, then on the registry.
+//! Gate a tool call on the voice state, then on the policy engine.
 //!
 //! [`softwake_state::Machine::permit_tool_dispatch`] runs first. Sleep and
-//! hibernate never reach the registry. While awake, [`ToolRisk::Safe`] runs
-//! immediately, [`ToolRisk::Confirm`] becomes one pending confirmation, and
-//! [`ToolRisk::Deny`] is refused. The confirm-gated tool does not run, and
-//! the notification sink does not change, until [`Hands::confirm`].
-//! `email_send` uses that same confirmation. The outbox changes only after
-//! [`crate::email_tool::commit_email_send`] accepts the message.
+//! hibernate never reach the engine. While awake, [`PolicyEngine::evaluate`]
+//! classifies the name. [`PolicyDecision::Safe`] runs immediately,
+//! [`PolicyDecision::Confirm`] becomes one pending confirmation, and
+//! [`PolicyDecision::Deny`] is refused. A denied name that is not registered
+//! is reported as unknown. The confirm-gated tool does not run, and the
+//! notification sink does not change, until [`Hands::confirm`]. `email_send`
+//! uses that same confirmation. The outbox changes only after the engine
+//! allows `email` / `send` and [`crate::email_tool::commit_email_send`]
+//! accepts the message.
 //!
 //! One pending confirmation at a time. A second confirm-gated request is
 //! rejected and leaves the first in place. [`Hands::cancel`] clears it in any
@@ -16,6 +19,7 @@
 use std::collections::VecDeque;
 
 use softwake_connectors::{ConnectorRegistry, EMAIL, EMAIL_SEND, MockEmail, OutboundEmail};
+use softwake_policy::{PolicyDecision, PolicyEngine, Subject, permits_confirmed_connector};
 use softwake_state::{Machine, StateError, VoiceState};
 use softwake_tools::{
     EMAIL_SEND_TOOL, NOTIFY_TOOL, ToolError, ToolRegistry, ToolResult, ToolRisk,
@@ -219,9 +223,10 @@ struct Pending {
     description: &'static str,
 }
 
-/// Registry gate, one pending confirmation, the notification sink, the email outbox, and the tool log.
+/// Policy engine, registries, one pending confirmation, the notification sink, the email outbox, and the tool log.
 #[derive(Debug)]
 pub(crate) struct Hands {
+    policy: PolicyEngine,
     registry: ToolRegistry,
     connectors: ConnectorRegistry,
     email: MockEmail,
@@ -233,10 +238,11 @@ pub(crate) struct Hands {
 }
 
 impl Hands {
-    /// Empty sink, empty outbox, empty log, and the builtin registries.
+    /// Empty sink, empty outbox, empty log, the builtin policy engine, and the builtin registries.
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
+            policy: PolicyEngine::builtin(),
             registry: ToolRegistry::phase2(),
             connectors: ConnectorRegistry::phase3(),
             email: MockEmail::default(),
@@ -296,7 +302,8 @@ impl Hands {
 
     /// Run a safe tool, or stage a confirm-gated tool.
     ///
-    /// A confirm-gated tool does not run. The sink and the outbox stay as they are.
+    /// Classification comes from [`PolicyEngine::evaluate`]. A confirm-gated
+    /// tool does not run. The sink and the outbox stay as they are.
     pub(crate) fn request(
         &mut self,
         machine: &Machine,
@@ -310,36 +317,45 @@ impl Hands {
                 state,
             });
         }
-        let Some(meta) = self.registry.lookup(name) else {
-            self.record(name, None, ToolOutcome::Unknown, None);
-            return Err(DispatchError::Unknown {
-                name: name.to_owned(),
-            });
-        };
-        let risk = meta.risk;
-        let description = meta.description;
-        match risk {
-            ToolRisk::Deny => {
-                self.record(name, Some(risk), ToolOutcome::Denied, None);
+        match self.policy.evaluate(&Subject::Tool { name }) {
+            PolicyDecision::Deny => {
+                if self.registry.lookup(name).is_none() {
+                    return Err(self.unknown_tool(name));
+                }
+                self.record(name, Some(ToolRisk::Deny), ToolOutcome::Denied, None);
                 Err(DispatchError::Denied {
                     name: name.to_owned(),
                 })
             }
-            ToolRisk::Safe => match self.registry.invoke(name, args) {
-                Ok(ToolResult { detail }) => {
-                    self.record(name, Some(risk), ToolOutcome::Ran, Some(detail.clone()));
-                    Ok(RequestOutcome::Ran(RanTool {
-                        name: name.to_owned(),
-                        detail,
-                    }))
+            PolicyDecision::Safe => {
+                if self.registry.lookup(name).is_none() {
+                    return Err(self.unknown_tool(name));
                 }
-                Err(error) => Err(self.fail_tool(error)),
-            },
-            ToolRisk::Confirm => {
+                match self.registry.invoke(name, args) {
+                    Ok(ToolResult { detail }) => {
+                        self.record(
+                            name,
+                            Some(ToolRisk::Safe),
+                            ToolOutcome::Ran,
+                            Some(detail.clone()),
+                        );
+                        Ok(RequestOutcome::Ran(RanTool {
+                            name: name.to_owned(),
+                            detail,
+                        }))
+                    }
+                    Err(error) => Err(self.fail_tool(error)),
+                }
+            }
+            PolicyDecision::Confirm => {
+                let Some(meta) = self.registry.lookup(name) else {
+                    return Err(self.unknown_tool(name));
+                };
+                let description = meta.description;
                 if let Some(pending_id) = self.pending.as_ref().map(|pending| pending.id.clone()) {
                     self.record(
                         name,
-                        Some(risk),
+                        Some(ToolRisk::Confirm),
                         ToolOutcome::Pending,
                         Some(format!("busy: {pending_id}")),
                     );
@@ -358,7 +374,7 @@ impl Hands {
                     args: args.to_vec(),
                     description,
                 });
-                self.record(name, Some(risk), ToolOutcome::Pending, None);
+                self.record(name, Some(ToolRisk::Confirm), ToolOutcome::Pending, None);
                 Ok(RequestOutcome::Pending(PendingToolCall {
                     pending_id,
                     name: name.to_owned(),
@@ -520,7 +536,8 @@ impl Hands {
     /// Result text for a confirmation that already passed the awake check.
     ///
     /// A failure leaves `self.pending` in place. `email_send` appends only
-    /// after `invoke_confirmed` and `authorize_confirmed` both succeed.
+    /// after the policy engine allows `email` / `send`, `invoke_confirmed`
+    /// succeeds, and `authorize_confirmed` succeeds.
     fn confirmed_detail(&mut self, pending: &Pending) -> Result<String, DispatchError> {
         if pending.name == EMAIL_SEND_TOOL {
             let parsed = match parse_email_send_args(&pending.args) {
@@ -535,6 +552,20 @@ impl Hands {
                 subject: parsed.subject,
                 body: parsed.body,
             };
+            let decision = self.policy.evaluate(&Subject::Connector {
+                connector: EMAIL,
+                action: EMAIL_SEND,
+            });
+            if !permits_confirmed_connector(decision) {
+                let denied = format!("connector action denied: {EMAIL}/{EMAIL_SEND}");
+                self.record(
+                    &pending.name,
+                    Some(ToolRisk::Confirm),
+                    ToolOutcome::Unknown,
+                    Some(denied.clone()),
+                );
+                return Err(DispatchError::Connector { message: denied });
+            }
             let receipt = match commit_email_send(
                 &self.connectors,
                 &mut self.email,
@@ -601,6 +632,13 @@ impl Hands {
             self.sink.pop_front();
         }
         self.sink.push_back(line);
+    }
+
+    fn unknown_tool(&mut self, name: &str) -> DispatchError {
+        self.record(name, None, ToolOutcome::Unknown, None);
+        DispatchError::Unknown {
+            name: name.to_owned(),
+        }
     }
 
     fn record(

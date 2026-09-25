@@ -35,6 +35,7 @@ Keep crates small and single-purpose. Exact names can shift; responsibilities sh
 | `softwake-session` | Text session for one awake period. Stores rendered soul instructions. No model client yet |
 | `softwake-tools` | Tool registry with safe, confirm, and deny metadata. `echo` is safe, `notify` and `email_send` wait for confirmation, `shell` is denied |
 | `softwake-connectors` | World I/O boundary. Email trait and in-memory mock. Registry is confirm or deny. No live cloud client in the default build ([ADR 0008](ADR-0008-connector-boundary.md)) |
+| `softwake-policy` | Classifies tool names and connector pairs. Unknown subjects are denied. Overrides may only tighten. The daemon asks it before a tool runs ([ADR 0010](ADR-0010-policy-engine.md)) |
 | `softwake-memory` | Long-term memory boundary. `Memory` trait and in-memory mock, off until enabled. The daemon does not call it ([ADR 0009](ADR-0009-long-term-memory.md)) |
 | `softwake-soul` | Load/validate soul pack; render system instructions |
 | `softwake-ipc` | Shared protocol: newline-delimited JSON over a Unix socket |
@@ -44,7 +45,7 @@ Do not put PipeWire types into `softwake-soul`. Do not put HTTP clients into `so
 
 ## Trust boundaries
 
-1. **UI is untrusted for action.** It may request hibernate/wake and edit config; the daemon enforces policy.
+1. **UI is untrusted for action.** It may request hibernate/wake and edit config; the daemon enforces policy through `softwake-policy` ([ADR 0010](ADR-0010-policy-engine.md)).
 2. **Tools run out-of-process** where practical, with explicit argv/env and timeouts. Phase 1's `echo` tool stays in-process because it performs no I/O.
 3. **Secrets** stay in OS keychain / env; never in soul markdown committed to git.
 4. **Network** only from session and explicitly allowed tools — not from the wake engine. A connector backend may use the network only in a future opt-in feature. The default mock does not open a socket. The memory mock does not use the network.
@@ -93,7 +94,13 @@ Unix domain socket and newline-delimited JSON, protocol version 1. The path, fra
 
 ## Connectors
 
-World I/O is a library boundary in `softwake-connectors` ([ADR 0008](ADR-0008-connector-boundary.md)). The daemon calls that crate from `Hands` when a confirmed `email_send` runs: `authorize_confirmed` for `email` / `send`, then `EmailConnector::send` on a `MockEmail`. The registry is confirm or deny: `email` / `send` is confirm, and `email` / `delete`, `drive` / `list`, and `calendar` / `list` are deny. `MockEmail` appends to an in-memory outbox when the caller sends after authorization. The registry methods themselves do not send. A live backend, when one exists, is an opt-in feature that CI does not enable. The default mock does not open a socket. Protocol generation stays 1; connector actions are not socket commands.
+World I/O is a library boundary in `softwake-connectors` ([ADR 0008](ADR-0008-connector-boundary.md)). The daemon calls that crate from `Hands` when a confirmed `email_send` runs: `authorize_confirmed` for `email` / `send`, then `EmailConnector::send` on a `MockEmail`. The registry is confirm or deny: `email` / `send` is confirm, and `email` / `delete`, `drive` / `list`, and `calendar` / `list` are deny. `MockEmail` appends to an in-memory outbox when the caller sends after authorization. The registry methods themselves do not send. Before that call, `softwake-policy` must evaluate `email` / `send` as confirm. A live backend, when one exists, is an opt-in feature that CI does not enable. The default mock does not open a socket. Protocol generation stays 1; connector actions are not socket commands.
+
+## Policy
+
+Tool and connector classification goes through `softwake-policy` ([ADR 0010](ADR-0010-policy-engine.md)). `PolicyEngine::evaluate` reads the static tool registry and the static connector registry. It does not copy those rows. An unknown tool name or connector pair is deny. A connector evaluation is confirm or deny. An override, when one is supplied, may only raise risk. The daemon's engine has an empty override map, so the registered rows are unchanged.
+
+`Hands::request` branches on that evaluation while awake. Sleep and hibernate still refuse every tool before the engine runs. `echo` still runs immediately. `notify` and `email_send` still wait for `confirm_tool`. `shell` is still denied. An unknown tool name is still reported as unknown. Protocol generation stays 1.
 
 ## Memory
 
