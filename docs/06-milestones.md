@@ -44,7 +44,7 @@
 
 ## Phase 4 — Context pack, then provider access
 
-**Goal:** The acting session loads a four-file context pack. Provider sign-in fills a model picker after Test. Live connectors stay later slices.
+**Goal:** The acting session loads a four-file context pack. Provider sign-in fills chat and voice (STT) model pickers after Test. Live connectors stay later slices.
 
 1. [x] Context pack and confirm-echo foundation ([ADR 0011](ADR-0011-context-pack.md))
    - [x] `softwake-soul` loads `rules.md` and `glossary.md` with `soul.md` and `user.md`. All four are required. A missing or invalid pack, including an unparseable glossary, refuses awake. `reload_soul` re-reads the pack and applies on the next awake.
@@ -60,7 +60,7 @@
    - [x] Wire awake session chat to the selected provider ([ADR 0013](ADR-0013-session-provider.md)). While awake, typed `ask` and `chat` send the rendered context pack and the user line to the Settings provider. Tests use `MockTransport`. The daemon `live-http` feature performs the real call. A missing Settings file, a Test that has not succeeded, a missing model, or a missing bearer returns a clear error. Protocol generation stays 1.
    - [x] Budgeted memory snippets after the rendered pack ([ADR 0009](ADR-0009-long-term-memory.md), [ADR 0013](ADR-0013-session-provider.md)). At most 4 snippets / 2048 UTF-8 bytes. Query is the user line. Opens `FileMemory` only when `memory.json` exists. Fail-open. Session takes an appendix string; daemon owns the memory crate. CI key-free / no Redis.
    - [x] `softwaked ctl ask` and `ctl chat` against `softwaked serve` ([ADR 0013](ADR-0013-session-provider.md)). Same awake completion as the typed demo: context pack, budgeted memory appendix, selected provider. New `ask` message on protocol generation 1. Tests use a mock transport. `live-http` stays opt-in. Serve still starts asleep; this slice does not add a microphone wake.
-   - [x] Settings window shell. The window is 860 by 680 with a left nav: General, Providers, Email, and Status. Providers keeps Test, the model picker, saved keys, and xAI sign-in. General and Email are stubs. Status keeps daemon state, soul validity, and confirm. Protocol generation stays 1. No new ADR.
+   - [x] Settings window shell. The window is 860 by 680 with a left nav: General, Providers, Email, and Status. Providers keeps Test, the chat and voice model pickers, saved keys, and xAI sign-in. General and Email are stubs. Status keeps daemon state, soul validity, and confirm. Protocol generation stays 1. No new ADR.
    - [x] `softwaked ctl wake` enters awake on a running `softwaked serve` (same soul gate as demo `wake`). `ctl resume` still lands in sleep. No microphone. Protocol generation stays 1.
 3. [ ] Live email, Drive, and calendar connectors (still open from phase 3)
 4. [x] In-window editors for `soul.md`, `user.md`, `rules.md`, and `glossary.md` (reload stays how a pack is applied)

@@ -281,6 +281,7 @@ mod tests {
             settings.store_models(
                 provider,
                 models.iter().map(|id| (*id).to_owned()).collect(),
+                Vec::new(),
                 1,
             );
         }

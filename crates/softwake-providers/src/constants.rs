@@ -43,3 +43,9 @@ pub const OPENROUTER_CHAT_SEED: &str = "openai/gpt-4.1-mini";
 
 /// Registry seed for OpenAI-compatible chat when Test's catalog omits chat ids after a pass.
 pub const OPENAI_COMPATIBLE_CHAT_SEED: &str = "gpt-4.1-mini";
+
+/// Registry seed for xAI voice/STT when Test's catalog omits STT ids after a pass.
+pub const XAI_VOICE_SEED: &str = "grok-voice-transcribe-2.0";
+
+/// Registry seed for `OpenAI` voice/STT when Test's catalog omits STT ids after a pass.
+pub const OPENAI_VOICE_SEED: &str = "gpt-4o-transcribe-diarize";

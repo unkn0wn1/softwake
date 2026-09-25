@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::chat::missing_credential_message;
 use crate::constants::{XAI_OAUTH_DEVICE_URL, XAI_OAUTH_TOKEN_URL};
 use crate::ids::ProviderId;
-use crate::models::{filter_chat_models, parse_model_ids};
+use crate::models::{filter_chat_models, filter_voice_models, parse_model_ids};
 use crate::oauth::{
     DeviceCodeStart, DevicePoll, OAuthTokenSet, access_needs_refresh, device_code_body,
     merge_refresh, parse_device_poll, parse_device_start, parse_token_response, refresh_body,
@@ -27,6 +27,8 @@ pub struct TestOutcome {
     pub message: String,
     /// Chat model ids to store when `ok`. Empty when not ok.
     pub chat_models: Vec<String>,
+    /// Voice / STT model ids to store when `ok`. Empty when not ok or no STT catalog.
+    pub voice_models: Vec<String>,
 }
 
 /// Resolve a bearer token for `provider` from the bag and the environment.
@@ -169,8 +171,10 @@ pub fn ensure_fresh_access<T: Transport>(
 
 /// Run Test for `provider`: chat probe, then model list.
 ///
-/// On success, returns chat model ids (seed fallback when the catalog has none).
-/// On failure, `chat_models` is empty so callers leave any previous catalog alone.
+/// On success, returns chat (and voice/STT) model ids. Chat always has a
+/// registry seed fallback. Voice uses the family voice seed when that list is
+/// empty after a pass and the family has a seed. On failure both lists stay
+/// empty so callers leave any previous catalog alone.
 pub fn run_test<T: Transport>(
     transport: &T,
     provider: ProviderId,
@@ -186,6 +190,7 @@ pub fn run_test<T: Transport>(
             ok: false,
             message: missing_credential_message(provider),
             chat_models: Vec::new(),
+            voice_models: Vec::new(),
         };
     }
     let base = api_base.trim().trim_end_matches('/');
@@ -194,6 +199,7 @@ pub fn run_test<T: Transport>(
             ok: false,
             message: "No OpenAI-compatible base URL is configured. Set one in Settings.".to_owned(),
             chat_models: Vec::new(),
+            voice_models: Vec::new(),
         };
     }
 
@@ -215,6 +221,7 @@ pub fn run_test<T: Transport>(
                 ok: false,
                 message: "Could not reach the provider to run Test.".to_owned(),
                 chat_models: Vec::new(),
+                voice_models: Vec::new(),
             };
         }
     };
@@ -223,16 +230,18 @@ pub fn run_test<T: Transport>(
             ok: false,
             message: probe.message,
             chat_models: Vec::new(),
+            voice_models: Vec::new(),
         };
     }
 
     let catalog = match transport.get_bearer(&models_url, token) {
         Ok(response) if (200..300).contains(&response.status) => {
             let payload = parse_json_body(&response.body);
-            filter_chat_models(def.family, &parse_model_ids(&payload))
+            Some(parse_model_ids(&payload))
         }
         Ok(_) | Err(_) => {
             // Probe passed but catalog failed: keep seed so the picker is usable.
+            let voice_models = voice_seed_or_empty(def.voice_seed);
             return TestOutcome {
                 ok: true,
                 message: format!(
@@ -240,21 +249,40 @@ pub fn run_test<T: Transport>(
                     probe.message
                 ),
                 chat_models: vec![seed.to_owned()],
+                voice_models,
             };
         }
     };
 
-    let chat_models = if catalog.is_empty() {
+    let ids = catalog.unwrap_or_default();
+    let chat_filtered = filter_chat_models(def.family, &ids);
+    let voice_filtered = filter_voice_models(&ids);
+    let chat_models = if chat_filtered.is_empty() {
         vec![seed.to_owned()]
     } else {
-        catalog
+        chat_filtered
+    };
+    let voice_models = if voice_filtered.is_empty() {
+        voice_seed_or_empty(def.voice_seed)
+    } else {
+        voice_filtered
     };
 
     TestOutcome {
         ok: true,
-        message: format!("{}. Loaded {} model(s).", probe.message, chat_models.len()),
+        message: format!(
+            "{}. Loaded {} chat and {} voice model(s).",
+            probe.message,
+            chat_models.len(),
+            voice_models.len()
+        ),
         chat_models,
+        voice_models,
     }
+}
+
+fn voice_seed_or_empty(seed: Option<&'static str>) -> Vec<String> {
+    seed.map(|id| vec![id.to_owned()]).unwrap_or_default()
 }
 
 /// Apply a Test outcome onto Settings. Failed tests do not clear catalogs.
@@ -272,11 +300,23 @@ pub fn apply_test_outcome(
         },
     );
     if outcome.ok {
-        settings.store_models(provider, outcome.chat_models.clone(), now_ms);
+        settings.store_models(
+            provider,
+            outcome.chat_models.clone(),
+            outcome.voice_models.clone(),
+            now_ms,
+        );
         if settings.selected_provider == provider {
             let current = settings.selected_model.clone();
             if current.is_empty() || !outcome.chat_models.iter().any(|id| id == &current) {
                 settings.selected_model = outcome.chat_models.first().cloned().unwrap_or_default();
+            }
+            let current_voice = settings.selected_voice_model.clone();
+            if current_voice.is_empty()
+                || !outcome.voice_models.iter().any(|id| id == &current_voice)
+            {
+                settings.selected_voice_model =
+                    outcome.voice_models.first().cloned().unwrap_or_default();
             }
         }
     }
@@ -333,7 +373,7 @@ mod tests {
 
     use super::{apply_test_outcome, resolve_bearer, run_test, start_device_code};
     use crate::constants::{
-        OPENROUTER_API_BASE, XAI_API_BASE, XAI_CHAT_SEED, XAI_OAUTH_DEVICE_URL,
+        OPENROUTER_API_BASE, XAI_API_BASE, XAI_CHAT_SEED, XAI_OAUTH_DEVICE_URL, XAI_VOICE_SEED,
     };
     use crate::ids::ProviderId;
     use crate::oauth::OAuthTokenSet;
@@ -382,6 +422,10 @@ mod tests {
         let outcome = run_test(&transport, ProviderId::XaiKey, "key", XAI_API_BASE, 0);
         assert!(outcome.ok);
         assert_eq!(outcome.chat_models, vec!["grok-4.5".to_owned()]);
+        assert_eq!(
+            outcome.voice_models,
+            vec!["grok-voice-transcribe-2.0".to_owned()]
+        );
 
         let mut settings = ProviderSettings::default();
         apply_test_outcome(&mut settings, ProviderId::XaiKey, &outcome, 10);
@@ -389,6 +433,11 @@ mod tests {
             settings.models_for(ProviderId::XaiKey),
             &["grok-4.5".to_owned()]
         );
+        assert_eq!(
+            settings.voice_models_for(ProviderId::XaiKey),
+            &["grok-voice-transcribe-2.0".to_owned()]
+        );
+        assert_eq!(settings.selected_voice_model, "grok-voice-transcribe-2.0");
 
         let fail = run_test(
             &MockTransport::new().with_post_json(
@@ -409,6 +458,11 @@ mod tests {
             settings.models_for(ProviderId::XaiKey),
             &["grok-4.5".to_owned()],
             "failed Test must not clear catalog"
+        );
+        assert_eq!(
+            settings.voice_models_for(ProviderId::XaiKey),
+            &["grok-voice-transcribe-2.0".to_owned()],
+            "failed Test must not clear voice catalog"
         );
         assert!(!settings.last_test["xai-key"].ok);
     }
@@ -433,6 +487,7 @@ mod tests {
         let outcome = run_test(&transport, ProviderId::XaiOauth, "tok", XAI_API_BASE, 0);
         assert!(outcome.ok);
         assert_eq!(outcome.chat_models, vec![XAI_CHAT_SEED.to_owned()]);
+        assert_eq!(outcome.voice_models, vec![XAI_VOICE_SEED.to_owned()]);
     }
 
     #[test]
@@ -468,6 +523,54 @@ mod tests {
         assert_eq!(
             resolve_bearer(ProviderId::XaiOauth, &bag, None, None, None, None).as_deref(),
             Some("access")
+        );
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "covers resolve + Test for both new providers in one MockTransport story"
+    )]
+    fn openai_catalog_splits_chat_and_voice() {
+        let transport = MockTransport::new()
+            .with_post_json(
+                format!("{}/chat/completions", crate::constants::OPENAI_API_BASE),
+                HttpResponse {
+                    status: 200,
+                    body: "{}".to_owned(),
+                },
+            )
+            .with_get(
+                format!("{}/models", crate::constants::OPENAI_API_BASE),
+                HttpResponse {
+                    status: 200,
+                    body: json!({
+                        "data": [
+                            {"id": "gpt-4o-transcribe-diarize"},
+                            {"id": "whisper-1"},
+                            {"id": "gpt-4.1-mini"},
+                            {"id": "text-embedding-3-small"},
+                            {"id": "tts-1"}
+                        ]
+                    })
+                    .to_string(),
+                },
+            );
+        let outcome = run_test(
+            &transport,
+            ProviderId::Openai,
+            "oa-key",
+            crate::constants::OPENAI_API_BASE,
+            0,
+        );
+        assert!(outcome.ok);
+        assert_eq!(outcome.chat_models, vec!["gpt-4.1-mini".to_owned()]);
+        assert_eq!(
+            outcome.voice_models,
+            vec![
+                "gpt-4o-transcribe-diarize".to_owned(),
+                "whisper-1".to_owned()
+            ]
         );
     }
 
@@ -551,6 +654,10 @@ mod tests {
         assert_eq!(
             outcome.chat_models,
             vec!["anthropic/claude-sonnet-4".to_owned()]
+        );
+        assert!(
+            outcome.voice_models.is_empty(),
+            "OpenRouter has no voice seed when the catalog has no STT ids"
         );
 
         let compat_base = "http://127.0.0.1:1234/v1";

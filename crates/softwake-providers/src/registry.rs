@@ -1,8 +1,8 @@
 //! Static provider table.
 
 use crate::constants::{
-    OPENAI_API_BASE, OPENAI_CHAT_SEED, OPENAI_COMPATIBLE_CHAT_SEED, OPENROUTER_API_BASE,
-    OPENROUTER_CHAT_SEED, XAI_API_BASE, XAI_CHAT_SEED,
+    OPENAI_API_BASE, OPENAI_CHAT_SEED, OPENAI_COMPATIBLE_CHAT_SEED, OPENAI_VOICE_SEED,
+    OPENROUTER_API_BASE, OPENROUTER_CHAT_SEED, XAI_API_BASE, XAI_CHAT_SEED, XAI_VOICE_SEED,
 };
 use crate::ids::ProviderId;
 use crate::settings::ProviderSettings;
@@ -64,6 +64,8 @@ pub struct ProviderDefinition {
     pub credential: CredentialKind,
     /// Seed chat model id.
     pub chat_seed: &'static str,
+    /// Seed voice/STT model id when the family has a known STT default.
+    pub voice_seed: Option<&'static str>,
 }
 
 /// Failure resolving an API base URL.
@@ -121,6 +123,7 @@ pub const PROVIDER_REGISTRY: [ProviderDefinition; 5] = [
         family: ProviderFamily::Xai,
         credential: CredentialKind::XaiOauth,
         chat_seed: XAI_CHAT_SEED,
+        voice_seed: Some(XAI_VOICE_SEED),
     },
     ProviderDefinition {
         id: ProviderId::XaiKey,
@@ -128,6 +131,7 @@ pub const PROVIDER_REGISTRY: [ProviderDefinition; 5] = [
         family: ProviderFamily::Xai,
         credential: CredentialKind::XaiKey,
         chat_seed: XAI_CHAT_SEED,
+        voice_seed: Some(XAI_VOICE_SEED),
     },
     ProviderDefinition {
         id: ProviderId::Openai,
@@ -135,6 +139,7 @@ pub const PROVIDER_REGISTRY: [ProviderDefinition; 5] = [
         family: ProviderFamily::Openai,
         credential: CredentialKind::OpenaiKey,
         chat_seed: OPENAI_CHAT_SEED,
+        voice_seed: Some(OPENAI_VOICE_SEED),
     },
     ProviderDefinition {
         id: ProviderId::Openrouter,
@@ -142,6 +147,7 @@ pub const PROVIDER_REGISTRY: [ProviderDefinition; 5] = [
         family: ProviderFamily::Openrouter,
         credential: CredentialKind::OpenrouterKey,
         chat_seed: OPENROUTER_CHAT_SEED,
+        voice_seed: None,
     },
     ProviderDefinition {
         id: ProviderId::OpenaiCompatible,
@@ -149,6 +155,7 @@ pub const PROVIDER_REGISTRY: [ProviderDefinition; 5] = [
         family: ProviderFamily::OpenaiCompatible,
         credential: CredentialKind::OpenaiCompatibleKey,
         chat_seed: OPENAI_COMPATIBLE_CHAT_SEED,
+        voice_seed: None,
     },
 ];
 

@@ -333,7 +333,12 @@ mod fixture {
             selected_model: "grok-4.5".to_owned(),
             ..ProviderSettings::default()
         };
-        settings.store_models(ProviderId::XaiKey, vec!["grok-4.5".to_owned()], 1);
+        settings.store_models(
+            ProviderId::XaiKey,
+            vec!["grok-4.5".to_owned()],
+            Vec::new(),
+            1,
+        );
         settings.store_test(
             ProviderId::XaiKey,
             TestReport {
@@ -451,7 +456,12 @@ mod tests {
                 message: "Chat check passed.".to_owned(),
             },
         );
-        document.store_models(ProviderId::XaiKey, vec!["grok-4.5".to_owned()], 1);
+        document.store_models(
+            ProviderId::XaiKey,
+            vec!["grok-4.5".to_owned()],
+            Vec::new(),
+            1,
+        );
         FileProviderSettings::new(&settings)
             .expect("store")
             .save(&document)

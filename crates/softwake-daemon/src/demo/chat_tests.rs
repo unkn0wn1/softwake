@@ -46,6 +46,7 @@ fn xai_handle(
         settings.store_models(
             ProviderId::XaiKey,
             models.iter().copied().map(str::to_owned).collect(),
+            Vec::new(),
             1,
         );
     }

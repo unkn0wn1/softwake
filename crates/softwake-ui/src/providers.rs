@@ -70,12 +70,16 @@ pub struct ProviderRow {
 pub struct ProviderSnapshot {
     /// Selected provider id.
     pub selected_provider: String,
-    /// Selected model id (may be empty).
+    /// Selected chat model id (may be empty).
     pub selected_model: String,
+    /// Selected voice / STT model id (may be empty).
+    pub selected_voice_model: String,
     /// Registry rows.
     pub providers: Vec<ProviderRow>,
-    /// Cached models for the selected provider.
+    /// Cached chat models for the selected provider.
     pub models: Vec<String>,
+    /// Cached voice / STT models for the selected provider.
+    pub voice_models: Vec<String>,
     /// Last Test ok flag for the selected provider.
     pub last_test_ok: Option<bool>,
     /// Last Test message for the selected provider.
@@ -141,6 +145,7 @@ fn snapshot_from(
     Ok(ProviderSnapshot {
         selected_provider: selected.to_string(),
         selected_model: settings.selected_model.clone(),
+        selected_voice_model: settings.selected_voice_model.clone(),
         providers: PROVIDER_REGISTRY
             .iter()
             .map(|row| ProviderRow {
@@ -150,6 +155,7 @@ fn snapshot_from(
             })
             .collect(),
         models: settings.models_for(selected).to_vec(),
+        voice_models: settings.voice_models_for(selected).to_vec(),
         last_test_ok: last.map(|test| test.ok),
         last_test_message: last.map_or_else(String::new, |test| test.message.clone()),
         has_xai_key: bag
@@ -210,6 +216,13 @@ pub fn provider_select(provider_id: String) -> Result<ProviderSnapshot, String> 
         .any(|m| m == &settings.selected_model)
     {
         settings.selected_model.clear();
+    }
+    if !settings
+        .voice_models_for(id)
+        .iter()
+        .any(|m| m == &settings.selected_voice_model)
+    {
+        settings.selected_voice_model.clear();
     }
     store.save(&settings).map_err(|e| e.to_string())?;
     load_snapshot()
@@ -456,6 +469,31 @@ pub fn provider_set_model(model_id: String) -> Result<ProviderSnapshot, String> 
         return Err("model is not in the Test catalog; run Test first".to_owned());
     }
     settings.selected_model = model;
+    store.save(&settings).map_err(|e| e.to_string())?;
+    load_snapshot()
+}
+
+/// Pick a voice / STT model from the cached Test catalog.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri deserializes command arguments as owned values"
+)]
+pub fn provider_set_voice_model(model_id: String) -> Result<ProviderSnapshot, String> {
+    let store = open_settings()?;
+    let mut settings = store.load().map_err(|e| e.to_string())?;
+    let model = model_id.trim().to_owned();
+    if model.is_empty() {
+        return Err("voice model id is empty".to_owned());
+    }
+    if !settings
+        .voice_models_for(settings.selected_provider)
+        .iter()
+        .any(|id| id == &model)
+    {
+        return Err("voice model is not in the Test catalog; run Test first".to_owned());
+    }
+    settings.selected_voice_model = model;
     store.save(&settings).map_err(|e| e.to_string())?;
     load_snapshot()
 }

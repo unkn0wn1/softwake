@@ -238,8 +238,8 @@ Settings in `softwake-ui` configure one acting provider ([ADR 0012](docs/ADR-001
 
 1. Choose **xAI sign-in**, **xAI API key**, **OpenAI**, **OpenRouter**, or **OpenAI-compatible**.
 2. For a key provider, paste the key and press **Save key**. For **OpenAI-compatible**, also set the **Base URL** (for example `http://127.0.0.1:11434/v1`) and press **Save base URL**. For xAI sign-in, press **Start sign-in**. Softwake opens the verification page in the default browser and shows that address as a link next to the user code. Enter the code on that page, then **Poll** (or wait for the automatic poll). If the browser does not open, use the link in Settings.
-3. Press **Test**. On success, the model dropdown fills from `GET /v1/models` (with a registry seed fallback). The dropdown stays empty until Test succeeds.
-4. Pick a model.
+3. Press **Test**. On success, the **Chat model** and **Voice model** dropdowns fill from `GET /v1/models` (chat vs speech-to-text split, with a registry seed fallback). Both stay empty until Test succeeds.
+4. Pick a chat model (the acting session) and a voice / STT model (stored for a later audio path; Test does not run live STT).
 
 Secrets are stored under `$XDG_STATE_HOME/softwake/secrets.json` (or `~/.local/state/softwake/secrets.json`), mode `0600`. When the OS keyring answers (Linux Secret Service; macOS Keychain and Windows Credential Manager through the same crate), that file is a version-2 pointer and the bag is one keyring item (`softwake` / `secret-bag`). Plaintext is an opt-in fallback (`SOFTWAKE_SECRET_BACKEND=plaintext`, or the Settings button when the keyring is unavailable) and still shows a warning. An existing version-1 file migrates on the first resolved load when the keyring probe succeeds. A pointer is never rewritten as plaintext. `SOFTWAKE_SECRET_BACKEND=keyring` fails closed when the service is down. Non-secret selection and the model cache are `$XDG_CONFIG_HOME/softwake/providers.json`. The public xAI device-code client id is safe to commit; refresh tokens and API keys are not. Environment fallbacks: `XAI_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_COMPATIBLE_API_KEY` when no key is saved.
 
@@ -294,7 +294,7 @@ The soul directory is the first match of `--soul-dir PATH` (on `serve` and `demo
 
 **Status** shows the daemon state, whether capture is running, whether the soul pack is `ok` or `missing` (and the reason when the daemon sent one), whether a soul reload is pending, the latest tool line, and a confirm-gated tool when one is waiting. Buttons are Hibernate, Wake (leave hibernate into sleep), Sleep, Reload soul, Confirm, and Cancel. The Status Wake button is `wake_from_ui` / `ctl resume` (hibernate → sleep). `softwaked ctl wake` is the separate command that enters awake from sleep and requires a valid soul pack. Reload reads `soul.md`, `user.md`, `rules.md`, and `glossary.md`. The new text applies on the next awake. The status snapshot does not include the socket path. The window uses the same default socket as `softwaked ctl`. Start `softwaked serve` first. Provider commands are not socket commands.
 
-**Providers** is the model Settings panel ([ADR 0012](docs/ADR-0012-model-providers.md)): choose a provider, save a key or sign in, press Test, then pick a model. The model list stays empty until Test succeeds.
+**Providers** is the model Settings panel ([ADR 0012](docs/ADR-0012-model-providers.md)): choose a provider, save a key or sign in, press Test, then pick a chat model and a voice (STT) model. Both lists stay empty until Test succeeds.
 
 **General** edits `soul.md`, `user.md`, `rules.md`, and `glossary.md` in the resolved soul directory (`SOFTWAKE_SOUL_DIR`, or the XDG default). Save writes the four files. Reload soul applies a valid pack on the next awake.
 
@@ -328,6 +328,6 @@ On Linux the window links WebKitGTK. The packages used in CI are `libwebkit2gtk-
 | [docs/ADR-0009-long-term-memory.md](docs/ADR-0009-long-term-memory.md) | Long-term memory: local trait, in-memory mock, opt-in JSON file |
 | [docs/ADR-0010-policy-engine.md](docs/ADR-0010-policy-engine.md) | Policy engine: one evaluation path, default deny, tighten-only overrides |
 | [docs/ADR-0011-context-pack.md](docs/ADR-0011-context-pack.md) | Context pack and confirm-echo foundation |
-| [docs/ADR-0012-model-providers.md](docs/ADR-0012-model-providers.md) | Provider Settings: xAI sign-in, API keys, Test, model picker |
+| [docs/ADR-0012-model-providers.md](docs/ADR-0012-model-providers.md) | Provider Settings: xAI sign-in, API keys, Test, chat and voice/STT pickers |
 | [docs/ADR-0013-session-provider.md](docs/ADR-0013-session-provider.md) | Awake session chat to the selected provider |
 | [docs/ADR-0014-skills-hub.md](docs/ADR-0014-skills-hub.md) | Skills hub, refine loop, and webhook wake (direction) |

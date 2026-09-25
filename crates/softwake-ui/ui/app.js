@@ -33,6 +33,7 @@ const oauthSignOutBtn = document.querySelector("#oauth-sign-out");
 const providerTestBtn = document.querySelector("#provider-test");
 const testStatus = document.querySelector("#test-status");
 const modelSelect = document.querySelector("#model-select");
+const voiceModelSelect = document.querySelector("#voice-model-select");
 const providerError = document.querySelector("#provider-error");
 const plaintextWarning = document.querySelector("#plaintext-warning");
 const usePlaintextBtn = document.querySelector("#use-plaintext-file");
@@ -297,6 +298,27 @@ function renderProviders(snap) {
     modelSelect.disabled = false;
     modelSelect.value = models.includes(snap.selected_model) ? snap.selected_model : models[0];
   }
+
+  const voiceModels = snap.voice_models || [];
+  voiceModelSelect.innerHTML = "";
+  if (voiceModels.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "Test to load models";
+    voiceModelSelect.appendChild(option);
+    voiceModelSelect.disabled = true;
+  } else {
+    for (const id of voiceModels) {
+      const option = document.createElement("option");
+      option.value = id;
+      option.textContent = id;
+      voiceModelSelect.appendChild(option);
+    }
+    voiceModelSelect.disabled = false;
+    voiceModelSelect.value = voiceModels.includes(snap.selected_voice_model)
+      ? snap.selected_voice_model
+      : voiceModels[0];
+  }
 }
 
 function clearOauthLink(snap) {
@@ -397,6 +419,13 @@ modelSelect.addEventListener("change", () => {
     return;
   }
   providerAction("provider_set_model", { modelId: modelSelect.value });
+});
+
+voiceModelSelect.addEventListener("change", () => {
+  if (!voiceModelSelect.value) {
+    return;
+  }
+  providerAction("provider_set_voice_model", { modelId: voiceModelSelect.value });
 });
 
 let packLoaded = false;
