@@ -53,7 +53,7 @@ Do not put PipeWire types into `softwake-soul`. Do not put HTTP clients into `so
 
 ## Audio path
 
-The typed demo and `softwaked serve` use `MockAudioCapture` plus the text phrase table ([ADR 0002](ADR-0002-wake-engine-spike.md)). The production wake engine is sherpa-onnx keyword spotting ([ADR 0006](ADR-0006-on-device-wake.md)). Weights are not in the repo. `NullDetector` is the PCM stand-in and returns no hit. Each captured frame is still passed to `WakeDetector::push_samples`.
+The typed demo and `softwaked serve` use `MockAudioCapture` plus the text phrase table ([ADR 0002](ADR-0002-wake-engine-spike.md)). The production wake engine is sherpa-onnx keyword spotting ([ADR 0006](ADR-0006-on-device-wake.md)). Weights are not in the repo. Default builds keep `NullDetector`. With `--features sherpa-kws` and weights under the XDG kws dir, serve scores through `SherpaKwsDetector` (profile name + Softwake fallbacks) and applies wake/sleep hits. Each captured frame is still passed to `WakeDetector::push_samples`.
 
 `AudioFormat::WAKE` is 16 kHz mono `i16`. `AudioCapture::poll_frame` is how both the mock and a future native backend hand over one `AudioFrame`.
 

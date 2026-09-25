@@ -103,6 +103,17 @@ impl LoadedSoul {
     ///
     /// This stays set after the text session closes. The session keeps its
     /// own copy only while it is open.
+    /// Active profile agent name (blank → Softwake default).
+    pub(crate) fn agent_name(&self) -> String {
+        let name = softwake_soul::profile_name_in(self.dir.path());
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            softwake_soul::DEFAULT_AGENT_NAME.to_owned()
+        } else {
+            trimmed.to_owned()
+        }
+    }
+
     pub(crate) fn applied_instructions(&self) -> Option<&str> {
         self.applied.as_deref()
     }

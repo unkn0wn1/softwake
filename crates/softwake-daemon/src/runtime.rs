@@ -22,13 +22,13 @@ use softwake_session::{SessionPhase, TextStubSession};
 use softwake_soul::SoulDir;
 use softwake_state::{CooldownConfig, Effect, Event, Machine, StateError, VoiceState};
 use softwake_voice::{EnergyUtterance, MockStt, MockTts, TextToSpeech, TranscriptEvent};
-use softwake_wake::{NullDetector, PhraseHit};
+use softwake_wake::PhraseHit;
 
 use crate::capture::{CaptureBackend, CaptureKind};
 use crate::dispatch::{
     CancelledTool, ConfirmedTool, DispatchError, Hands, PendingToolCall, RanTool, RequestOutcome,
 };
-use crate::pcm::score_frame;
+use crate::pcm::{PcmEngine, score_frame};
 use crate::soul::LoadedSoul;
 
 #[derive(Debug)]
@@ -42,7 +42,7 @@ pub(crate) struct Runtime {
     /// Wall clock for [`Self::tick`]. Phrase cooldowns use machine time only.
     last_tick: Instant,
     capture: CaptureBackend,
-    pcm: NullDetector,
+    pcm: PcmEngine,
     /// Last PCM score from [`Self::drain_pcm`]. `None` means the queue was empty.
     #[cfg_attr(not(test), allow(dead_code))]
     last_pcm_hit: Option<PhraseHit>,
@@ -93,15 +93,17 @@ impl Runtime {
         kind: CaptureKind,
     ) -> Result<Self, crate::capture::CaptureError> {
         let capture = CaptureBackend::open(kind)?;
+        let soul = LoadedSoul::open(soul_dir);
+        let agent = soul.agent_name();
         Ok(Self {
             machine: Machine::new(CooldownConfig::default()),
             last_tick: Instant::now(),
             capture,
-            pcm: NullDetector,
+            pcm: PcmEngine::for_agent(&agent),
             last_pcm_hit: None,
             last_capture_level: None,
             last_energy_log: None,
-            soul: LoadedSoul::open(soul_dir),
+            soul,
             session: TextStubSession::default(),
             hands: Hands::from_disk(),
             stt: MockStt::default(),
@@ -134,17 +136,29 @@ impl Runtime {
             let phase = self.last_tick.elapsed().as_secs_f32();
             self.capture.push_listening_tone_if_mock(phase);
         }
-        self.drain_pcm();
+        let mut pcm_events = self.drain_pcm();
         match command {
-            Command::GetStatus => Self::quiet(self.snapshot(
-                self.last_status_message.clone(),
-                self.last_status_detail.clone(),
-            )),
+            Command::GetStatus => {
+                let mut outcome = Self::quiet(self.snapshot(
+                    self.last_status_message.clone(),
+                    self.last_status_detail.clone(),
+                ));
+                outcome.events.append(&mut pcm_events);
+                outcome
+            }
             Command::ReloadSoul => {
                 self.soul.reload();
-                Self::quiet(self.snapshot(Some(self.soul.reload_summary()), None))
+                self.rebuild_pcm();
+                let mut outcome =
+                    Self::quiet(self.snapshot(Some(self.soul.reload_summary()), None));
+                outcome.events.append(&mut pcm_events);
+                outcome
             }
-            Command::Hibernate | Command::WakeFromUi | Command::Sleep => self.transition(command),
+            Command::Hibernate | Command::WakeFromUi | Command::Sleep => {
+                let mut outcome = self.transition(command);
+                outcome.events.append(&mut pcm_events);
+                outcome
+            }
         }
     }
 
@@ -585,7 +599,7 @@ impl Runtime {
     /// Returns the last hit, or [`PhraseHit::None`] when the queue is empty.
     /// [`NullDetector`] never matches. After `stop`, the mock drops the queue,
     /// so hibernate does not score a late frame.
-    fn drain_pcm(&mut self) -> PhraseHit {
+    fn drain_pcm(&mut self) -> Vec<WireEvent> {
         let mut hit = PhraseHit::None;
         let mut scored = false;
         let mut energy_seen = false;
@@ -625,11 +639,11 @@ impl Runtime {
         if scored {
             self.last_pcm_hit = Some(hit);
         }
-        // Only while asleep: awake talk is PTT / free speech, not KWS.
         if energy_seen
             && matches!(hit, PhraseHit::None)
             && self.capture.kind() == CaptureKind::PipeWire
             && wire_state(self.machine.state()) == WireState::Sleep
+            && !self.pcm.weights_loaded()
         {
             let now = Instant::now();
             let should_log = self
@@ -637,8 +651,6 @@ impl Runtime {
                 .is_none_or(|previous| now.duration_since(previous).as_secs() >= 2);
             if should_log {
                 self.last_energy_log = Some(now);
-                // Best-effort voice path: real PCM reaches the detector, but
-                // NullDetector never matches until sherpa-onnx weights load (ADR 0006).
                 eprintln!(
                     "softwaked: mic energy heard (capture_level set); wake-from-voice needs KWS weights — see README"
                 );
@@ -647,9 +659,34 @@ impl Runtime {
         if !self.capture.is_running() {
             self.last_capture_level = None;
         }
-        hit
+        self.apply_pcm_hit(hit)
     }
 
+    /// Rebuild the PCM detector after a soul / profile reload.
+    fn rebuild_pcm(&mut self) {
+        self.pcm = PcmEngine::for_agent(&self.soul.agent_name());
+    }
+
+    /// Apply a KWS hit to the voice machine when the state allows it.
+    fn apply_pcm_hit(&mut self, hit: PhraseHit) -> Vec<WireEvent> {
+        match hit {
+            PhraseHit::Wake if wire_state(self.machine.state()) == WireState::Sleep => {
+                self.wake_phrase().events
+            }
+            PhraseHit::Sleep if wire_state(self.machine.state()) == WireState::Awake => {
+                self.sleep_phrase().events
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Leave awake on a sleep phrase (KWS or typed path).
+    pub(crate) fn sleep_phrase(&mut self) -> Outcome {
+        self.tick();
+        self.apply_voice(Event::SleepPhrase, |error| {
+            IpcError::protocol(error.to_string())
+        })
+    }
     fn transition(&mut self, command: Command) -> Outcome {
         self.tick();
         let event = match command {

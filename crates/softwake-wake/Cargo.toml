@@ -7,11 +7,13 @@ rust-version.workspace = true
 description = "Local wake and sleep phrase detection."
 
 [features]
-# Compiles the sherpa-onnx PCM detector stub. No model download and no ONNX runtime.
-sherpa-kws = []
+# Links sherpa-onnx and loads KWS weights when present under XDG.
+# Not enabled in CI (no ONNX download, no microphone).
+sherpa-kws = ["dep:sherpa-onnx"]
 
 [dependencies]
 thiserror.workspace = true
+sherpa-onnx = { version = "1.13.8", optional = true }
 
 [lints]
 workspace = true
