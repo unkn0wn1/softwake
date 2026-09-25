@@ -17,6 +17,9 @@
 //! Sleep and hibernate should call [`Hands::clear_pending`].
 
 use std::collections::VecDeque;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use softwake_connectors::{
     ConnectorRegistry, EMAIL, EMAIL_SEND, EmailBackend, EmailSettings, FileEmailSettings,
@@ -826,21 +829,51 @@ fn load_tools_settings(override_settings: Option<&ToolsSettings>) -> ToolsSettin
     }
 }
 
+/// How long serve waits for the secret bag before assuming no SMTP password.
+const EMAIL_SECRET_BUDGET: Duration = Duration::from_millis(1500);
+
 fn email_backend_from_disk() -> EmailBackend {
     let settings = match resolve_email_file().and_then(FileEmailSettings::new) {
         Ok(store) => store.load().unwrap_or_default(),
         Err(_) => EmailSettings::default(),
     };
-    let password_present = softwake_providers::resolve_secrets_file()
-        .ok()
-        .and_then(|path| softwake_providers::open_store(&path).ok())
-        .and_then(|store| store.load().ok())
-        .is_some_and(|bag| {
-            bag.email_smtp_password
-                .as_ref()
-                .is_some_and(|password| !password.is_empty())
-        });
-    EmailBackend::from_settings(settings, password_present)
+    EmailBackend::from_settings(settings, email_smtp_password_present())
+}
+
+/// Peek whether an SMTP password is stored without blocking serve forever.
+///
+/// Secret Service Unlock prompts can hang on D-Bus. Timeout, missing bag, and
+/// load errors all mean "not present" so the daemon still starts (matches the
+/// [`Hands::from_disk`] docs).
+fn email_smtp_password_present() -> bool {
+    let (tx, rx) = mpsc::sync_channel(1);
+    if thread::Builder::new()
+        .name("softwake-email-secret".into())
+        .spawn(move || {
+            let present = softwake_providers::resolve_secrets_file()
+                .ok()
+                .and_then(|path| softwake_providers::open_store(&path).ok())
+                .and_then(|store| store.load().ok())
+                .is_some_and(|bag| {
+                    bag.email_smtp_password
+                        .as_ref()
+                        .is_some_and(|password| !password.is_empty())
+                });
+            let _ = tx.send(present);
+        })
+        .is_err()
+    {
+        return false;
+    }
+    if let Ok(present) = rx.recv_timeout(EMAIL_SECRET_BUDGET) {
+        present
+    } else {
+        eprintln!(
+            "softwaked: secret bag probe timed out after {}ms — treating email SMTP password as absent",
+            EMAIL_SECRET_BUDGET.as_millis()
+        );
+        false
+    }
 }
 
 impl Default for Hands {
@@ -859,7 +892,9 @@ fn forbidden_state(machine: &Machine) -> Option<VoiceState> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     use super::{DispatchError, Hands, RequestOutcome, ToolOutcome};
     use softwake_state::{CooldownConfig, Event, Machine, VoiceState};
@@ -876,6 +911,20 @@ mod tests {
 
     fn asleep() -> Machine {
         Machine::new(CooldownConfig::default())
+    }
+
+    #[test]
+    fn email_secret_budget_returns_quickly_when_worker_blocks() {
+        // Same channel contract as email_smtp_password_present: a silent worker
+        // must not stall Hands::from_disk / softwaked serve.
+        let (tx, rx) = mpsc::sync_channel::<bool>(1);
+        thread::spawn(move || {
+            let _ = tx;
+            thread::sleep(Duration::from_secs(30));
+        });
+        let started = Instant::now();
+        assert!(rx.recv_timeout(Duration::from_millis(40)).ok().is_none());
+        assert!(started.elapsed() < Duration::from_millis(500));
     }
 
     #[test]
