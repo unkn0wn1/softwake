@@ -8,6 +8,7 @@ members = [
     "crates/softwake-voice",
     "crates/softwake-session",
     "crates/softwake-tools",
+    "crates/softwake-connectors",
     "crates/softwake-soul",
     "crates/softwake-ipc",
     "crates/softwake-ui",
@@ -25,6 +26,7 @@ serde_json = "1"
 thiserror = "2"
 tracing = "0.1"
 softwake-audio = { path = "crates/softwake-audio" }
+softwake-connectors = { path = "crates/softwake-connectors" }
 softwake-ipc = { path = "crates/softwake-ipc" }
 softwake-session = { path = "crates/softwake-session" }
 softwake-soul = { path = "crates/softwake-soul" }
