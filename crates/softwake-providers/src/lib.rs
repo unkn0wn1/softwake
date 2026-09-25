@@ -1,10 +1,12 @@
-//! Model provider credentials, device-code OAuth, Test probes, and secret bag.
+//! Model provider credentials, device-code OAuth, Test probes, chat completion, and secret bag.
 //!
 //! Default builds use [`MockTransport`] and do not open a network socket.
 //! Enable `live-http` for real HTTPS via [`live::LiveTransport`].
 //!
-//! See [ADR 0012](../../docs/ADR-0012-model-providers.md).
+//! See [ADR 0012](../../docs/ADR-0012-model-providers.md) and
+//! [ADR 0013](../../docs/ADR-0013-session-provider.md).
 
+mod chat;
 mod constants;
 mod handle;
 mod ids;
@@ -19,6 +21,10 @@ mod transport;
 #[cfg(feature = "live-http")]
 pub mod live;
 
+pub use chat::{
+    CHAT_MAX_TOKENS, ChatError, PrepareError, PreparedChat, complete_chat,
+    missing_credential_message, prepare_chat,
+};
 pub use constants::{
     OPENAI_API_BASE, OPENAI_CHAT_SEED, XAI_API_BASE, XAI_CHAT_SEED, XAI_OAUTH_CLIENT_ID,
     XAI_OAUTH_DEVICE_URL, XAI_OAUTH_GRANT_DEVICE, XAI_OAUTH_ISSUER, XAI_OAUTH_SCOPE,

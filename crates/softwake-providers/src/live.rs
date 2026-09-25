@@ -3,6 +3,8 @@
 //! Default CI does not compile this module's dependency path unless the
 //! feature is enabled. Unit tests stay on [`crate::transport::MockTransport`].
 
+use std::time::Duration;
+
 use ureq::Agent;
 
 use crate::transport::{HttpResponse, Transport, TransportError};
@@ -21,11 +23,28 @@ impl Default for LiveTransport {
 
 impl LiveTransport {
     /// Build a transport with the default agent.
+    ///
+    /// The default agent sets a connect timeout and leaves the read timeout
+    /// and the overall timeout unset. Settings Test uses this. Chat uses
+    /// [`Self::bounded`].
     #[must_use]
     pub fn new() -> Self {
         Self {
             agent: Agent::new(),
         }
+    }
+
+    /// Connect, read, and overall timeout all set to `timeout`.
+    ///
+    /// A silent 200 cannot block past `timeout`.
+    #[must_use]
+    pub fn bounded(timeout: Duration) -> Self {
+        let agent = ureq::builder()
+            .timeout_connect(timeout)
+            .timeout_read(timeout)
+            .timeout(timeout)
+            .build();
+        Self { agent }
     }
 }
 

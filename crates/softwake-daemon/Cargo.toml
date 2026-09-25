@@ -19,6 +19,7 @@ softwake-audio.workspace = true
 softwake-connectors.workspace = true
 softwake-ipc.workspace = true
 softwake-policy.workspace = true
+softwake-providers.workspace = true
 softwake-session.workspace = true
 softwake-soul.workspace = true
 softwake-state.workspace = true
@@ -26,6 +27,14 @@ softwake-tools.workspace = true
 softwake-wake.workspace = true
 softwake-voice.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[features]
+default = []
+# Real chat completion for typed ask/chat. Off in CI and the default binary.
+live-http = ["softwake-providers/live-http"]
 
 [lints]
 workspace = true

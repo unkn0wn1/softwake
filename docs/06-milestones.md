@@ -54,9 +54,10 @@
 2. [x] Provider settings foundation ([ADR 0012](ADR-0012-model-providers.md))
    - [x] `softwake-providers`: xAI device-code OAuth, xAI API key, OpenAI API key. Secret bag under XDG state (plaintext v1 warning). Settings JSON under XDG config. Model picker empty until Test.
    - [x] Mock `Transport` for CI. `live-http` (ureq) is opt-in on the crate; `softwake-ui` enables it by default for Settings Test and sign-in.
-   - [x] Thin Settings panel in `softwake-ui`. Protocol generation stays 1. Daemon and session do not call a chat model yet (`ProviderHandle` stub only).
+   - [x] Thin Settings panel in `softwake-ui`. Protocol generation stays 1. That slice stopped at the `ProviderHandle` stub.
    - [ ] OpenRouter and OpenAI-compatible base URL
-   - [ ] Wire awake session chat to the selected provider
+   - [x] Wire awake session chat to the selected provider ([ADR 0013](ADR-0013-session-provider.md)). While awake, typed `ask` and `chat` send the rendered context pack and the user line to the Settings provider. Tests use `MockTransport`. The daemon `live-http` feature performs the real call. A missing Settings file, a Test that has not succeeded, a missing model, or a missing bearer returns a clear error. Protocol generation stays 1.
+   - [ ] Budgeted memory snippets after the rendered pack ([ADR 0009](ADR-0009-long-term-memory.md), [ADR 0013](ADR-0013-session-provider.md))
 3. [ ] Live email, Drive, and calendar connectors (still open from phase 3)
 4. [ ] In-window editors for `soul.md`, `user.md`, `rules.md`, and `glossary.md` (reload stays how a pack is applied)
 

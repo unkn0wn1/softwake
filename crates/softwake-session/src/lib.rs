@@ -1,8 +1,10 @@
-//! Text-only acting session.
+//! Text session for one awake period.
 //!
-//! [`TextStubSession`] records the system instructions for one awake period
-//! and can accept a synthetic user turn. There is no model client and no
-//! network. Sleep and hibernate close the session.
+//! [`TextStubSession`] stores the rendered instructions and accepts an
+//! injected completer. This crate has no HTTP client and no provider
+//! dependency. Sleep and hibernate close the session.
+//!
+//! See [ADR 0013](../../docs/ADR-0013-session-provider.md).
 
 /// Whether an acting session is open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -73,14 +75,55 @@ impl TextStubSession {
     pub fn turns(&self) -> &[String] {
         &self.turns
     }
+
+    /// Record `user_text`, then call `complete(instructions, user_text)`.
+    ///
+    /// The assistant text is the return value. It is not stored on the session.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError::Empty`] when `user_text` is empty or whitespace.
+    /// [`SessionError::Closed`] when the phase is closed. The closure is not called.
+    /// [`SessionError::Complete`] when the closure returns `Err`. The user line stays recorded.
+    pub fn ask(
+        &mut self,
+        user_text: &str,
+        complete: impl FnOnce(&str, &str) -> Result<String, String>,
+    ) -> Result<String, SessionError> {
+        if user_text.trim().is_empty() {
+            return Err(SessionError::Empty);
+        }
+        if self.phase != SessionPhase::Open {
+            return Err(SessionError::Closed);
+        }
+        let Some(instructions) = self.instructions.clone() else {
+            return Err(SessionError::Closed);
+        };
+        self.turns.push(user_text.to_owned());
+        match complete(&instructions, user_text) {
+            Ok(reply) => Ok(reply),
+            Err(message) => Err(SessionError::Complete { message }),
+        }
+    }
 }
 
 /// Failure from a session operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SessionError {
-    /// [`TextStubSession::push_user_turn`] was called on a closed session.
+    /// The session is not open.
     #[error("session is closed")]
     Closed,
+    /// `user_text` is empty or only whitespace.
+    #[error("needs text")]
+    Empty,
+    /// The completer failed. The user line stays recorded.
+    ///
+    /// `message` is the caller-supplied sentence. This type does not wrap it.
+    #[error("{message}")]
+    Complete {
+        /// Display text from the completer.
+        message: String,
+    },
 }
 
 #[cfg(test)]
@@ -118,6 +161,83 @@ mod tests {
         let mut session = TextStubSession::default();
         session.close();
         assert_eq!(session.phase(), SessionPhase::Closed);
+        assert!(session.instructions().is_none());
+    }
+
+    #[test]
+    fn ask_records_the_user_line_and_returns_the_reply() {
+        let mut session = TextStubSession::open("be brief");
+        let reply = session
+            .ask("hello", |instructions, user| {
+                assert_eq!(instructions, "be brief");
+                assert_eq!(user, "hello");
+                Ok("pong".to_owned())
+            })
+            .expect("ask");
+        assert_eq!(reply, "pong");
+        assert_eq!(session.turns(), &["hello".to_owned()]);
+        assert_eq!(session.instructions(), Some("be brief"));
+    }
+
+    #[test]
+    fn ask_on_a_closed_session_does_not_call_the_completer() {
+        let mut session = TextStubSession::default();
+        let mut called = false;
+        let error = session.ask("hello", |_, _| {
+            called = true;
+            Ok("no".to_owned())
+        });
+        assert_eq!(error, Err(SessionError::Closed));
+        assert!(!called);
+        assert!(session.turns().is_empty());
+    }
+
+    #[test]
+    fn blank_ask_is_empty_and_does_not_record() {
+        let mut session = TextStubSession::open("be brief");
+        session.push_user_turn("kept").expect("open");
+        let mut called = false;
+        let error = session.ask("  \n", |_, _| {
+            called = true;
+            Ok("no".to_owned())
+        });
+        assert_eq!(error, Err(SessionError::Empty));
+        assert!(!called);
+        assert_eq!(session.turns(), &["kept".to_owned()]);
+    }
+
+    #[test]
+    fn completer_error_keeps_the_user_line() {
+        let mut session = TextStubSession::open("be brief");
+        let error = session
+            .ask("hello", |_, _| {
+                Err("Provider rejected the credentials.".to_owned())
+            })
+            .expect_err("complete");
+        assert_eq!(
+            error,
+            SessionError::Complete {
+                message: "Provider rejected the credentials.".to_owned(),
+            }
+        );
+        assert_eq!(error.to_string(), "Provider rejected the credentials.");
+        assert_eq!(session.turns(), &["hello".to_owned()]);
+    }
+
+    #[test]
+    fn close_then_ask_is_closed_and_close_stays_idempotent() {
+        let mut session = TextStubSession::open("be brief");
+        session.close();
+        session.close();
+        assert_eq!(session.phase(), SessionPhase::Closed);
+        let mut called = false;
+        let error = session.ask("hello", |_, _| {
+            called = true;
+            Ok("no".to_owned())
+        });
+        assert_eq!(error, Err(SessionError::Closed));
+        assert!(!called);
+        assert!(session.turns().is_empty());
         assert!(session.instructions().is_none());
     }
 }

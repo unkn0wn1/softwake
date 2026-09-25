@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-25
+- **Amended:** 2026-09-25. `echo` is unchanged. An open session may ask the selected provider through [ADR 0013](ADR-0013-session-provider.md).
 
 ## Decision
 
@@ -13,7 +14,7 @@ The phase-1 allowlist is exactly that name. `Allowlist::contains` is true only f
 
 A tool call is legal only while the voice state is awake. The daemon asks `permit_tool_dispatch` before it consults the allowlist. Sleep and hibernate refuse the call and do not run the tool. A refusal does not emit `tool_started` or `tool_finished`. A successful run emits `tool_started`, then `tool_finished`, then the response.
 
-Entering awake opens a text session and stores the rendered soul instructions (identity, user profile, and the runtime policy that names `echo`). Sleep closes that session. Hibernate from awake closes it and then stops capture. The session does not call a model.
+Entering awake opens a text session and stores the rendered soul instructions (identity, user profile, and the runtime policy that names `echo`). Sleep closes that session. Hibernate from awake closes it and then stops capture. `echo` is unchanged. An open session may ask the selected provider through [ADR 0013](ADR-0013-session-provider.md).
 
 The wire message is an additive `tool_request`. Protocol generation stays `1`. [ADR 0003](ADR-0003-ipc-transport.md) records the frame.
 

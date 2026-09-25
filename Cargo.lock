@@ -2817,10 +2817,12 @@ dependencies = [
 name = "softwake-daemon"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "softwake-audio",
  "softwake-connectors",
  "softwake-ipc",
  "softwake-policy",
+ "softwake-providers",
  "softwake-session",
  "softwake-soul",
  "softwake-state",

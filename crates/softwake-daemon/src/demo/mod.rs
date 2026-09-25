@@ -19,14 +19,16 @@
 //! hibernate close it and drop a pending confirmation. `tool` runs a safe tool
 //! while awake. A confirm-gated tool waits for `confirm` or `confirm-tool`.
 //! `cancel` clears that pending call without running it. `email_send` appends
-//! one in-memory message only after that confirm.
+//! one in-memory message only after that confirm. While awake, `ask` and
+//! `chat` send the stored instructions and the typed line to the selected
+//! provider ([ADR 0013](../../../../docs/ADR-0013-session-provider.md)).
+//! Sleep and hibernate refuse that call. The default build does not open a socket.
 
 use std::time::Duration;
 
 use softwake_audio::{AudioCapture, MockAudioCapture};
-#[cfg(test)]
-use softwake_session::SessionPhase;
-use softwake_session::TextStubSession;
+use softwake_providers::PreparedChat;
+use softwake_session::{SessionPhase, TextStubSession};
 use softwake_soul::SoulDir;
 #[cfg(test)]
 use softwake_state::VoiceState;
@@ -38,7 +40,7 @@ use crate::dispatch::{Hands, RequestOutcome};
 use crate::pcm::score_frame;
 use crate::soul::LoadedSoul;
 
-const COMMANDS: &str = "commands: wake, sleep, hibernate, resume, status, reload-soul, tool, confirm, cancel, hear, say, quit";
+const COMMANDS: &str = "commands: wake, sleep, hibernate, resume, status, reload-soul, tool, confirm, cancel, hear, say, ask, chat, quit";
 const TYPED_ONLY: &str = "typed commands only — mock capture; native PipeWire is feature-gated";
 
 /// One step of the demo loop.
@@ -77,6 +79,10 @@ enum Parsed {
     HearMissingText,
     Say { text: String },
     SayMissingText,
+    Ask { text: String },
+    AskMissingText,
+    Chat { text: String },
+    ChatMissingText,
     Quit,
     Unknown,
 }
@@ -118,6 +124,8 @@ impl Parsed {
             Self::Cancel { .. } | Self::CancelExtra => "cancel",
             Self::Hear { .. } | Self::HearMissingText => "hear",
             Self::Say { .. } | Self::SayMissingText => "say",
+            Self::Ask { .. } | Self::AskMissingText => "ask",
+            Self::Chat { .. } | Self::ChatMissingText => "chat",
             Self::Quit => "quit",
             Self::Unknown => "unknown",
         }
@@ -146,6 +154,9 @@ pub(crate) struct Demo {
     #[cfg_attr(not(test), allow(dead_code))]
     last_transcripts: Vec<TranscriptEvent>,
     verbose: bool,
+    /// Test double. Production always uses the disk path.
+    #[cfg(test)]
+    chat_fixture: Option<crate::chat::ChatFixture>,
 }
 
 impl Demo {
@@ -169,6 +180,8 @@ impl Demo {
             tts: MockTts::default(),
             last_transcripts: Vec::new(),
             verbose: false,
+            #[cfg(test)]
+            chat_fixture: None,
         }
     }
 
@@ -219,13 +232,11 @@ impl Demo {
                 lines
             }
             Parsed::Say { text } => self.speak_text(&text),
-            Parsed::SayMissingText => {
-                let mut lines = vec!["rejected: say needs text".to_owned(), COMMANDS.to_owned()];
-                if self.verbose {
-                    lines.insert(0, "verbose: rejected: say needs text".to_owned());
-                }
-                lines
-            }
+            Parsed::SayMissingText => missing_text_lines(self.verbose, "say"),
+            Parsed::Ask { text } => self.ask_command("ask", &text),
+            Parsed::AskMissingText => missing_text_lines(self.verbose, "ask"),
+            Parsed::Chat { text } => self.ask_command("chat", &text),
+            Parsed::ChatMissingText => missing_text_lines(self.verbose, "chat"),
             Parsed::ToolMissingName => {
                 let mut lines = vec![
                     "rejected: tool needs a name".to_owned(),
@@ -303,6 +314,24 @@ impl Demo {
     }
 
     #[cfg(test)]
+    fn session_turns(&self) -> &[String] {
+        self.session.turns()
+    }
+
+    #[cfg(test)]
+    fn install_chat_fixture(&mut self, fixture: crate::chat::ChatFixture) {
+        self.chat_fixture = Some(fixture);
+    }
+
+    #[cfg(test)]
+    fn chat_posts(&self) -> Vec<crate::chat::RecordedPost> {
+        self.chat_fixture
+            .as_ref()
+            .map(|fixture| fixture.transport.posts())
+            .unwrap_or_default()
+    }
+
+    #[cfg(test)]
     fn notifications(&self) -> Vec<String> {
         self.hands.notifications().iter().cloned().collect()
     }
@@ -366,6 +395,132 @@ impl Demo {
             }
         }
         self.with_status(lines)
+    }
+
+    /// Send one typed line to the selected provider while awake.
+    ///
+    /// Blank text is rejected before this runs. Sleep and hibernate refuse
+    /// the call before Settings are loaded.
+    fn ask_command(&mut self, command: &str, text: &str) -> Vec<String> {
+        if self.machine.permit_tool_dispatch().is_err() {
+            return self.chat_rejected(
+                &format!(
+                    "{command} while {} (chat acts only while awake)",
+                    self.machine.state()
+                ),
+                None,
+            );
+        }
+        if self.session.phase() != SessionPhase::Open {
+            return self.chat_rejected("session is closed", None);
+        }
+        #[cfg(test)]
+        if self.chat_fixture.is_some() {
+            return self.ask_fixture(text);
+        }
+        self.ask_disk(text)
+    }
+
+    #[cfg(test)]
+    fn ask_fixture(&mut self, text: &str) -> Vec<String> {
+        let extracted = self.chat_fixture.as_ref().map(|fixture| {
+            let prepared = softwake_providers::prepare_chat(
+                &fixture.handle,
+                fixture.settings_file_present,
+                fixture.env_xai.as_deref(),
+                fixture.env_openai.as_deref(),
+            );
+            (prepared, std::rc::Rc::clone(&fixture.transport))
+        });
+        let Some((prepared, transport)) = extracted else {
+            return self.ask_disk(text);
+        };
+        match prepared {
+            Ok((prepared, bearer)) => {
+                let call = prepared.clone();
+                self.complete_ask(text, &prepared, move |system, user| {
+                    softwake_providers::complete_chat(
+                        transport.as_ref(),
+                        &call,
+                        &bearer,
+                        system,
+                        user,
+                    )
+                    .map_err(|error| error.to_string())
+                })
+            }
+            Err(error) => self.chat_rejected(&error.to_string(), None),
+        }
+    }
+
+    fn ask_disk(&mut self, text: &str) -> Vec<String> {
+        let ready = match crate::chat::load_disk_chat() {
+            Ok(ready) => ready,
+            Err(message) => return self.chat_rejected(&message, None),
+        };
+        self.finish_disk(text, ready)
+    }
+
+    #[cfg(not(feature = "live-http"))]
+    fn finish_disk(&mut self, text: &str, ready: crate::chat::DiskChat) -> Vec<String> {
+        let crate::chat::DiskChat { prepared, bearer } = ready;
+        match crate::chat::finish_prepared_chat(&prepared, &bearer, "", text) {
+            Ok(reply) => self.chat_ok(&prepared, &reply),
+            Err(message) => self.chat_rejected(&message, Some(&prepared)),
+        }
+    }
+
+    #[cfg(feature = "live-http")]
+    fn finish_disk(&mut self, text: &str, ready: crate::chat::DiskChat) -> Vec<String> {
+        let crate::chat::DiskChat { prepared, bearer } = ready;
+        let call = prepared.clone();
+        self.complete_ask(text, &prepared, move |system, user| {
+            crate::chat::finish_prepared_chat(&call, &bearer, system, user)
+        })
+    }
+
+    #[cfg(any(test, feature = "live-http"))]
+    fn complete_ask(
+        &mut self,
+        text: &str,
+        prepared: &PreparedChat,
+        complete: impl FnOnce(&str, &str) -> Result<String, String>,
+    ) -> Vec<String> {
+        let mut lines = Vec::new();
+        self.note_chat(&mut lines, prepared);
+        match self.session.ask(text, complete) {
+            Ok(reply) => lines.push(format!("assistant: {reply}")),
+            Err(error) => {
+                let rejected = format!("rejected: {error}");
+                self.push_verbose(&mut lines, &rejected);
+                lines.push(rejected);
+            }
+        }
+        self.with_status(lines)
+    }
+
+    #[cfg_attr(feature = "live-http", allow(dead_code))]
+    fn chat_ok(&mut self, prepared: &PreparedChat, reply: &str) -> Vec<String> {
+        let mut lines = Vec::new();
+        self.note_chat(&mut lines, prepared);
+        lines.push(format!("assistant: {reply}"));
+        self.with_status(lines)
+    }
+
+    fn chat_rejected(&mut self, message: &str, prepared: Option<&PreparedChat>) -> Vec<String> {
+        let mut lines = Vec::new();
+        if let Some(prepared) = prepared {
+            self.note_chat(&mut lines, prepared);
+        }
+        let rejected = format!("rejected: {message}");
+        self.push_verbose(&mut lines, &rejected);
+        lines.push(rejected);
+        self.with_status(lines)
+    }
+
+    fn note_chat(&self, lines: &mut Vec<String>, prepared: &PreparedChat) {
+        self.push_verbose(lines, format!("provider: {}", prepared.provider));
+        self.push_verbose(lines, format!("model: {}", prepared.model));
     }
 
     /// Record mock TTS while awake.
@@ -709,6 +864,12 @@ fn parse_line(line: &str) -> Parsed {
             text: rest.to_owned(),
         };
     }
+    if head.eq_ignore_ascii_case("ask") {
+        return parse_chat_text(trimmed, head, true);
+    }
+    if head.eq_ignore_ascii_case("chat") {
+        return parse_chat_text(trimmed, head, false);
+    }
     match trimmed.to_ascii_lowercase().as_str() {
         "wake" => Parsed::Wake,
         "sleep" => Parsed::Sleep,
@@ -718,6 +879,35 @@ fn parse_line(line: &str) -> Parsed {
         "reload-soul" => Parsed::ReloadSoul,
         "quit" => Parsed::Quit,
         _ => Parsed::Unknown,
+    }
+}
+
+fn missing_text_lines(verbose: bool, command: &str) -> Vec<String> {
+    let rejected = format!("rejected: {command} needs text");
+    let mut lines = vec![rejected.clone(), COMMANDS.to_owned()];
+    if verbose {
+        lines.insert(0, format!("verbose: {rejected}"));
+    }
+    lines
+}
+
+fn parse_chat_text(trimmed: &str, head: &str, ask: bool) -> Parsed {
+    let rest = trimmed[head.len()..].trim();
+    if rest.is_empty() {
+        return if ask {
+            Parsed::AskMissingText
+        } else {
+            Parsed::ChatMissingText
+        };
+    }
+    if ask {
+        Parsed::Ask {
+            text: rest.to_owned(),
+        }
+    } else {
+        Parsed::Chat {
+            text: rest.to_owned(),
+        }
     }
 }
 
@@ -746,5 +936,7 @@ fn effect_label(effect: Effect) -> &'static str {
     }
 }
 
+#[cfg(test)]
+mod chat_tests;
 #[cfg(test)]
 mod tests;
