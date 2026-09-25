@@ -155,7 +155,7 @@ pub(crate) fn load_disk_chat() -> Result<DiskChat, String> {
     let settings = resolve_providers_file().map_err(|error| error.to_string())?;
     let secrets = resolve_secrets_file().map_err(|error| error.to_string())?;
     let (handle, settings_file_present) =
-        ProviderHandle::load_paths(&settings, &secrets).map_err(|error| error.to_string())?;
+        ProviderHandle::load_resolved(&settings, &secrets).map_err(|error| error.to_string())?;
     let env_xai = std::env::var("XAI_API_KEY").ok();
     let env_openai = std::env::var("OPENAI_API_KEY").ok();
     let env_openrouter = std::env::var("OPENROUTER_API_KEY").ok();

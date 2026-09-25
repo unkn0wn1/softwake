@@ -25,8 +25,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      # softwake-ui links WebKitGTK. These are the Tauri Linux prerequisites
-      # that a stock ubuntu-latest image does not already provide.
+      # softwake-ui links WebKitGTK. softwake-providers links libdbus for the
+      # Secret Service client inside the keyring crate. A stock ubuntu-latest
+      # image does not already provide these. Do not install gnome-keyring,
+      # kwallet, or libsecret.
       - name: Install UI system libraries
         run: |
           sudo apt-get update
@@ -36,7 +38,8 @@ jobs:
             librsvg2-dev \
             patchelf \
             libxdo-dev \
-            libssl-dev
+            libssl-dev \
+            libdbus-1-dev
 
       - name: Format
         run: cargo fmt --all -- --check

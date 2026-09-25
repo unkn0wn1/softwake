@@ -15,6 +15,9 @@ mod oauth;
 mod probe;
 mod registry;
 mod secrets;
+mod secrets_file;
+mod secrets_keyring;
+mod secrets_mock;
 mod settings;
 mod transport;
 
@@ -48,9 +51,16 @@ pub use registry::{
     normalize_compatible_base, provider_definition, resolve_api_base,
 };
 pub use secrets::{
-    FileSecretStore, MAX_SECRETS_BYTES, PLAINTEXT_WARNING, SECRETS_FILE_NAME, SecretBag,
-    SecretStoreError, resolve_secrets_file, resolve_secrets_file_from,
+    BackendChoice, BackendPref, KEYRING_PROBE_USER, KEYRING_SERVICE, KEYRING_STATUS, KEYRING_USER,
+    KeyringClient, MAX_SECRETS_BYTES, OnDiskKind, PLAINTEXT_OPT_IN_MESSAGE, PLAINTEXT_WARNING,
+    POINTER_IDENTITY_MESSAGE, SECRETS_FILE_NAME, SecretBackend, SecretBag, SecretStore,
+    SecretStoreError, StorageReport, UNSUPPORTED_BACKEND_MESSAGE, UnavailableSecretStore,
+    open_store, open_store_with, opt_in_plaintext, opt_in_plaintext_resolved, resolve_backend,
+    resolve_secrets_file, resolve_secrets_file_from, update_bag,
 };
+pub use secrets_file::FileSecretStore;
+pub use secrets_keyring::KeyringSecretStore;
+pub use secrets_mock::MockSecretStore;
 pub use settings::{
     FileProviderSettings, MAX_SETTINGS_BYTES, ModelCache, PROVIDERS_FILE_NAME, ProviderSettings,
     SettingsError, TestReport, resolve_providers_file, resolve_providers_file_from,
