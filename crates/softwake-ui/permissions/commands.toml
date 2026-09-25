@@ -94,6 +94,26 @@ description = "Opt in to a local plaintext secret file. The command writes no ke
 commands.allow = ["provider_opt_in_plaintext"]
 
 [[permission]]
+identifier = "allow-email-snapshot"
+description = "Read email Settings. The snapshot has no password."
+commands.allow = ["email_snapshot"]
+
+[[permission]]
+identifier = "allow-email-save"
+description = "Save email Settings and optional SMTP password."
+commands.allow = ["email_save"]
+
+[[permission]]
+identifier = "allow-email-clear-password"
+description = "Clear the saved SMTP password."
+commands.allow = ["email_clear_password"]
+
+[[permission]]
+identifier = "allow-email-test"
+description = "Validate live email configuration without sending mail."
+commands.allow = ["email_test"]
+
+[[permission]]
 identifier = "allow-pack-snapshot"
 description = "Read the four soul-pack files for the General editors."
 commands.allow = ["pack_snapshot"]

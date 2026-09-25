@@ -22,6 +22,7 @@ const SECRET_KEYS: &[&str] = &[
     "openai_api_key",
     "openrouter_api_key",
     "openai_compatible_api_key",
+    "email_smtp_password",
     "xai_oauth",
 ];
 
@@ -249,6 +250,7 @@ pub(crate) fn write_plaintext(path: &Path, bag: &SecretBag) -> Result<(), Secret
         openai_api_key: bag.openai_api_key.clone(),
         openrouter_api_key: bag.openrouter_api_key.clone(),
         openai_compatible_api_key: bag.openai_compatible_api_key.clone(),
+        email_smtp_password: bag.email_smtp_password.clone(),
         xai_oauth: bag.xai_oauth.clone(),
     };
     let body = serde_json::to_vec_pretty(&document).map_err(|_| SecretStoreError::Invalid {
@@ -292,6 +294,8 @@ struct PlaintextFile {
     openrouter_api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     openai_compatible_api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    email_smtp_password: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     xai_oauth: Option<OAuthTokenSet>,
 }

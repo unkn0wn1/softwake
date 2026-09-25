@@ -3473,6 +3473,8 @@ dependencies = [
 name = "softwake-connectors"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "thiserror 2.0.19",
 ]
 
@@ -3567,6 +3569,7 @@ name = "softwake-ui"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "softwake-connectors",
  "softwake-ipc",
  "softwake-providers",
  "softwake-soul",

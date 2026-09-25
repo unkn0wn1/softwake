@@ -18,7 +18,10 @@
 
 use std::collections::VecDeque;
 
-use softwake_connectors::{ConnectorRegistry, EMAIL, EMAIL_SEND, MockEmail, OutboundEmail};
+use softwake_connectors::{
+    ConnectorRegistry, EMAIL, EMAIL_SEND, EmailBackend, EmailSettings, FileEmailSettings,
+    OutboundEmail, resolve_email_file,
+};
 use softwake_policy::{PolicyDecision, PolicyEngine, Subject, permits_confirmed_connector};
 use softwake_state::{Machine, StateError, VoiceState};
 use softwake_tools::{
@@ -26,7 +29,7 @@ use softwake_tools::{
     parse_email_send_args,
 };
 
-use crate::email_tool::commit_email_send;
+use crate::email_tool::{commit_detail, commit_email_send};
 
 /// How many tool-log entries the runtime keeps.
 const LOG_CAP: usize = 64;
@@ -229,7 +232,7 @@ pub(crate) struct Hands {
     policy: PolicyEngine,
     registry: ToolRegistry,
     connectors: ConnectorRegistry,
-    email: MockEmail,
+    email: EmailBackend,
     pending: Option<Pending>,
     sink: VecDeque<String>,
     log: VecDeque<ToolLogEntry>,
@@ -238,20 +241,39 @@ pub(crate) struct Hands {
 }
 
 impl Hands {
-    /// Empty sink, empty outbox, empty log, the builtin policy engine, and the builtin registries.
+    /// Empty sink, mock outbox, empty log, the builtin policy engine, and the builtin registries.
+    ///
+    /// Tests and default construction stay on [`EmailBackend::Mock`]. Serve and
+    /// the typed demo call [`Hands::from_disk`] so an opted-in live Settings
+    /// file can select the live scaffold.
     #[must_use]
     pub(crate) fn new() -> Self {
+        Self::with_email(EmailBackend::default())
+    }
+
+    /// Like [`Hands::new`], using `email` as the backend.
+    #[must_use]
+    pub(crate) fn with_email(email: EmailBackend) -> Self {
         Self {
             policy: PolicyEngine::builtin(),
             registry: ToolRegistry::phase2(),
             connectors: ConnectorRegistry::phase3(),
-            email: MockEmail::default(),
+            email,
             pending: None,
             sink: VecDeque::new(),
             log: VecDeque::new(),
             next_seq: 0,
             next_pending: 0,
         }
+    }
+
+    /// Load non-secret email Settings and whether an SMTP password is saved.
+    ///
+    /// Missing Settings or secret bag errors fall back to the mock backend so
+    /// the daemon still starts. Live email stays off unless Settings say so.
+    #[must_use]
+    pub(crate) fn from_disk() -> Self {
+        Self::with_email(email_backend_from_disk())
     }
 
     /// The confirmation that is waiting, if any.
@@ -277,10 +299,10 @@ impl Hands {
         &self.sink
     }
 
-    /// Messages accepted by the in-memory connector, oldest first.
+    /// Messages accepted by the email backend (mock outbox or live drafts), oldest first.
     #[must_use]
     pub(crate) fn outbox(&self) -> &[OutboundEmail] {
-        self.email.outbox()
+        self.email.messages()
     }
 
     /// Tool log, oldest first. At most [`LOG_CAP`] entries.
@@ -585,7 +607,7 @@ impl Hands {
                     return Err(DispatchError::Connector { message });
                 }
             };
-            return Ok(format!("sent {}", receipt.id));
+            return Ok(commit_detail(&self.email, receipt));
         }
         let detail = match self.registry.invoke_confirmed(&pending.name, &pending.args) {
             Ok(ToolResult { detail }) => detail,
@@ -660,6 +682,23 @@ impl Hands {
             detail,
         });
     }
+}
+
+fn email_backend_from_disk() -> EmailBackend {
+    let settings = match resolve_email_file().and_then(FileEmailSettings::new) {
+        Ok(store) => store.load().unwrap_or_default(),
+        Err(_) => EmailSettings::default(),
+    };
+    let password_present = softwake_providers::resolve_secrets_file()
+        .ok()
+        .and_then(|path| softwake_providers::open_store(&path).ok())
+        .and_then(|store| store.load().ok())
+        .is_some_and(|bag| {
+            bag.email_smtp_password
+                .as_ref()
+                .is_some_and(|password| !password.is_empty())
+        });
+    EmailBackend::from_settings(settings, password_present)
 }
 
 impl Default for Hands {

@@ -4,9 +4,11 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 rust-version.workspace = true
-description = "Connector boundary. Email, Drive, and calendar traits, in-memory mocks, confirm or deny registry."
+description = "Connector boundary. Email, Drive, and calendar traits, in-memory mocks, opt-in live email scaffold, confirm or deny registry."
 
 [dependencies]
+serde = { workspace = true }
+serde_json.workspace = true
 thiserror.workspace = true
 
 [lints]

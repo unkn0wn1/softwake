@@ -78,6 +78,9 @@ pub struct SecretBag {
     /// Saved OpenAI-compatible API key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openai_compatible_api_key: Option<String>,
+    /// Saved SMTP password for opt-in live email.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email_smtp_password: Option<String>,
 }
 
 fn legacy_version() -> u32 {
@@ -112,6 +115,10 @@ impl std::fmt::Debug for SecretBag {
                 "openai_compatible_api_key",
                 &redact_secret(self.openai_compatible_api_key.as_ref()),
             )
+            .field(
+                "email_smtp_password",
+                &redact_secret(self.email_smtp_password.as_ref()),
+            )
             .finish()
     }
 }
@@ -130,6 +137,7 @@ impl SecretBag {
             xai_oauth: None,
             openrouter_api_key: None,
             openai_compatible_api_key: None,
+            email_smtp_password: None,
         }
     }
 
@@ -633,6 +641,7 @@ pub(crate) fn bag_has_secret(bag: &SecretBag) -> bool {
         || filled(bag.openai_api_key.as_ref())
         || filled(bag.openrouter_api_key.as_ref())
         || filled(bag.openai_compatible_api_key.as_ref())
+        || filled(bag.email_smtp_password.as_ref())
         || bag.xai_oauth.as_ref().is_some_and(|tokens| {
             !tokens.access_token.is_empty() || !tokens.refresh_token.is_empty()
         })
@@ -650,6 +659,8 @@ pub(crate) struct SecretPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) openai_compatible_api_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) email_smtp_password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) xai_oauth: Option<OAuthTokenSet>,
 }
 
@@ -659,6 +670,7 @@ pub(crate) fn encode_payload(bag: &SecretBag) -> Result<String, SecretStoreError
         openai_api_key: bag.openai_api_key.clone(),
         openrouter_api_key: bag.openrouter_api_key.clone(),
         openai_compatible_api_key: bag.openai_compatible_api_key.clone(),
+        email_smtp_password: bag.email_smtp_password.clone(),
         xai_oauth: bag.xai_oauth.clone(),
     };
     serde_json::to_string(&payload).map_err(|_| SecretStoreError::Keyring)
@@ -685,6 +697,7 @@ pub(crate) fn decode_payload(path: &Path, json: &str) -> Result<SecretBag, Secre
         xai_oauth: payload.xai_oauth,
         openrouter_api_key: payload.openrouter_api_key,
         openai_compatible_api_key: payload.openai_compatible_api_key,
+        email_smtp_password: payload.email_smtp_password,
     })
 }
 

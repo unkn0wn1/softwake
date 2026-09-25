@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "The Settings and HUD windows may read daemon status, send voice-state and ask commands, confirm tools, edit the soul pack, and use provider Settings.",
+  "description": "The Settings and HUD windows may read daemon status, send voice-state and ask commands, confirm tools, edit the soul pack, use provider Settings, and use email Settings.",
   "windows": ["main", "hud"],
   "permissions": [
     "core:default",
@@ -27,6 +27,10 @@
     "allow-provider-set-model",
     "allow-provider-set-voice-model",
     "allow-provider-opt-in-plaintext",
+    "allow-email-snapshot",
+    "allow-email-save",
+    "allow-email-clear-password",
+    "allow-email-test",
     "allow-pack-snapshot",
     "allow-pack-save",
     {
