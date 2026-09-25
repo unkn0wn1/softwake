@@ -58,3 +58,11 @@ Live multi-monitor feedback locked two placement rules:
 2. The capsule stays **tiny when collapsed** (bloom only). A click expands to a **fixed** larger window that shows the type strip and reply. Collapse re-anchors to the same primary bottom-right corner. Always-on-top is unchanged.
 
 Space and Enter on the capsule toggle expand only when the capsule itself is focused. Keys typed in the ask field are never stolen.
+
+## Amendment (2026-09-25) — placement, drag, z-order
+
+- Default park remains **primary monitor bottom-right** (work area). A missing monitor API falls back to the first monitor, then a non-centered corner — never silent center.
+- Operators may **drag** the undecorated capsule; Softwake persists logical top-left in `hud-position.json` under the Softwake config root. While that file exists, expand/collapse **resizes only** and does not re-anchor to bottom-right.
+- The HUD re-asserts **always-on-top** after layout changes, when Settings is shown from the tray, and when Settings or the HUD gains focus, so the capsule stays above the Settings window on Linux.
+- Press-to-talk release paints the idle mic and a **thinking…** line before the blocking STT/ask/TTS round trip (`spawn_blocking` in the UI commands) so the HUD chrome does not freeze for the duration of the call.
+

@@ -164,6 +164,21 @@ description = "Resize and re-anchor the HUD capsule when expanding or collapsing
 commands.allow = ["hud_set_layout"]
 
 [[permission]]
+identifier = "allow-hud-start-drag"
+description = "Begin dragging the always-on-top HUD capsule."
+commands.allow = ["hud_start_drag"]
+
+[[permission]]
+identifier = "allow-hud-save-position"
+description = "Persist the HUD capsule position after a drag."
+commands.allow = ["hud_save_position"]
+
+[[permission]]
+identifier = "allow-hud-reset-position"
+description = "Clear a saved HUD position and park at primary bottom-right."
+commands.allow = ["hud_reset_position"]
+
+[[permission]]
 identifier = "allow-profiles-snapshot"
 description = "List Softwake profiles and load the selected pack into the Profiles editors."
 commands.allow = ["profiles_snapshot"]

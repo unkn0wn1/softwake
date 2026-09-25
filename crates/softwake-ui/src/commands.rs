@@ -4,6 +4,7 @@
 use serde::Serialize;
 use softwake_ipc::{Client, Command, Status, VoiceState, resolve_socket_path};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::Manager;
 
 fn call(command: Command) -> Result<Status, String> {
     let path = resolve_socket_path(None).map_err(|error| error.to_string())?;
@@ -182,30 +183,42 @@ fn mock_level(capture_running: bool) -> f64 {
 
 /// Arm press-to-talk. From sleep this wakes first. Hibernate is refused.
 ///
+/// Runs off the UI thread so a slow wake does not freeze the HUD chrome.
+///
 /// # Errors
 ///
 /// Returns the daemon or socket error as text.
 #[tauri::command]
-pub fn hud_talk_start() -> Result<Status, String> {
-    let mut client = connect()?;
-    client.call_talk_start().map_err(|error| error.to_string())
+pub async fn hud_talk_start() -> Result<Status, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut client = connect()?;
+        client.call_talk_start().map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("talk start task failed: {error}"))?
 }
 
 /// Release press-to-talk, transcribe, ask, and speak when Eve is configured.
 ///
 /// The socket read timeout is raised for this call because STT, ask, and TTS
-/// share one round trip. The daemon still bounds each HTTP call.
+/// share one round trip. The daemon still bounds each HTTP call. Work runs on
+/// a blocking pool so the HUD can paint a released mic button and a thinking
+/// line while the round trip is in flight.
 ///
 /// # Errors
 ///
 /// Returns the daemon or socket error as text.
 #[tauri::command]
-pub fn hud_talk_stop() -> Result<Status, String> {
-    let mut client = connect()?;
-    client
-        .set_read_timeout(Some(std::time::Duration::from_secs(90)))
-        .map_err(|error| error.to_string())?;
-    client.call_talk_stop().map_err(|error| error.to_string())
+pub async fn hud_talk_stop() -> Result<Status, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut client = connect()?;
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(90)))
+            .map_err(|error| error.to_string())?;
+        client.call_talk_stop().map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("talk stop task failed: {error}"))?
 }
 
 /// Submit from the HUD: ask while awake; wake then ask from sleep; refuse hibernate.
@@ -218,26 +231,30 @@ pub fn hud_talk_stop() -> Result<Status, String> {
     clippy::needless_pass_by_value,
     reason = "Tauri deserializes this command argument as an owned String"
 )]
-pub fn hud_ask(text: String) -> Result<Status, String> {
-    let trimmed = text.trim();
+pub async fn hud_ask(text: String) -> Result<Status, String> {
+    let trimmed = text.trim().to_owned();
     if trimmed.is_empty() {
         return Err("ask text is blank".to_owned());
     }
-    let mut client = connect()?;
-    let status = client
-        .call(Command::GetStatus)
-        .map_err(|error| error.to_string())?;
-    match status.state {
-        VoiceState::Awake => client.call_ask(trimmed).map_err(|error| error.to_string()),
-        VoiceState::Sleep => {
-            client.call_wake().map_err(|error| error.to_string())?;
-            client.call_ask(trimmed).map_err(|error| error.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut client = connect()?;
+        let status = client
+            .call(Command::GetStatus)
+            .map_err(|error| error.to_string())?;
+        match status.state {
+            VoiceState::Awake => client.call_ask(&trimmed).map_err(|error| error.to_string()),
+            VoiceState::Sleep => {
+                client.call_wake().map_err(|error| error.to_string())?;
+                client.call_ask(&trimmed).map_err(|error| error.to_string())
+            }
+            VoiceState::Hibernate => Err(
+                "Softwake is hibernating — leave hibernate from Settings (Wake) or the tray first"
+                    .to_owned(),
+            ),
         }
-        VoiceState::Hibernate => Err(
-            "Softwake is hibernating — leave hibernate from Settings (Wake) or the tray first"
-                .to_owned(),
-        ),
-    }
+    })
+    .await
+    .map_err(|error| format!("ask task failed: {error}"))?
 }
 
 /// Resize and re-anchor the HUD capsule (collapsed bloom vs expanded ask strip).
@@ -252,4 +269,61 @@ pub fn hud_ask(text: String) -> Result<Status, String> {
 )]
 pub fn hud_set_layout(app: tauri::AppHandle, expanded: bool) -> Result<(), String> {
     crate::set_hud_layout(&app, expanded)
+}
+
+/// Begin a native window drag for the HUD capsule.
+///
+/// # Errors
+///
+/// Returns a sentence when the HUD window is missing or the drag API fails.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri injects an owned AppHandle into commands that touch windows"
+)]
+pub fn hud_start_drag(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("hud")
+        .ok_or_else(|| "HUD window is not open".to_owned())?;
+    window.start_dragging().map_err(|error| error.to_string())
+}
+
+/// Persist the current HUD top-left so expand/collapse stops re-anchoring to BR.
+///
+/// # Errors
+///
+/// Returns a sentence when the window or config write fails.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri injects an owned AppHandle into commands that touch windows"
+)]
+pub fn hud_save_position(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("hud")
+        .ok_or_else(|| "HUD window is not open".to_owned())?;
+    let position = window.outer_position().map_err(|error| error.to_string())?;
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let logical = position.to_logical::<f64>(scale);
+    crate::hud_pos::save(crate::hud_pos::HudPosition {
+        x: logical.x,
+        y: logical.y,
+    })?;
+    crate::assert_hud_on_top(&app);
+    Ok(())
+}
+
+/// Clear a saved HUD placement and park at primary bottom-right again.
+///
+/// # Errors
+///
+/// Returns a sentence when clear or re-layout fails.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri injects an owned AppHandle into commands that touch windows"
+)]
+pub fn hud_reset_position(app: tauri::AppHandle) -> Result<(), String> {
+    crate::hud_pos::clear()?;
+    crate::set_hud_layout(&app, false)
 }

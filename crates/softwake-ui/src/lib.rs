@@ -8,6 +8,7 @@
 
 mod commands;
 mod email;
+mod hud_pos;
 mod oauth_open;
 mod pack;
 mod profiles;
@@ -42,6 +43,9 @@ pub fn run() {
             commands::hud_talk_start,
             commands::hud_talk_stop,
             commands::hud_set_layout,
+            commands::hud_start_drag,
+            commands::hud_save_position,
+            commands::hud_reset_position,
             providers::provider_snapshot,
             providers::provider_select,
             providers::provider_set_key,
@@ -72,13 +76,26 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if window.label() != "main" {
-                return;
-            }
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                // Keep the tray + HUD alive; Settings can reopen from the tray.
-                api.prevent_close();
-                let _ = window.hide();
+            match window.label() {
+                "main" => {
+                    match event {
+                        WindowEvent::CloseRequested { api, .. } => {
+                            // Keep the tray + HUD alive; Settings can reopen from the tray.
+                            api.prevent_close();
+                            let _ = window.hide();
+                        }
+                        WindowEvent::Focused(true) | WindowEvent::Moved(_) => {
+                            assert_hud_on_top(window.app_handle());
+                        }
+                        _ => {}
+                    }
+                }
+                "hud" => {
+                    if matches!(event, WindowEvent::Focused(true) | WindowEvent::Moved(_)) {
+                        assert_hud_on_top(window.app_handle());
+                    }
+                }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())
@@ -101,12 +118,8 @@ fn hud_logical_size(expanded: bool) -> (f64, f64) {
     }
 }
 
-/// Bottom-right of the primary monitor work area (falls back to full monitor).
-///
-/// Uses [`tauri::Monitor::position`] / work area so multi-monitor layouts do not
-/// place the capsule on the wrong screen when primary is not at `(0, 0)`.
-fn primary_bottom_right(app: &AppHandle, width: f64, height: f64) -> Option<(f64, f64)> {
-    let monitor = app.primary_monitor().ok().flatten()?;
+/// Bottom-right of a monitor work area (logical pixels).
+fn bottom_right_on(monitor: &tauri::Monitor, width: f64, height: f64) -> (f64, f64) {
     let scale = monitor.scale_factor();
     let area = monitor.work_area();
     let origin_x = f64::from(area.position.x) / scale;
@@ -115,10 +128,34 @@ fn primary_bottom_right(app: &AppHandle, width: f64, height: f64) -> Option<(f64
     let work_h = f64::from(area.size.height) / scale;
     let x = origin_x + work_w - width - HUD_MARGIN;
     let y = origin_y + work_h - height - HUD_MARGIN;
-    Some((x, y))
+    (x, y)
 }
 
-/// Resize the HUD and re-anchor to the primary bottom-right corner.
+/// Primary bottom-right, else first monitor, else a coarse fallback (not center).
+fn default_hud_position(app: &AppHandle, width: f64, height: f64) -> (f64, f64) {
+    if let Ok(Some(monitor)) = app.primary_monitor() {
+        return bottom_right_on(&monitor, width, height);
+    }
+    if let Ok(monitors) = app.available_monitors() {
+        if let Some(monitor) = monitors.first() {
+            return bottom_right_on(monitor, width, height);
+        }
+    }
+    // Last resort: park away from the typical centered default.
+    (HUD_MARGIN * 4.0, HUD_MARGIN * 4.0)
+}
+
+/// Keep the capsule above Settings and other normal windows.
+pub(crate) fn assert_hud_on_top(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("hud") {
+        let _ = window.set_always_on_top(true);
+        let _ = window.unminimize();
+        // show() is a no-op when already visible; helps after focus races on Linux.
+        let _ = window.show();
+    }
+}
+
+/// Resize the HUD. Re-anchor to primary BR only when the operator has not dragged it.
 pub(crate) fn set_hud_layout(app: &AppHandle, expanded: bool) -> Result<(), String> {
     let (width, height) = hud_logical_size(expanded);
     let window = app
@@ -127,18 +164,23 @@ pub(crate) fn set_hud_layout(app: &AppHandle, expanded: bool) -> Result<(), Stri
     window
         .set_size(LogicalSize::new(width, height))
         .map_err(|error| error.to_string())?;
-    if let Some((x, y)) = primary_bottom_right(app, width, height) {
+    if hud_pos::load().is_none() {
+        let (x, y) = default_hud_position(app, width, height);
         window
             .set_position(LogicalPosition::new(x, y))
             .map_err(|error| error.to_string())?;
     }
-    let _ = window.set_always_on_top(true);
+    assert_hud_on_top(app);
     Ok(())
 }
 
 fn open_hud(app: &AppHandle) -> tauri::Result<()> {
     let (width, height) = hud_logical_size(false);
-    let mut builder = WebviewWindowBuilder::new(app, "hud", WebviewUrl::App("hud.html".into()))
+    let (x, y) = match hud_pos::load() {
+        Some(pos) => (pos.x, pos.y),
+        None => default_hud_position(app, width, height),
+    };
+    let builder = WebviewWindowBuilder::new(app, "hud", WebviewUrl::App("hud.html".into()))
         .title("Softwake")
         .inner_size(width, height)
         .resizable(false)
@@ -147,13 +189,11 @@ fn open_hud(app: &AppHandle) -> tauri::Result<()> {
         .skip_taskbar(true)
         .transparent(true)
         .visible(true)
-        .focused(false);
+        .focused(false)
+        .position(x, y);
 
-    if let Some((x, y)) = primary_bottom_right(app, width, height) {
-        builder = builder.position(x, y);
-    }
-
-    builder.build()?;
+    let window = builder.build()?;
+    let _ = window.set_always_on_top(true);
     Ok(())
 }
 
@@ -174,6 +214,9 @@ mod tests {
         "hud_talk_start",
         "hud_talk_stop",
         "hud_set_layout",
+        "hud_start_drag",
+        "hud_save_position",
+        "hud_reset_position",
         "provider_snapshot",
         "provider_select",
         "provider_set_key",
@@ -214,6 +257,9 @@ mod tests {
         "allow-hud-talk-start",
         "allow-hud-talk-stop",
         "allow-hud-set-layout",
+        "allow-hud-start-drag",
+        "allow-hud-save-position",
+        "allow-hud-reset-position",
         "allow-provider-snapshot",
         "allow-provider-select",
         "allow-provider-set-key",

@@ -800,6 +800,8 @@ function showPane(name) {
     const on = pane === name;
     section.classList.toggle("hidden", !on);
     section.hidden = !on;
+    // Belt-and-suspenders: pane-fill used to override .hidden via display:flex.
+    section.style.display = on ? "" : "none";
     if (on) {
       nav.setAttribute("aria-current", "page");
     } else {

@@ -162,6 +162,20 @@ function bumpIdle(ms) {
   }, idleMs);
 }
 
+function updateHint() {
+  const hint = document.querySelector("#hint");
+  if (!hint) {
+    return;
+  }
+  if (state === "awake") {
+    hint.textContent = "hold to talk · drag to move";
+  } else if (state === "hibernate") {
+    hint.textContent = "wake from Settings";
+  } else {
+    hint.textContent = "click to type · hold to talk";
+  }
+}
+
 async function refresh() {
   try {
     const snap = await invoke("hud_snapshot");
@@ -173,6 +187,7 @@ async function refresh() {
     captureRunning = false;
     level = 0.02;
   }
+  updateHint();
 }
 
 function errorText(error, fallback) {
@@ -218,16 +233,28 @@ async function beginTalk() {
   }
 }
 
+function paintReleasedMic(label) {
+  holding = false;
+  talkBtn.classList.remove("holding");
+  talkBtn.textContent = "Hold";
+  showReply(label, false);
+}
+
+/** Yield two animation frames so the released mic paints before a long invoke. */
+function afterPaint() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
+}
+
 async function endTalk() {
   if (!holding || talkPending) {
     return;
   }
-  holding = false;
   talkPending = true;
-  talkBtn.classList.remove("holding");
-  talkBtn.textContent = "Hold";
-  showReply("…", false);
+  paintReleasedMic("thinking…");
   bumpIdle(POST_ASK_IDLE_MS);
+  await afterPaint();
   try {
     const status = await invoke("hud_talk_stop");
     const message =
@@ -252,11 +279,22 @@ talkBtn.addEventListener("pointerdown", (event) => {
 talkBtn.addEventListener("pointerup", (event) => {
   event.preventDefault();
   event.stopPropagation();
+  try {
+    talkBtn.releasePointerCapture(event.pointerId);
+  } catch (_error) {
+    // Capture may already be released.
+  }
+  // Release chrome before the long STT→ask→TTS round trip.
   endTalk();
 });
 
 talkBtn.addEventListener("pointercancel", (event) => {
   event.stopPropagation();
+  try {
+    talkBtn.releasePointerCapture(event.pointerId);
+  } catch (_error) {
+    // ignore
+  }
   endTalk();
 });
 
@@ -285,7 +323,64 @@ function isTypingTarget(target) {
   return !!target.closest("input, textarea, button, select, [contenteditable], #ask-form");
 }
 
+
+let dragMoved = false;
+let dragStartX = 0;
+let dragStartY = 0;
+
+function isInteractiveTarget(target) {
+  if (!target || !(target instanceof Element)) {
+    return false;
+  }
+  return !!target.closest("#ask-form, #talk, #ask-send, #ask-input, button, input, a, .reply");
+}
+
+async function startHudDrag() {
+  try {
+    await invoke("hud_start_drag");
+  } catch (_error) {
+    // Drag is best-effort on platforms that refuse it.
+  }
+}
+
+async function saveHudPosition() {
+  try {
+    await invoke("hud_save_position");
+  } catch (_error) {
+    // Persist is best-effort; layout still works from BR default.
+  }
+}
+
+capsule.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0 || isInteractiveTarget(event.target)) {
+    return;
+  }
+  dragMoved = false;
+  dragStartX = event.screenX;
+  dragStartY = event.screenY;
+  // Native drag; click-to-expand still runs on pointerup if we did not move.
+  startHudDrag();
+});
+
+window.addEventListener("pointerup", (event) => {
+  if (dragStartX === 0 && dragStartY === 0) {
+    return;
+  }
+  const dx = Math.abs(event.screenX - dragStartX);
+  const dy = Math.abs(event.screenY - dragStartY);
+  dragMoved = dx > 4 || dy > 4;
+  dragStartX = 0;
+  dragStartY = 0;
+  if (dragMoved) {
+    saveHudPosition();
+  }
+});
+
 capsule.addEventListener("click", (event) => {
+  if (dragMoved) {
+    dragMoved = false;
+    return;
+  }
   if (event.target.closest("#ask-form") || event.target.closest(".reply") || event.target.closest("#talk")) {
     return;
   }
