@@ -289,8 +289,9 @@ Press-to-talk (mic in, Eve out) uses that same process ([ADR 0007](docs/ADR-0007
 
 1. In Settings, select **xAI sign-in** or **xAI API key**, save the credential, press **Test**, pick a chat model, and leave **TTS voice** empty (Eve) or pick another built-in xAI voice.
 2. Start serve with `live-http` and `pipewire-capture` as above. `ffplay` or `mpv` must be on `PATH` to hear the reply.
-3. Open the HUD, expand it, and **hold** the mic button while you speak. Release sends the clip to xAI speech-to-text, runs `ask`, and plays the reply with Eve.
-4. A typed HUD ask speaks the same way when the provider is xAI and `live-http` is on.
+3. Open the HUD, expand it, and **hold** the mic button while you speak. Release returns the mic button to idle immediately; Softwake shows **thinking…** while STT → ask → Eve run in the background (the HUD stays responsive).
+4. Drag the capsule (bloom area, not the mic/type controls) to reposition it. Softwake remembers the spot in `hud-position.json` under the Softwake config dir and will not yank it back to the primary bottom-right on expand/collapse. Delete that file (or call reset) to park at bottom-right again.
+5. A typed HUD ask speaks the same way when the provider is xAI and `live-http` is on.
 
 Default `cargo test --workspace` does not open a microphone and does not call STT or TTS. Phrase spotting (“hey Softwake”) is unchanged and still needs KWS weights.
 
@@ -302,7 +303,7 @@ The soul directory is the first match of `--soul-dir PATH` (on `serve` and `demo
 
 ## Window
 
-`softwake-ui` opens a **system tray** icon, a small **always-on-top HUD capsule**, and a resizable Settings window (860 by 680). Closing Settings hides it; Quit from the tray exits. The HUD anchors to the **bottom-right of the primary monitor**, stays collapsed (bloom only) until clicked, then expands to a fixed size with the type strip, a press-and-hold mic button, and the reply. Particles follow capture level while listening ([ADR 0015](docs/ADR-0015-tray-hud.md), [ADR 0016](docs/ADR-0016-capture-level-hud.md)): the daemon sends peak-normalized RMS on `Status` when PCM is scored, and the UI falls back to a local sine only when that field is absent. A left nav has four panes. Status is selected when the Settings window opens.
+`softwake-ui` opens a **system tray** icon, a small **always-on-top HUD capsule**, and a resizable Settings window (860 by 680). Closing Settings hides it; Quit from the tray exits. The HUD parks at the **bottom-right of the primary monitor** by default (always-on-top above Settings), stays collapsed (bloom only) until clicked, then expands to a fixed size with the type strip, a press-and-hold mic button, and the reply. Drag the bloom to move it; Softwake persists that spot and stops re-anchoring until `hud-position.json` is cleared. Settings left-nav shows **exactly one** content pane at a time. Particles follow capture level while listening ([ADR 0015](docs/ADR-0015-tray-hud.md), [ADR 0016](docs/ADR-0016-capture-level-hud.md)): the daemon sends peak-normalized RMS on `Status` when PCM is scored, and the UI falls back to a local sine only when that field is absent. A left nav has four panes. Status is selected when the Settings window opens.
 
 **Status** shows the daemon state, whether capture is running, whether the soul pack is `ok` or `missing` (and the reason when the daemon sent one), whether a soul reload is pending, the latest tool line, and a confirm-gated tool when one is waiting. Buttons are Hibernate, Wake (leave hibernate into sleep), Sleep, Reload soul, Confirm, and Cancel. The Status Wake button is `wake_from_ui` / `ctl resume` (hibernate → sleep). `softwaked ctl wake` is the separate command that enters awake from sleep and requires a valid soul pack. Reload reads `soul.md`, `user.md`, `rules.md`, and `glossary.md`. The new text applies on the next awake. The status snapshot does not include the socket path. The window uses the same default socket as `softwaked ctl`. Start `softwaked serve` first. Provider commands are not socket commands.
 

@@ -564,9 +564,11 @@ impl Runtime {
         if scored {
             self.last_pcm_hit = Some(hit);
         }
+        // Only while asleep: awake talk is PTT (or a later open-mic path), not KWS.
         if energy_seen
             && matches!(hit, PhraseHit::None)
             && self.capture.kind() == CaptureKind::PipeWire
+            && wire_state(self.machine.state()) == WireState::Sleep
         {
             let now = Instant::now();
             let should_log = self

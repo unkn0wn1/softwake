@@ -68,13 +68,19 @@ body {
   padding: 20px 22px 24px;
 }
 
-.pane.pane-fill {
+.pane.pane-fill:not(.hidden):not([hidden]) {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   height: calc(100vh - 32px);
   max-height: calc(100vh - 32px);
   overflow: hidden;
+}
+
+/* Author display rules must not beat [hidden] / .hidden on other panes. */
+.pane.hidden,
+.pane[hidden] {
+  display: none;
 }
 
 .eyebrow {
