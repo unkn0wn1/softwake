@@ -283,6 +283,17 @@ pub enum IpcError {
         /// Operator-facing sentence, with no `rejected:` prefix.
         message: String,
     },
+
+    /// Press-to-talk was refused.
+    ///
+    /// Produced only in reply to [`ClientMessage::TalkStart`] or
+    /// [`ClientMessage::TalkStop`]. `message` is an operator sentence. It does
+    /// not include a bearer or a transcript body from the provider.
+    #[error("{message}")]
+    TalkRejected {
+        /// Operator-facing sentence.
+        message: String,
+    },
 }
 
 impl IpcError {
@@ -367,6 +378,19 @@ pub struct Status {
     /// One-line summary of the latest tool-log entry, such as `echo safe ran`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_tool: Option<String>,
+    /// True while press-to-talk is holding a PCM buffer.
+    ///
+    /// Additive on protocol generation 1. Older peers omit it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub talking: bool,
+}
+
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde skip_serializing_if requires fn(&T) -> bool"
+)]
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Successful status or a structured error.
@@ -555,6 +579,22 @@ pub enum ClientMessage {
         /// Client-chosen id. The daemon echoes it and does not interpret it.
         id: u64,
     },
+    /// Arm press-to-talk and start buffering PCM.
+    ///
+    /// Awake only. From sleep the daemon enters awake first, the same gate as
+    /// HUD ask. Hibernate refuses. Additive on protocol generation 1.
+    TalkStart {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+    },
+    /// Stop buffering, transcribe, ask, and speak the reply when TTS is configured.
+    ///
+    /// Additive on protocol generation 1. A client that never sends `talk_stop`
+    /// still speaks this generation.
+    TalkStop {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+    },
 }
 
 /// Daemon messages after a client connects.
@@ -625,6 +665,7 @@ mod tests {
             detail: Some("sleep -> hibernate".to_owned()),
             pending_tool: None,
             last_tool: None,
+            talking: false,
         }
     }
 
@@ -799,6 +840,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one table covers confirm/cancel wire shapes"
+    )]
     fn confirm_and_cancel_round_trip_and_default_an_omitted_name() {
         let confirm = ClientMessage::ConfirmTool {
             id: 3,
@@ -840,6 +885,22 @@ mod tests {
         let ask_json = serde_json::to_string(&ask).expect("encode");
         assert!(ask_json.contains("\"type\":\"ask\""));
         assert!(ask_json.contains("\"text\":\"hello there\""));
+
+        let talk_start = ClientMessage::TalkStart { id: 12 };
+        assert_round_trip(&talk_start);
+        let talk_start_json = serde_json::to_string(&talk_start).expect("encode");
+        assert!(talk_start_json.contains("\"type\":\"talk_start\""));
+        let talk_stop = ClientMessage::TalkStop { id: 13 };
+        assert_round_trip(&talk_stop);
+        let talk_stop_json = serde_json::to_string(&talk_stop).expect("encode");
+        assert!(talk_stop_json.contains("\"type\":\"talk_stop\""));
+        let talk_rejected = IpcError::TalkRejected {
+            message: "hold the mic a little longer".to_owned(),
+        };
+        assert_round_trip(&talk_rejected);
+        assert_eq!(talk_rejected.to_string(), "hold the mic a little longer");
+        let talk_rejected_json = serde_json::to_string(&talk_rejected).expect("encode");
+        assert!(talk_rejected_json.contains("\"kind\":\"talk_rejected\""));
 
         let wake = ClientMessage::Wake { id: 1 };
         assert_round_trip(&wake);
@@ -889,11 +950,13 @@ mod tests {
                 description: "Append a notification to the in-memory sink.".to_owned(),
             }),
             last_tool: Some("notify confirm pending".to_owned()),
+            talking: true,
         };
         assert_round_trip(&with_pending);
         let pending_json = serde_json::to_string(&with_pending).expect("encode");
         assert!(pending_json.contains("\"pending_tool\""));
         assert!(pending_json.contains("\"last_tool\":\"notify confirm pending\""));
+        assert!(pending_json.contains("\"talking\":true"));
     }
 
     #[test]
@@ -918,6 +981,7 @@ mod tests {
         assert!(status.last_tool.is_none());
         assert!(status.soul_reload_pending);
         assert!(status.capture_level.is_none());
+        assert!(!status.talking);
     }
 
     #[test]
@@ -932,6 +996,7 @@ mod tests {
             detail: None,
             pending_tool: None,
             last_tool: None,
+            talking: false,
         };
         assert_round_trip(&with_level);
         let json = serde_json::to_string(&with_level).expect("encode");
@@ -947,9 +1012,11 @@ mod tests {
             detail: None,
             pending_tool: None,
             last_tool: None,
+            talking: false,
         };
         let json = serde_json::to_string(&without).expect("encode");
         assert!(!json.contains("capture_level"));
+        assert!(!json.contains("talking"));
         assert_round_trip(&without);
     }
 
@@ -968,6 +1035,7 @@ mod tests {
             detail: None,
             pending_tool: None,
             last_tool: None,
+            talking: false,
         };
         assert_round_trip(&missing);
 
@@ -984,6 +1052,7 @@ mod tests {
             detail: None,
             pending_tool: None,
             last_tool: None,
+            talking: false,
         };
         let json = serde_json::to_string(&ok).expect("encode");
         assert!(json.contains("\"soul\":{\"ok\":true}"));

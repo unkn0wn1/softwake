@@ -214,7 +214,9 @@ mod tests {
     use crate::registry::ProviderFamily;
     use crate::secrets::SecretBag;
     use crate::settings::{ProviderSettings, TestReport};
-    use crate::transport::{HttpResponse, MockTransport, Transport, TransportError};
+    use crate::transport::{
+        HttpBytes, HttpResponse, MockTransport, MultipartField, Transport, TransportError,
+    };
 
     struct RecordingTransport {
         posts: RefCell<Vec<(String, String, String)>>,
@@ -255,6 +257,33 @@ mod tests {
                 .borrow_mut()
                 .push((url.to_owned(), bearer.to_owned(), body.to_owned()));
             Ok(self.response.clone())
+        }
+
+        fn post_multipart_bearer(
+            &self,
+            url: &str,
+            _bearer: &str,
+            _fields: &[MultipartField],
+            _file_name: &str,
+            _file_bytes: &[u8],
+            _file_content_type: &str,
+        ) -> Result<HttpResponse, TransportError> {
+            Err(TransportError::NoRoute {
+                method: "POST".to_owned(),
+                url: url.to_owned(),
+            })
+        }
+
+        fn post_json_bearer_bytes(
+            &self,
+            url: &str,
+            _bearer: &str,
+            _body: &str,
+        ) -> Result<HttpBytes, TransportError> {
+            Err(TransportError::NoRoute {
+                method: "POST".to_owned(),
+                url: url.to_owned(),
+            })
         }
     }
 

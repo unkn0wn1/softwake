@@ -368,6 +368,14 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
             let outcome = lock(&shared.runtime).wake_phrase();
             reply(shared, tx, id, outcome)
         }
+        Ok(ClientMessage::TalkStart { id }) => {
+            let outcome = lock(&shared.runtime).talk_start();
+            reply(shared, tx, id, outcome)
+        }
+        Ok(ClientMessage::TalkStop { id }) => {
+            let outcome = lock(&shared.runtime).talk_stop();
+            reply(shared, tx, id, outcome)
+        }
         Ok(ClientMessage::Hello { .. }) => false,
         Err(error) if error.is_disconnect() => false,
         Err(error) => {

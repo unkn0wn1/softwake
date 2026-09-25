@@ -5,6 +5,7 @@ const strip = document.querySelector("#strip");
 const form = document.querySelector("#ask-form");
 const input = document.querySelector("#ask-input");
 const replyEl = document.querySelector("#reply");
+const talkBtn = document.querySelector("#talk");
 
 const IDLE_MS = 4000;
 const POST_ASK_IDLE_MS = 12000;
@@ -16,6 +17,8 @@ let expanded = false;
 let idleTimer = null;
 let idleMs = IDLE_MS;
 let raf = 0;
+let holding = false;
+let talkPending = false;
 
 function invoke(command, args) {
   const core = window.__TAURI__ && window.__TAURI__.core;
@@ -172,6 +175,109 @@ async function refresh() {
   }
 }
 
+function errorText(error, fallback) {
+  if (typeof error === "string") {
+    return error;
+  }
+  if (error && error.message) {
+    return error.message;
+  }
+  return fallback;
+}
+
+function showReply(text, isError) {
+  replyEl.classList.toggle("error", !!isError);
+  replyEl.textContent = text;
+}
+
+async function beginTalk() {
+  if (holding || talkPending || state === "hibernate") {
+    if (state === "hibernate") {
+      setExpanded(true);
+      showReply(
+        "Softwake is hibernating — leave hibernate from Settings (Wake) or the tray first",
+        true,
+      );
+    }
+    return;
+  }
+  holding = true;
+  talkBtn.classList.add("holding");
+  talkBtn.textContent = "…";
+  setExpanded(true);
+  bumpIdle(POST_ASK_IDLE_MS);
+  showReply("listening…", false);
+  try {
+    await invoke("hud_talk_start");
+    await refresh();
+  } catch (error) {
+    holding = false;
+    talkBtn.classList.remove("holding");
+    talkBtn.textContent = "Hold";
+    showReply(errorText(error, "could not start listening"), true);
+  }
+}
+
+async function endTalk() {
+  if (!holding || talkPending) {
+    return;
+  }
+  holding = false;
+  talkPending = true;
+  talkBtn.classList.remove("holding");
+  talkBtn.textContent = "Hold";
+  showReply("…", false);
+  bumpIdle(POST_ASK_IDLE_MS);
+  try {
+    const status = await invoke("hud_talk_stop");
+    const message =
+      (status && (status.message || status.detail)) || "(no reply text)";
+    const speechNote = status && status.detail && status.message ? status.detail : "";
+    showReply(speechNote ? message + " — " + speechNote : message, false);
+    await refresh();
+  } catch (error) {
+    showReply(errorText(error, "talk failed"), true);
+  }
+  talkPending = false;
+  bumpIdle(POST_ASK_IDLE_MS);
+}
+
+talkBtn.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  talkBtn.setPointerCapture(event.pointerId);
+  beginTalk();
+});
+
+talkBtn.addEventListener("pointerup", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  endTalk();
+});
+
+talkBtn.addEventListener("pointercancel", (event) => {
+  event.stopPropagation();
+  endTalk();
+});
+
+talkBtn.addEventListener("keydown", (event) => {
+  event.stopPropagation();
+  if (event.key === " " || event.key === "Enter") {
+    event.preventDefault();
+    if (!event.repeat) {
+      beginTalk();
+    }
+  }
+});
+
+talkBtn.addEventListener("keyup", (event) => {
+  event.stopPropagation();
+  if (event.key === " " || event.key === "Enter") {
+    event.preventDefault();
+    endTalk();
+  }
+});
+
 function isTypingTarget(target) {
   if (!target || !(target instanceof Element)) {
     return false;
@@ -180,7 +286,7 @@ function isTypingTarget(target) {
 }
 
 capsule.addEventListener("click", (event) => {
-  if (event.target.closest("#ask-form") || event.target.closest(".reply")) {
+  if (event.target.closest("#ask-form") || event.target.closest(".reply") || event.target.closest("#talk")) {
     return;
   }
   setExpanded(!expanded);

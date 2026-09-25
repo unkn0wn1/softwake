@@ -56,6 +56,11 @@ pub struct ProviderSettings {
     /// Selected voice / STT model id. Empty until the operator picks one after Test.
     #[serde(default)]
     pub selected_voice_model: String,
+    /// Selected xAI TTS voice id. Empty means `eve` when speaking on the xAI family.
+    ///
+    /// Document version stays 1. Older files omit this field.
+    #[serde(default)]
+    pub selected_tts_voice: String,
     /// Per-provider model catalogs from Test.
     #[serde(default)]
     pub model_cache: BTreeMap<String, ModelCache>,
@@ -78,6 +83,7 @@ impl Default for ProviderSettings {
             selected_provider: ProviderId::XaiKey,
             selected_model: String::new(),
             selected_voice_model: String::new(),
+            selected_tts_voice: String::new(),
             model_cache: BTreeMap::new(),
             last_test: BTreeMap::new(),
             openai_compatible_base_url: String::new(),
@@ -373,6 +379,7 @@ mod tests {
         assert!(settings.models_for(ProviderId::XaiKey).is_empty());
         assert!(settings.voice_models_for(ProviderId::XaiKey).is_empty());
         assert!(settings.selected_voice_model.is_empty());
+        assert!(settings.selected_tts_voice.is_empty());
     }
 
     #[test]
@@ -398,6 +405,7 @@ mod tests {
             ..ProviderSettings::default()
         };
         settings.selected_voice_model = "whisper-1".to_owned();
+        settings.selected_tts_voice = "eve".to_owned();
         settings.store_models(
             ProviderId::Openai,
             vec!["gpt-4.1-mini".to_owned()],
@@ -416,6 +424,7 @@ mod tests {
             &["whisper-1".to_owned()]
         );
         assert_eq!(loaded.selected_voice_model, "whisper-1");
+        assert_eq!(loaded.selected_tts_voice, "eve");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

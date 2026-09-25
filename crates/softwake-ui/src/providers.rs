@@ -74,6 +74,12 @@ pub struct ProviderSnapshot {
     pub selected_model: String,
     /// Selected voice / STT model id (may be empty).
     pub selected_voice_model: String,
+    /// Selected TTS voice id (may be empty; xAI then speaks as `eve`).
+    pub selected_tts_voice: String,
+    /// Built-in TTS voice ids for the selected provider. Empty outside xAI.
+    pub tts_voices: Vec<String>,
+    /// True when the selected provider can speak with xAI TTS.
+    pub tts_available: bool,
     /// Registry rows.
     pub providers: Vec<ProviderRow>,
     /// Cached chat models for the selected provider.
@@ -146,6 +152,12 @@ fn snapshot_from(
         selected_provider: selected.to_string(),
         selected_model: settings.selected_model.clone(),
         selected_voice_model: settings.selected_voice_model.clone(),
+        selected_tts_voice: settings.selected_tts_voice.clone(),
+        tts_voices: softwake_providers::tts_voice_roster(selected)
+            .iter()
+            .map(|id| (*id).to_owned())
+            .collect(),
+        tts_available: softwake_providers::family_speaks_xai(selected),
         providers: PROVIDER_REGISTRY
             .iter()
             .map(|row| ProviderRow {
@@ -494,6 +506,38 @@ pub fn provider_set_voice_model(model_id: String) -> Result<ProviderSnapshot, St
         return Err("voice model is not in the Test catalog; run Test first".to_owned());
     }
     settings.selected_voice_model = model;
+    store.save(&settings).map_err(|e| e.to_string())?;
+    load_snapshot()
+}
+
+/// Save the xAI TTS voice id. `eve` is the default when the field is cleared.
+///
+/// Non-xAI providers refuse the write. Unknown ids are refused so a voice
+/// that the provider does not document is never stored as if it were Eve.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri deserializes command arguments as owned values"
+)]
+pub fn provider_set_tts_voice(voice_id: String) -> Result<ProviderSnapshot, String> {
+    let store = open_settings()?;
+    let mut settings = store.load().map_err(|e| e.to_string())?;
+    if !softwake_providers::family_speaks_xai(settings.selected_provider) {
+        return Err(
+            "Speech playback is available for xAI providers. Eve is an xAI voice.".to_owned(),
+        );
+    }
+    let trimmed = voice_id.trim();
+    if trimmed.is_empty() {
+        settings.selected_tts_voice.clear();
+    } else {
+        let Some(voice) =
+            softwake_providers::resolve_tts_voice(settings.selected_provider, trimmed)
+        else {
+            return Err("that voice is not a built-in xAI TTS voice".to_owned());
+        };
+        voice.clone_into(&mut settings.selected_tts_voice);
+    }
     store.save(&settings).map_err(|e| e.to_string())?;
     load_snapshot()
 }

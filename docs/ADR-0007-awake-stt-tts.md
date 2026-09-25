@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-25
+- **Amended:** 2026-09-25. An optional xAI cloud voice connector (press-to-talk STT, TTS voice `eve`) sits behind `live-http` and the existing provider credentials. Mocks stay the default and the CI path.
 
 ## Decision
 
@@ -10,7 +11,19 @@ While Softwake is **awake**, speech-to-text and text-to-speech use a local strea
 - **STT:** prefer **sherpa-onnx streaming ASR** (same family as the wake keyword spotter in [ADR 0006](ADR-0006-on-device-wake.md)). The default implementation is [`MockStt`](../crates/softwake-voice/src/mock.rs), which injects partial and final transcript text for tests and the typed demo. No microphone and no model download are required on the default path.
 - **TTS:** a local stub that records “spoken” strings ([`MockTts`](../crates/softwake-voice/src/mock.rs)). A later feature-gated sherpa-onnx TTS or espeak backend may replace the mock. The default path does not open a speaker.
 
-Cloud-only STT or TTS is **rejected as the only path**. A future optional cloud connector may exist behind an explicit feature and operator config; Softwake must still build, demo, and CI without cloud API keys.
+Cloud-only STT or TTS is **rejected as the only path**. An optional cloud connector is allowed behind the `live-http` feature and the provider credentials already stored for chat ([ADR 0012](ADR-0012-model-providers.md)). Softwake must still build, demo, and CI without cloud API keys. Mocks remain the default.
+
+### Optional xAI cloud voice
+
+When the daemon is built with `live-http` and the selected provider is xAI (sign-in or API key):
+
+- **Press-to-talk.** The HUD mic button arms a PCM buffer on the existing capture stream (16 kHz mono `i16`). Release caps the clip at about 15 seconds and refuses clips shorter than about 0.3 seconds. Hibernate refuses. Sleep enters awake first, the same gate as HUD ask, then buffers.
+- **STT.** `POST {api}/v1/stt` as multipart `model` then `file` (WAV). The model is Settings `selected_voice_model`, or the xAI seed `grok-voice-transcribe-2.0` when that field is empty. The transcript is shown and sent through the existing awake `ask` path.
+- **TTS.** After a successful ask (typed or spoken), `POST {api}/v1/tts` with JSON `{ "text", "voice_id", "language": "en" }` returns mp3 bytes. `voice_id` is Settings `selected_tts_voice`. Empty means **`eve`**, the documented xAI default. Other documented built-ins may be chosen in Settings. `eve` is not sent to a non-xAI provider; that picker is disabled.
+- **Playback.** The daemon writes a temp mp3 and tries `ffplay -nodisp -autoexit -loglevel quiet`, then `mpv --no-video --really-quiet`. A missing player is a HUD error. The serve loop bounds each HTTP call (the same chat-style timeout) and does not wait forever on a stuck player.
+- **IPC.** `talk_start` and `talk_stop` are additive on protocol generation 1. `Status.talking` is additive and omitted when false.
+
+Settings document version stays 1. `selected_tts_voice` defaults to empty. Phrase keyword spotting (“hey Softwake”) stays out of this path ([ADR 0006](ADR-0006-on-device-wake.md)).
 
 Whisper is **not** the sleep/wake gate ([ADR 0006](ADR-0006-on-device-wake.md)). It is also not required for the awake default path.
 
@@ -74,7 +87,7 @@ cargo test -p softwake-voice --features sherpa-tts
 
 ## Alternatives
 
-- Cloud STT/TTS as the only awake path. Rejected. CI and offline demos would need keys; ambient-capable builds would depend on the network for basic speech.
+- Cloud STT/TTS as the only awake path. Rejected. CI and offline demos would need keys; ambient-capable builds would depend on the network for basic speech. An opt-in xAI connector behind `live-http` is the amendment above, not a replacement for mocks.
 - Whisper as the default awake STT. Deferred. Heavier than a streaming transducer for partials; not required to close the boundary. May be revisited behind a feature later.
 - Bundling weights in the repository. Rejected. License and CI size.
 - Acting STT/TTS while asleep or hibernating. Rejected. Sleep scores wake phrases only; hibernate has capture off; prefer TTS silence outside awake.
@@ -84,5 +97,6 @@ cargo test -p softwake-voice --features sherpa-tts
 
 - Phase 2 milestone item 1 (streaming STT/TTS path) can close with mocks + ADR + feature-gated stubs.
 - A later PR that links sherpa-onnx ASR/TTS loads from the XDG dirs above without redesigning `SpeechToText` / `TextToSpeech` or the demo inject path.
-- Default `cargo test --workspace` does not open a microphone, does not download weights, and does not enable `sherpa-asr` or `sherpa-tts`.
+- Default `cargo test --workspace` does not open a microphone, does not download weights, does not call STT or TTS, and does not enable `sherpa-asr`, `sherpa-tts`, or `live-http`.
+- `cargo test -p softwake-providers --features live-http` still uses `MockTransport` for STT and TTS request shape. Ignored live tests stay opt-in.
 - Typed wake/sleep remains the primary voice-state demo ([ADR 0002](ADR-0002-wake-engine-spike.md)).

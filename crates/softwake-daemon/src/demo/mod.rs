@@ -460,7 +460,12 @@ impl Demo {
     }
 
     fn finish_disk(&mut self, text: &str, ready: crate::chat::DiskChat) -> Vec<String> {
-        let crate::chat::DiskChat { prepared, bearer } = ready;
+        let crate::chat::DiskChat {
+            prepared,
+            bearer,
+            tts_voice: _,
+            stt_model: _,
+        } = ready;
         if let Err(message) = crate::chat::gate_live_http(&prepared, &bearer, text) {
             return self.chat_rejected(&message, Some(&prepared));
         }

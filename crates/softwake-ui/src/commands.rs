@@ -180,6 +180,34 @@ fn mock_level(capture_running: bool) -> f64 {
     (0.28 + 0.55 * (0.5 + 0.5 * wave)).clamp(0.05, 0.95)
 }
 
+/// Arm press-to-talk. From sleep this wakes first. Hibernate is refused.
+///
+/// # Errors
+///
+/// Returns the daemon or socket error as text.
+#[tauri::command]
+pub fn hud_talk_start() -> Result<Status, String> {
+    let mut client = connect()?;
+    client.call_talk_start().map_err(|error| error.to_string())
+}
+
+/// Release press-to-talk, transcribe, ask, and speak when Eve is configured.
+///
+/// The socket read timeout is raised for this call because STT, ask, and TTS
+/// share one round trip. The daemon still bounds each HTTP call.
+///
+/// # Errors
+///
+/// Returns the daemon or socket error as text.
+#[tauri::command]
+pub fn hud_talk_stop() -> Result<Status, String> {
+    let mut client = connect()?;
+    client
+        .set_read_timeout(Some(std::time::Duration::from_secs(90)))
+        .map_err(|error| error.to_string())?;
+    client.call_talk_stop().map_err(|error| error.to_string())
+}
+
 /// Submit from the HUD: ask while awake; wake then ask from sleep; refuse hibernate.
 ///
 /// # Errors

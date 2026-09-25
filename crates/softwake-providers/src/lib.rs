@@ -20,6 +20,7 @@ mod secrets_keyring;
 mod secrets_mock;
 mod settings;
 mod transport;
+mod voice;
 
 #[cfg(feature = "live-http")]
 pub mod live;
@@ -32,7 +33,7 @@ pub use constants::{
     OPENAI_API_BASE, OPENAI_CHAT_SEED, OPENAI_COMPATIBLE_CHAT_SEED, OPENAI_VOICE_SEED,
     OPENROUTER_API_BASE, OPENROUTER_CHAT_SEED, XAI_API_BASE, XAI_CHAT_SEED, XAI_OAUTH_CLIENT_ID,
     XAI_OAUTH_DEVICE_URL, XAI_OAUTH_GRANT_DEVICE, XAI_OAUTH_ISSUER, XAI_OAUTH_SCOPE,
-    XAI_OAUTH_TOKEN_URL, XAI_REFRESH_SKEW_MS, XAI_VOICE_SEED,
+    XAI_OAUTH_TOKEN_URL, XAI_REFRESH_SKEW_MS, XAI_TTS_VOICE_EVE, XAI_TTS_VOICES, XAI_VOICE_SEED,
 };
 pub use handle::{HandleError, ProviderHandle};
 pub use ids::{ParseProviderIdError, ProviderId};
@@ -67,4 +68,11 @@ pub use settings::{
     FileProviderSettings, MAX_SETTINGS_BYTES, ModelCache, PROVIDERS_FILE_NAME, ProviderSettings,
     SettingsError, TestReport, resolve_providers_file, resolve_providers_file_from,
 };
-pub use transport::{HttpResponse, MockTransport, Transport, TransportError};
+pub use transport::{
+    HttpBytes, HttpResponse, MockTransport, MultipartField, RecordedBytePost, RecordedMultipart,
+    Transport, TransportError,
+};
+pub use voice::{
+    TTS_MAX_CHARS, VOICE_LANGUAGE, VoiceHttpError, family_speaks_xai, resolve_stt_model,
+    resolve_tts_voice, stt_transcribe, tts_synthesize, tts_voice_roster, wav_from_pcm16,
+};

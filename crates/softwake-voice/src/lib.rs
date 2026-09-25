@@ -4,13 +4,16 @@
 //! [`softwake_wake`](../softwake_wake). Once awake, a streaming STT path and a
 //! TTS path may act. That choice is [ADR 0007](../../docs/ADR-0007-awake-stt-tts.md):
 //! sherpa-onnx streaming ASR for local STT, with [`MockStt`] / [`MockTts`] as
-//! the default CI-safe path. Cloud-only is not the only path.
+//! the default CI-safe path. An optional xAI cloud STT/TTS connector lives in
+//! `softwake-providers` behind `live-http`. Cloud-only is not the only path.
 //!
 //! Weights are not linked. The `sherpa-asr` and `sherpa-tts` features compile
 //! stubs that document where models will load. Default `cargo test` does not
 //! enable those features and does not download anything.
 
 mod mock;
+mod pcm_wav;
+mod playback;
 #[cfg(feature = "sherpa-asr")]
 mod sherpa_asr;
 #[cfg(feature = "sherpa-tts")]
@@ -18,6 +21,8 @@ mod sherpa_tts;
 mod xdg;
 
 pub use mock::{MockStt, MockTts};
+pub use pcm_wav::{TALK_MAX_SAMPLES, TALK_MIN_SAMPLES, TalkBuffer, wav_from_pcm16};
+pub use playback::{PLAYBACK_TIMEOUT, PlaybackMode, PlayedClip, play_audio};
 #[cfg(feature = "sherpa-asr")]
 pub use sherpa_asr::SherpaAsr;
 #[cfg(feature = "sherpa-tts")]

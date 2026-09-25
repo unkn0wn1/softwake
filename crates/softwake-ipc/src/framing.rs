@@ -208,6 +208,7 @@ mod tests {
                     detail: Some("has\na newline".to_owned()),
                     pending_tool: None,
                     last_tool: None,
+                    talking: false,
                 }),
             }),
             line(&ServerMessage::Event {

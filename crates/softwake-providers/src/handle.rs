@@ -102,6 +102,13 @@ impl ProviderHandle {
         if model.is_empty() { None } else { Some(model) }
     }
 
+    /// Selected TTS voice id, if the operator picked one. Empty means the xAI default.
+    #[must_use]
+    pub fn selected_tts_voice(&self) -> Option<&str> {
+        let voice = self.settings.selected_tts_voice.trim();
+        if voice.is_empty() { None } else { Some(voice) }
+    }
+
     /// Cached voice / STT models for the selected provider (empty until Test).
     #[must_use]
     pub fn cached_voice_models(&self) -> &[String] {

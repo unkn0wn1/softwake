@@ -465,7 +465,9 @@ impl ServerConnection {
             | ClientMessage::ConfirmTool { .. }
             | ClientMessage::CancelTool { .. }
             | ClientMessage::Ask { .. }
-            | ClientMessage::Wake { .. } => {
+            | ClientMessage::Wake { .. }
+            | ClientMessage::TalkStart { .. }
+            | ClientMessage::TalkStop { .. } => {
                 let message = "expected a hello message".to_owned();
                 endpoint.write(&ServerMessage::HelloRejected {
                     protocol_version: PROTOCOL_VERSION,
@@ -688,6 +690,26 @@ impl Client {
             },
             id,
         )
+    }
+
+    /// Arm press-to-talk on the daemon.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] on transport failure or a rejected start.
+    pub fn call_talk_start(&mut self) -> Result<Status, CallError> {
+        let id = self.allocate_id();
+        self.round_trip(&ClientMessage::TalkStart { id }, id)
+    }
+
+    /// Release press-to-talk and return the ask status.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] on transport failure or a rejected stop.
+    pub fn call_talk_stop(&mut self) -> Result<Status, CallError> {
+        let id = self.allocate_id();
+        self.round_trip(&ClientMessage::TalkStop { id }, id)
     }
 
     /// Confirm the pending tool and return the status after it runs.
@@ -964,6 +986,7 @@ mod tests {
                         detail: None,
                         pending_tool: None,
                         last_tool: None,
+                        talking: false,
                     }),
                 })
                 .expect("response");
