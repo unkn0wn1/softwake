@@ -32,6 +32,18 @@ const modelSelect = document.querySelector("#model-select");
 const providerError = document.querySelector("#provider-error");
 const plaintextWarning = document.querySelector("#plaintext-warning");
 
+const packFiles = ["soul", "user", "rules", "glossary"];
+const packDirEl = document.querySelector("#pack-dir");
+const packValidityEl = document.querySelector("#pack-validity");
+const packStatusEl = document.querySelector("#pack-status");
+const packErrorEl = document.querySelector("#pack-error");
+const packEditors = {
+  soul: document.querySelector("#pack-soul"),
+  user: document.querySelector("#pack-user"),
+  rules: document.querySelector("#pack-rules"),
+  glossary: document.querySelector("#pack-glossary"),
+};
+
 const commands = {
   hibernate: "hibernate",
   wake: "resume",
@@ -342,6 +354,116 @@ modelSelect.addEventListener("change", () => {
   providerAction("provider_set_model", { modelId: modelSelect.value });
 });
 
+let packLoaded = false;
+let packRequesting = false;
+
+function setPackEditable(on) {
+  document.querySelector("#pack-save").disabled = !on;
+  for (const file of packFiles) {
+    packEditors[file].disabled = !on;
+  }
+}
+
+function errorText(error) {
+  return typeof error === "string" ? error : error && error.message ? error.message : "request failed";
+}
+
+function showPackTab(name) {
+  for (const file of packFiles) {
+    const editor = packEditors[file];
+    const tab = document.querySelector(`#pack-tab-${file}`);
+    const on = file === name;
+    editor.classList.toggle("hidden", !on);
+    editor.hidden = !on;
+    tab.setAttribute("aria-selected", on ? "true" : "false");
+  }
+}
+
+function applyPackSnapshot(snap, statusText) {
+  packDirEl.textContent = "Directory: " + (snap.dir || "");
+  for (const file of packFiles) {
+    packEditors[file].value = snap[file] || "";
+  }
+  if (snap.ok) {
+    packValidityEl.textContent = "Pack: ok";
+    packValidityEl.classList.remove("error");
+  } else {
+    const reason = snap.reason ? " — " + snap.reason : "";
+    packValidityEl.textContent = "Pack: invalid" + reason;
+    packValidityEl.classList.add("error");
+  }
+  packErrorEl.textContent = "";
+  packStatusEl.textContent = statusText || "";
+  setPackEditable(true);
+}
+
+async function loadPack(statusText) {
+  try {
+    applyPackSnapshot(await invoke("pack_snapshot"), statusText || "");
+    packLoaded = true;
+  } catch (error) {
+    packErrorEl.textContent = errorText(error);
+  }
+}
+
+async function savePack() {
+  if (document.querySelector("#pack-save").disabled) {
+    return;
+  }
+  packErrorEl.textContent = "";
+  try {
+    const snap = await invoke("pack_save", {
+      soul: packEditors.soul.value,
+      user: packEditors.user.value,
+      rules: packEditors.rules.value,
+      glossary: packEditors.glossary.value,
+    });
+    if (snap.ok) {
+      try {
+        await invoke("reload_soul");
+        applyPackSnapshot(snap, "Saved and reload recorded — applies on next awake.");
+        refresh();
+      } catch (error) {
+        applyPackSnapshot(snap, "");
+        packErrorEl.textContent = "Saved, but reload soul failed: " + errorText(error);
+      }
+      return;
+    }
+    applyPackSnapshot(snap, "Saved. Reload soul was not called.");
+  } catch (error) {
+    packErrorEl.textContent = errorText(error);
+  }
+}
+
+async function reloadSoulFromGeneral() {
+  packErrorEl.textContent = "";
+  try {
+    await invoke("reload_soul");
+    packStatusEl.textContent = "Reload soul recorded — applies on next awake.";
+    refresh();
+  } catch (error) {
+    packErrorEl.textContent = errorText(error);
+  }
+}
+
+for (const file of packFiles) {
+  document.querySelector(`#pack-tab-${file}`).addEventListener("click", () => {
+    showPackTab(file);
+  });
+}
+
+document.querySelector("#pack-save").addEventListener("click", () => {
+  savePack();
+});
+
+document.querySelector("#pack-reload-disk").addEventListener("click", () => {
+  loadPack("Reloaded from disk.");
+});
+
+document.querySelector("#pack-reload-soul").addEventListener("click", () => {
+  reloadSoulFromGeneral();
+});
+
 function showPane(name) {
   for (const pane of panes) {
     const section = document.querySelector(`#pane-${pane}`);
@@ -354,6 +476,12 @@ function showPane(name) {
     } else {
       nav.removeAttribute("aria-current");
     }
+  }
+  if (name === "general" && !packLoaded && !packRequesting) {
+    packRequesting = true;
+    loadPack().finally(() => {
+      packRequesting = false;
+    });
   }
 }
 

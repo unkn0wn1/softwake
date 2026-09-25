@@ -292,11 +292,11 @@ The soul directory is the first match of `--soul-dir PATH` (on `serve` and `demo
 
 `softwake-ui` is a resizable settings window, 860 by 680. A left nav has four panes. Status is selected when the window opens.
 
-**Status** shows the daemon state, whether capture is running, whether the soul pack is `ok` or `missing` (and the reason when the daemon sent one), whether a soul reload is pending, the latest tool line, and a confirm-gated tool when one is waiting. Buttons are Hibernate, Wake (leave hibernate into sleep), Sleep, Reload soul, Confirm, and Cancel. The Status Wake button is `wake_from_ui` / `ctl resume` (hibernate → sleep). `softwaked ctl wake` is the separate command that enters awake from sleep and requires a valid soul pack. Reload reads `soul.md`, `user.md`, `rules.md`, and `glossary.md`. The window does not edit those files. The status snapshot does not include the socket path. The window uses the same default socket as `softwaked ctl`. Start `softwaked serve` first. Provider commands are not socket commands.
+**Status** shows the daemon state, whether capture is running, whether the soul pack is `ok` or `missing` (and the reason when the daemon sent one), whether a soul reload is pending, the latest tool line, and a confirm-gated tool when one is waiting. Buttons are Hibernate, Wake (leave hibernate into sleep), Sleep, Reload soul, Confirm, and Cancel. The Status Wake button is `wake_from_ui` / `ctl resume` (hibernate → sleep). `softwaked ctl wake` is the separate command that enters awake from sleep and requires a valid soul pack. Reload reads `soul.md`, `user.md`, `rules.md`, and `glossary.md`. The new text applies on the next awake. The status snapshot does not include the socket path. The window uses the same default socket as `softwaked ctl`. Start `softwaked serve` first. Provider commands are not socket commands.
 
 **Providers** is the model Settings panel ([ADR 0012](docs/ADR-0012-model-providers.md)): choose a provider, save a key or sign in, press Test, then pick a model. The model list stays empty until Test succeeds.
 
-**General** says pack editors are coming. It does not edit the four files.
+**General** edits `soul.md`, `user.md`, `rules.md`, and `glossary.md` in the resolved soul directory (`SOFTWAKE_SOUL_DIR`, or the XDG default). Save writes the four files. Reload soul applies a valid pack on the next awake.
 
 **Email** says live email is coming later. The window does not send mail.
 

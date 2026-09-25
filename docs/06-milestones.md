@@ -62,7 +62,7 @@
    - [x] Settings window shell. The window is 860 by 680 with a left nav: General, Providers, Email, and Status. Providers keeps Test, the model picker, saved keys, and xAI sign-in. General and Email are stubs. Status keeps daemon state, soul validity, and confirm. Protocol generation stays 1. No new ADR.
    - [x] `softwaked ctl wake` enters awake on a running `softwaked serve` (same soul gate as demo `wake`). `ctl resume` still lands in sleep. No microphone. Protocol generation stays 1.
 3. [ ] Live email, Drive, and calendar connectors (still open from phase 3)
-4. [ ] In-window editors for `soul.md`, `user.md`, `rules.md`, and `glossary.md` (reload stays how a pack is applied)
+4. [x] In-window editors for `soul.md`, `user.md`, `rules.md`, and `glossary.md` (reload stays how a pack is applied)
 
 ## Deferred ideas (do not pull into phase 1)
 
