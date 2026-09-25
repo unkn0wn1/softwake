@@ -130,7 +130,8 @@ button:hover {
 
 button:focus-visible,
 select:focus-visible,
-input:focus-visible {
+input:focus-visible,
+textarea:focus-visible {
   outline: 2px solid var(--cyan);
   outline-offset: 2px;
 }
@@ -195,7 +196,8 @@ button.btn-primary:hover {
 
 select,
 input[type="password"],
-input[type="url"] {
+input[type="url"],
+textarea {
   box-sizing: border-box;
   width: 100%;
   appearance: none;
@@ -205,6 +207,31 @@ input[type="url"] {
   color: inherit;
   font: inherit;
   padding: 12px;
+}
+
+textarea {
+  min-height: 12rem;
+  resize: vertical;
+  font-family: ui-monospace, "Cascadia Code", "Segoe UI Mono", monospace;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.pack-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.pack-tab {
+  padding: 8px 12px;
+}
+
+.pack-tab[aria-selected="true"] {
+  border-color: oklch(0.78 0.13 200 / 0.70);
+  color: oklch(0.90 0.08 200);
+  background: oklch(0.78 0.13 200 / 0.12);
 }
 
 #oauth-code {

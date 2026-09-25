@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "The main window may read daemon status, send voice-state commands, confirm tools, and use provider Settings.",
+  "description": "The main window may read daemon status, send voice-state commands, confirm tools, edit the soul pack, and use provider Settings.",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -20,6 +20,8 @@
     "allow-provider-oauth-poll",
     "allow-provider-oauth-sign-out",
     "allow-provider-test",
-    "allow-provider-set-model"
+    "allow-provider-set-model",
+    "allow-pack-snapshot",
+    "allow-pack-save"
   ]
 }

@@ -21,7 +21,6 @@ Check order is `soul.md`, then `user.md`, then `rules.md`, then `glossary.md`. T
 |-------|------|
 | Long-term memory | Separate crate `softwake-memory` ([ADR 0009](ADR-0009-long-term-memory.md)). Thin local store behind a trait. Off until the operator enables a backend. The durable backend is an opt-in JSON file. Honcho is not the default |
 | `tools.md` or policy TOML | Human-readable tool policy mirroring allowlists. A later file may only raise a known row's risk, or be refused ([ADR 0010](ADR-0010-policy-engine.md)) |
-| In-window editors | Still later. The General pane says the editors are coming. Status reloads the four files and does not edit them |
 
 The runtime policy stub names `echo` (safe), `notify` (confirm), `email_send` (confirm), and `shell` (deny). `email_send` runs only after `confirm_tool` ([ADR 0008](ADR-0008-connector-boundary.md)). `rules.md` does not feed `PolicyEngine`. A sentence that allows `shell` does not make `shell` runnable.
 
@@ -79,6 +78,8 @@ The directory does not have to exist at startup. Serve and the demo still start;
 - The flag clears only after a **successful** transition into awake applies the last good read.
 - A refused wake leaves the flag set and leaves the voice state unchanged.
 - Editing the files without `reload_soul` does not change what the next wake applies. The daemon uses the last startup or reload read, not a silent re-read at wake time.
+
+The General pane edits the four files. Save writes them, and `reload_soul` still applies a valid pack on the next awake.
 
 Status carries an optional `soul` object: `{ "ok": true }` or `{ "ok": false, "reason": "..." }`. Peers that predate the field still decode. Protocol generation stays `1`. `reason` can name `rules.md`, `glossary.md`, or a bad alias map. No new field.
 

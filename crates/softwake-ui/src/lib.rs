@@ -1,10 +1,12 @@
 //! Thin window over the daemon socket.
 //!
 //! Buttons and the status line call [`softwake_ipc`]. Provider Settings call
-//! [`softwake_providers`] in this process. This crate does not decide whether
-//! a voice-state transition is legal.
+//! [`softwake_providers`] in this process. The General pane reads and writes
+//! the soul pack through [`softwake_soul`] in this process. This crate does
+//! not decide whether a voice-state transition is legal.
 
 mod commands;
+mod pack;
 mod providers;
 
 /// Open the Softwake window.
@@ -33,6 +35,8 @@ pub fn run() {
             providers::provider_oauth_sign_out,
             providers::provider_test,
             providers::provider_set_model,
+            pack::pack_snapshot,
+            pack::pack_save,
         ])
         .run(tauri::generate_context!())
         .expect("softwake-ui failed to start");
@@ -58,6 +62,8 @@ mod tests {
         "provider_oauth_sign_out",
         "provider_test",
         "provider_set_model",
+        "pack_snapshot",
+        "pack_save",
     ];
 
     const PERMISSIONS: &[&str] = &[
@@ -78,6 +84,8 @@ mod tests {
         "allow-provider-oauth-sign-out",
         "allow-provider-test",
         "allow-provider-set-model",
+        "allow-pack-snapshot",
+        "allow-pack-save",
     ];
 
     #[test]

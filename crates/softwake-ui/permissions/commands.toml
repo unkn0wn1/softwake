@@ -82,3 +82,13 @@ commands.allow = ["provider_test"]
 identifier = "allow-provider-set-model"
 description = "Save the selected model id."
 commands.allow = ["provider_set_model"]
+
+[[permission]]
+identifier = "allow-pack-snapshot"
+description = "Read the four soul-pack files for the General editors."
+commands.allow = ["pack_snapshot"]
+
+[[permission]]
+identifier = "allow-pack-save"
+description = "Write the four soul-pack files from the General editors."
+commands.allow = ["pack_save"]

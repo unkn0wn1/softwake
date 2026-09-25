@@ -18,12 +18,31 @@
       <div class="content">
         <section id="pane-general" class="pane glass hidden" hidden aria-labelledby="general-title">
           <h2 id="general-title">General</h2>
-          <p class="meta">Preferences for this window live here.</p>
           <p class="meta">
-            Pack editors are coming. This window does not edit soul.md, user.md, rules.md, or
-            glossary.md. Reload soul on Status re-reads those files from the soul directory. A
-            valid pack applies on the next awake.
+            Files live in the soul directory below. Save writes soul.md, user.md, rules.md, and
+            glossary.md. Reload soul re-reads them; a valid pack applies on the next awake. If
+            the daemon was started with a one-off --soul-dir, set SOFTWAKE_SOUL_DIR so this
+            window and the daemon use the same directory.
           </p>
+          <p id="pack-dir" class="meta">Directory: …</p>
+          <p id="pack-validity" class="meta">Pack: …</p>
+          <div class="pack-tabs" role="tablist" aria-label="Pack files">
+            <button type="button" class="pack-tab" id="pack-tab-soul" role="tab" aria-selected="true" aria-controls="pack-soul">Soul</button>
+            <button type="button" class="pack-tab" id="pack-tab-user" role="tab" aria-selected="false" aria-controls="pack-user">User</button>
+            <button type="button" class="pack-tab" id="pack-tab-rules" role="tab" aria-selected="false" aria-controls="pack-rules">Rules</button>
+            <button type="button" class="pack-tab" id="pack-tab-glossary" role="tab" aria-selected="false" aria-controls="pack-glossary">Glossary</button>
+          </div>
+          <textarea id="pack-soul" class="pack-editor" role="tabpanel" spellcheck="false" aria-label="soul.md" disabled></textarea>
+          <textarea id="pack-user" class="pack-editor hidden" role="tabpanel" hidden spellcheck="false" aria-label="user.md" disabled></textarea>
+          <textarea id="pack-rules" class="pack-editor hidden" role="tabpanel" hidden spellcheck="false" aria-label="rules.md" disabled></textarea>
+          <textarea id="pack-glossary" class="pack-editor hidden" role="tabpanel" hidden spellcheck="false" aria-label="glossary.md" disabled></textarea>
+          <div class="row">
+            <button type="button" class="btn-primary" id="pack-save" disabled>Save</button>
+            <button type="button" id="pack-reload-disk">Reload from disk</button>
+            <button type="button" id="pack-reload-soul">Reload soul</button>
+          </div>
+          <p id="pack-status" class="meta" role="status"></p>
+          <p id="pack-error" class="error" role="status"></p>
         </section>
 
         <section id="pane-providers" class="pane glass hidden" hidden aria-labelledby="providers-title">
