@@ -48,7 +48,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --workspace
+        # Bound wall clock so a stuck test cannot burn the runner.
+        run: timeout 10m cargo test --workspace
 
       - name: Build
         run: cargo build --workspace --all-targets

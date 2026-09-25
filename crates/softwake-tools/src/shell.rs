@@ -242,8 +242,9 @@ mod tests {
 
     #[test]
     fn timeout_kills_long_running_command() {
-        let output =
-            run_shell_with("sleep 5", Duration::from_millis(200), 1024).expect("timeout run");
+        // `exec` replaces sh so one PID is killed; no orphan sleep if pg kill fails.
+        let output = run_shell_with("exec sleep 5", Duration::from_millis(200), 1024)
+            .expect("timeout run");
         assert!(output.timed_out);
         assert!(format_shell_output(&output).contains("timed out"));
     }
