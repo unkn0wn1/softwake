@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 rust-version.workspace = true
-description = "Thin Softwake window. It shows daemon state and sends commands over the local socket."
+description = "Softwake settings window. Status and buttons talk to the daemon socket. Provider Settings stay in-process."
 
 [lib]
 name = "softwake_ui"

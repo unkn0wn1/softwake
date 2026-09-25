@@ -37,3 +37,66 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("softwake-ui failed to start");
 }
+
+#[cfg(test)]
+mod tests {
+    const COMMANDS: &[&str] = &[
+        "status",
+        "hibernate",
+        "resume",
+        "sleep",
+        "reload_soul",
+        "confirm_tool",
+        "cancel_tool",
+        "provider_snapshot",
+        "provider_select",
+        "provider_set_key",
+        "provider_set_base_url",
+        "provider_clear_cred",
+        "provider_oauth_start",
+        "provider_oauth_poll",
+        "provider_oauth_sign_out",
+        "provider_test",
+        "provider_set_model",
+    ];
+
+    const PERMISSIONS: &[&str] = &[
+        "allow-status",
+        "allow-hibernate",
+        "allow-resume",
+        "allow-sleep",
+        "allow-reload-soul",
+        "allow-confirm-tool",
+        "allow-cancel-tool",
+        "allow-provider-snapshot",
+        "allow-provider-select",
+        "allow-provider-set-key",
+        "allow-provider-set-base-url",
+        "allow-provider-clear-cred",
+        "allow-provider-oauth-start",
+        "allow-provider-oauth-poll",
+        "allow-provider-oauth-sign-out",
+        "allow-provider-test",
+        "allow-provider-set-model",
+    ];
+
+    #[test]
+    fn capability_allows_window_commands() {
+        let permissions = include_str!("../permissions/commands.toml");
+        let capability = include_str!("../capabilities/default.json");
+        for command in COMMANDS {
+            let needle = format!("\"{command}\"");
+            assert!(
+                permissions.contains(needle.as_str()),
+                "permissions missing {command}"
+            );
+        }
+        for permission in PERMISSIONS {
+            let needle = format!("\"{permission}\"");
+            assert!(
+                capability.contains(needle.as_str()),
+                "capability missing {permission}"
+            );
+        }
+    }
+}

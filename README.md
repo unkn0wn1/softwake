@@ -234,7 +234,7 @@ Type one command per line. `sleep` in the 800 ms after `wake` stays awake. `wake
 
 ## Model providers
 
-Settings in `softwake-ui` configure one acting provider ([ADR 0012](docs/ADR-0012-model-providers.md)):
+Settings in `softwake-ui` configure one acting provider ([ADR 0012](docs/ADR-0012-model-providers.md)). That panel is the Providers pane in the window:
 
 1. Choose **xAI sign-in**, **xAI API key**, **OpenAI**, **OpenRouter**, or **OpenAI-compatible**.
 2. For a key provider, paste the key and press **Save key**. For **OpenAI-compatible**, also set the **Base URL** (for example `http://127.0.0.1:11434/v1`) and press **Save base URL**. For xAI sign-in, press **Start sign-in**, open the verification URL, enter the user code, then **Poll** (or wait for the automatic poll).
@@ -289,7 +289,15 @@ The soul directory is the first match of `--soul-dir PATH` (on `serve` and `demo
 
 ## Window
 
-`softwake-ui` is a small Tauri window: the current state, whether the soul pack is `ok` or `missing`, the latest tool line, and buttons for Hibernate, Wake (leave hibernate into sleep), Sleep, and Reload soul. A line under the status says reload reads `soul.md`, `user.md`, `rules.md`, and `glossary.md`. The window does not edit those files. When the pack is invalid and the daemon sent a reason, the soul line shows that reason. When a confirm-gated tool is waiting, the window shows that text and enables Confirm and Cancel. It only talks to the socket. Start `softwaked serve` first.
+`softwake-ui` is a resizable settings window, 860 by 680. A left nav has four panes. Status is selected when the window opens.
+
+**Status** shows the daemon state, whether capture is running, whether the soul pack is `ok` or `missing` (and the reason when the daemon sent one), whether a soul reload is pending, the latest tool line, and a confirm-gated tool when one is waiting. Buttons are Hibernate, Wake (leave hibernate into sleep), Sleep, Reload soul, Confirm, and Cancel. Reload reads `soul.md`, `user.md`, `rules.md`, and `glossary.md`. The window does not edit those files. The status snapshot does not include the socket path. The window uses the same default socket as `softwaked ctl`. Start `softwaked serve` first. Provider commands are not socket commands.
+
+**Providers** is the model Settings panel ([ADR 0012](docs/ADR-0012-model-providers.md)): choose a provider, save a key or sign in, press Test, then pick a model. The model list stays empty until Test succeeds.
+
+**General** says pack editors are coming. It does not edit the four files.
+
+**Email** says live email is coming later. The window does not send mail.
 
 ```bash
 cargo run -p softwake-ui
