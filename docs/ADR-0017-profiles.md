@@ -46,3 +46,4 @@ ADR 0011 defined the four-file pack in a single soul directory. Operators want m
 - Existing `~/.config/softwake/soul/` installs migrate without data loss.
 - Flag / env overrides still point at a raw pack dir (optional `profile.json` for name).
 - Public docs describe the layout without host-specific paths.
+- Settings **Profiles** chrome uses a nested sub-menu under the main left nav (profile chips + create) so the content pane stays a growing pack editor; blank create seeds comment-only scaffolds and leaves the agent name empty until Save.

@@ -447,10 +447,9 @@ let profilesSnap = null;
 let selectedProfileId = "";
 
 const profilesListEl = document.querySelector("#profiles-list");
+const profilesSubnavEl = document.querySelector("#profiles-subnav");
 const profilesConfigDirEl = document.querySelector("#profiles-config-dir");
 const profileNameInput = document.querySelector("#profile-name");
-const profileNewNameInput = document.querySelector("#profile-new-name");
-const profileActiveBadge = document.querySelector("#profile-active-badge");
 
 function setPackEditable(on) {
   document.querySelector("#pack-save").disabled = !on;
@@ -492,26 +491,41 @@ function applyPackSnapshot(snap, statusText) {
   setPackEditable(true);
 }
 
+function setProfilesSubnavVisible(on) {
+  if (!profilesSubnavEl) return;
+  profilesSubnavEl.classList.toggle("hidden", !on);
+  profilesSubnavEl.hidden = !on;
+}
+
 function renderProfilesList(snap) {
   profilesListEl.innerHTML = "";
   for (const row of snap.profiles || []) {
     const li = document.createElement("li");
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "profile-row";
+    btn.className = "profile-chip";
     btn.setAttribute("role", "option");
     btn.setAttribute("aria-selected", row.id === snap.selected_id ? "true" : "false");
     btn.dataset.profileId = row.id;
+    const label = (row.name && String(row.name).trim()) || row.id;
+    btn.title = row.id + (row.pack_ok ? "" : " (invalid pack)");
+    if (row.active) {
+      const dot = document.createElement("span");
+      dot.className = "active-dot";
+      dot.setAttribute("aria-label", "Active profile");
+      btn.appendChild(dot);
+    }
     const title = document.createElement("span");
-    title.textContent = row.name || row.id;
+    title.className = "profile-chip-label";
+    title.textContent = label;
     btn.appendChild(title);
-    const meta = document.createElement("span");
-    meta.className = "profile-meta";
-    const bits = [row.id];
-    if (row.active) bits.push("active");
-    if (!row.pack_ok) bits.push("invalid pack");
-    meta.textContent = bits.join(" · ");
-    btn.appendChild(meta);
+    if (!row.pack_ok) {
+      const warn = document.createElement("span");
+      warn.className = "profile-chip-warn";
+      warn.textContent = "!";
+      warn.title = "Invalid pack";
+      btn.appendChild(warn);
+    }
     btn.addEventListener("click", () => {
       loadProfiles(row.id);
     });
@@ -525,8 +539,8 @@ function applyProfilesSnapshot(snap, statusText) {
   selectedProfileId = snap.selected_id || "";
   profilesConfigDirEl.textContent = "Config: " + (snap.config_dir || "");
   profileNameInput.value = snap.selected_name || "";
-  profileActiveBadge.textContent = "Active: " + (snap.active_id || "");
   renderProfilesList(snap);
+  setProfilesSubnavVisible(true);
   applyPackSnapshot(snap.pack || {}, statusText || "");
   profilesLoaded = true;
 }
@@ -542,15 +556,13 @@ async function loadProfiles(selectedId, statusText) {
 }
 
 async function createProfile() {
-  const name = (profileNewNameInput.value || "").trim();
-  if (!name) {
-    packErrorEl.textContent = "Enter a name for the new profile.";
-    return;
-  }
   packErrorEl.textContent = "";
   try {
-    applyProfilesSnapshot(await invoke("profile_create", { name }), "Created profile.");
-    profileNewNameInput.value = "";
+    applyProfilesSnapshot(
+      await invoke("profile_create", { name: "" }),
+      "Created blank profile — set an agent name when you save."
+    );
+    profileNameInput.focus();
   } catch (error) {
     packErrorEl.textContent = errorText(error);
   }
@@ -760,8 +772,13 @@ function showPane(name) {
       nav.removeAttribute("aria-current");
     }
   }
-  if (name === "profiles" && !profilesLoaded) {
-    loadProfiles(selectedProfileId);
+  setProfilesSubnavVisible(name === "profiles");
+  if (name === "profiles") {
+    if (!profilesLoaded) {
+      loadProfiles(selectedProfileId);
+    } else {
+      setProfilesSubnavVisible(true);
+    }
   }
   if (name === "email") {
     refreshEmail();

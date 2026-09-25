@@ -9,7 +9,7 @@
   --cyan-ink: oklch(0.22 0.04 230);
   --danger: oklch(0.80 0.12 25);
   --radius-xl: 0.75rem;
-  --nav-width: 11.25rem;
+  --nav-width: 12.5rem;
   font-family: "Segoe UI", system-ui, sans-serif;
   background: var(--ink);
   color: var(--text);
@@ -34,6 +34,7 @@ body {
   gap: 16px;
   box-sizing: border-box;
   min-height: 100vh;
+  height: 100vh;
   padding: 16px;
 }
 
@@ -54,6 +55,9 @@ body {
 
 .content {
   min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .pane {
@@ -62,6 +66,15 @@ body {
   max-height: calc(100vh - 32px);
   overflow: auto;
   padding: 20px 22px 24px;
+}
+
+.pane.pane-fill {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  height: calc(100vh - 32px);
+  max-height: calc(100vh - 32px);
+  overflow: hidden;
 }
 
 .eyebrow {
@@ -226,7 +239,8 @@ textarea {
 }
 
 .pack-tab {
-  padding: 8px 12px;
+  padding: 5px 10px;
+  font-size: 0.8rem;
 }
 
 .pack-tab[aria-selected="true"] {
@@ -293,50 +307,164 @@ a.oauth-open:hover {
   width: auto;
 }
 
-.profiles-layout {
-  display: grid;
-  grid-template-columns: minmax(11rem, 14rem) 1fr;
-  gap: 1rem;
-  align-items: start;
+/* Compact controls (Profiles chrome; Status actions keep default button size) */
+.btn-compact,
+button.btn-compact,
+.pack-tab.btn-compact {
+  padding: 5px 10px;
+  font-size: 0.8rem;
+  line-height: 1.25;
+  border-radius: 0.5rem;
+  box-shadow: none;
 }
-.profiles-list {
-  list-style: none;
-  margin: 0 0 0.75rem;
-  padding: 0;
-  max-height: 16rem;
-  overflow: auto;
+
+button.btn-primary.btn-compact {
+  box-shadow: 0 0 14px oklch(0.78 0.13 200 / 0.28);
 }
-.profiles-list li {
+
+.row-compact {
+  gap: 8px;
+  margin: 6px 0 10px;
+}
+
+.field-compact {
+  margin: 8px 0;
+}
+
+.field-compact span {
+  font-size: 0.8rem;
+}
+
+/* Nested sub-menu under main left nav */
+.nav-sub {
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
-  width: 100%;
+  gap: 4px;
+  margin: -2px 0 4px 0.55rem;
+  padding: 4px 0 6px 0.55rem;
+  border-left: 1px solid oklch(1 0 0 / 0.12);
 }
-.profiles-list button.profile-row {
-  text-align: left;
+
+.nav-sub.hidden {
+  display: none;
+}
+
+.nav-sub-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: min(40vh, 18rem);
+  overflow: auto;
+}
+
+.nav-sub-list li {
+  margin: 0;
+  padding: 0;
+}
+
+.nav-sub-list button.profile-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   width: 100%;
+  text-align: left;
   border: 1px solid transparent;
   background: transparent;
   color: inherit;
-  padding: 0.45rem 0.55rem;
+  padding: 4px 8px;
+  font-size: 0.78rem;
+  line-height: 1.25;
   border-radius: 0.45rem;
   cursor: pointer;
 }
-.profiles-list button.profile-row[aria-selected="true"] {
-  border-color: rgba(94, 234, 212, 0.45);
-  background: rgba(94, 234, 212, 0.08);
+
+.nav-sub-list button.profile-chip:hover {
+  background: oklch(1 0 0 / 0.06);
 }
-.profiles-list .profile-meta {
-  font-size: 0.75rem;
+
+.nav-sub-list button.profile-chip[aria-selected="true"] {
+  border-color: oklch(0.78 0.13 200 / 0.55);
+  background: oklch(0.78 0.13 200 / 0.10);
+  color: oklch(0.90 0.08 200);
+}
+
+.nav-sub-list .profile-chip-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-sub-list .profile-chip-warn {
+  font-size: 0.65rem;
   opacity: 0.7;
+  flex: none;
 }
-#profile-new-name,
+
+.active-dot {
+  width: 0.4rem;
+  height: 0.4rem;
+  flex: none;
+  border-radius: 999px;
+  background: oklch(0.78 0.17 145);
+  box-shadow: 0 0 8px oklch(0.78 0.17 145 / 0.75);
+}
+
+.nav-sub-action {
+  align-self: stretch;
+  margin-top: 2px;
+}
+
+/* Profiles detail: editors grow with the window */
+.profiles-detail-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.profiles-detail-panel > h2,
+.profiles-detail-panel > .meta,
+.profiles-detail-panel > .field,
+.profiles-detail-panel > .row,
+.profiles-detail-panel > .pack-tabs {
+  flex: none;
+}
+
+.pack-editors {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 12rem;
+  margin-bottom: 8px;
+}
+
+.pack-editor {
+  box-sizing: border-box;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 12rem;
+  height: 100%;
+  resize: vertical;
+}
+
+.pack-editor.hidden {
+  display: none;
+}
+
 #profile-name {
   flex: 1;
   min-width: 0;
+  padding: 8px 10px;
+  font-size: 0.9rem;
 }
-@media (max-width: 820px) {
-  .profiles-layout {
-    grid-template-columns: 1fr;
-  }
+
+.pack-tabs {
+  gap: 6px;
+  margin: 4px 0 8px;
 }
