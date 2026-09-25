@@ -237,7 +237,7 @@ Type one command per line. `sleep` in the 800 ms after `wake` stays awake. `wake
 Settings in `softwake-ui` configure one acting provider ([ADR 0012](docs/ADR-0012-model-providers.md)). That panel is the Providers pane in the window:
 
 1. Choose **xAI sign-in**, **xAI API key**, **OpenAI**, **OpenRouter**, or **OpenAI-compatible**.
-2. For a key provider, paste the key and press **Save key**. For **OpenAI-compatible**, also set the **Base URL** (for example `http://127.0.0.1:11434/v1`) and press **Save base URL**. For xAI sign-in, press **Start sign-in**, open the verification URL, enter the user code, then **Poll** (or wait for the automatic poll).
+2. For a key provider, paste the key and press **Save key**. For **OpenAI-compatible**, also set the **Base URL** (for example `http://127.0.0.1:11434/v1`) and press **Save base URL**. For xAI sign-in, press **Start sign-in**. Softwake opens the verification page in the default browser and shows that address as a link next to the user code. Enter the code on that page, then **Poll** (or wait for the automatic poll). If the browser does not open, use the link in Settings.
 3. Press **Test**. On success, the model dropdown fills from `GET /v1/models` (with a registry seed fallback). The dropdown stays empty until Test succeeds.
 4. Pick a model.
 

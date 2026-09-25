@@ -23,6 +23,8 @@ softwake-ipc.workspace = true
 softwake-providers = { workspace = true }
 softwake-soul.workspace = true
 tauri = { version = "2", features = [] }
+tauri-plugin-opener = "=2.5.5"
+url = "2"
 
 [features]
 default = ["custom-protocol", "live-http"]

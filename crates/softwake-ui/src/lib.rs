@@ -6,6 +6,7 @@
 //! not decide whether a voice-state transition is legal.
 
 mod commands;
+mod oauth_open;
 mod pack;
 mod providers;
 
@@ -17,6 +18,7 @@ mod providers;
 /// not a voice-state error.
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             commands::status,
             commands::hibernate,
@@ -109,5 +111,25 @@ mod tests {
                 "capability missing {permission}"
             );
         }
+        assert!(
+            capability.contains("opener:allow-open-url"),
+            "capability missing opener:allow-open-url"
+        );
+        assert!(
+            capability.contains("https://auth.x.ai"),
+            "capability missing https://auth.x.ai"
+        );
+        assert!(
+            capability.contains("https://auth.x.ai/*"),
+            "capability missing https://auth.x.ai/*"
+        );
+        assert!(
+            !capability.contains("opener:default"),
+            "capability must not grant opener:default"
+        );
+        assert!(
+            !capability.contains("allow-open-path"),
+            "capability must not grant allow-open-path"
+        );
     }
 }

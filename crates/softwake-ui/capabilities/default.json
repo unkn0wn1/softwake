@@ -23,6 +23,13 @@
     "allow-provider-set-model",
     "allow-provider-opt-in-plaintext",
     "allow-pack-snapshot",
-    "allow-pack-save"
+    "allow-pack-save",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://auth.x.ai" },
+        { "url": "https://auth.x.ai/*" }
+      ]
+    }
   ]
 }
