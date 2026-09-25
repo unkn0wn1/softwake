@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-25
+- **Amended:** 2026-09-25. Session chat is [ADR 0013](ADR-0013-session-provider.md). This record stays the Settings, Test, and secret-bag decision.
 
 ## Decision
 
@@ -36,7 +37,7 @@ v1 of the bag is **plaintext at rest** with a `plaintext: true` marker and a one
 
 ### UI and daemon
 
-The thin Settings panel in `softwake-ui` calls Tauri commands that use this crate in the UI process. IPC protocol generation stays `1`. Provider commands are not socket commands. The daemon and [`TextStubSession`](../crates/softwake-session/src/lib.rs) do not call a chat model in this slice. [`ProviderHandle`](../crates/softwake-providers/src/handle.rs) is the stub a later session can hold: selected provider, selected model, and a bearer token lookup. Softwake does not wire that handle into the awake path yet.
+The thin Settings panel in `softwake-ui` calls Tauri commands that use this crate in the UI process. IPC protocol generation stays `1`. Provider commands are not socket commands. [`ProviderHandle`](../crates/softwake-providers/src/handle.rs) is the read-only view of the selected provider, selected model, and bearer lookup. Session chat on that handle is [ADR 0013](ADR-0013-session-provider.md).
 
 ## Context
 
@@ -72,5 +73,5 @@ In the window: open Settings, pick a provider, paste a key or start xAI sign-in,
 
 - A new workspace crate and a Settings section in the window.
 - Secrets can sit on disk in plaintext until a later encryption or keyring change. Operators who need stronger storage wait for that change or keep keys only in the environment and never save.
-- The awake session still has no model client. Live connectors stay open Phase 3 / Phase 4 items.
+- Typed session chat is [ADR 0013](ADR-0013-session-provider.md). Live connectors stay open Phase 3 / Phase 4 items.
 - OpenRouter and OpenAI-compatible base URL need a follow-up ADR or an amendment to this one.

@@ -1,13 +1,17 @@
-//! Session hook stub.
+//! Read-only Settings and secret bag.
 //!
-//! The daemon does not call this yet. A later awake path can hold a
-//! [`ProviderHandle`] and ask for a bearer token without owning HTTP.
+//! Typed demo chat holds a [`ProviderHandle`] and asks for a bearer token
+//! without this type opening a socket. See [ADR 0013](../../docs/ADR-0013-session-provider.md).
+
+use std::path::Path;
 
 use crate::ids::ProviderId;
 use crate::secrets::{FileSecretStore, SecretBag, SecretStoreError};
-use crate::settings::{FileProviderSettings, ProviderSettings, SettingsError};
+use crate::settings::{FileProviderSettings, ProviderSettings, SettingsError, TestReport};
 
-/// Read-only view a later session can use to pick a model and token.
+/// Selected provider, model, and bearer lookup for one acting session.
+///
+/// Bearer lookup does not refresh OAuth and does not open a socket.
 #[derive(Debug, Clone)]
 pub struct ProviderHandle {
     settings: ProviderSettings,
@@ -33,6 +37,23 @@ impl ProviderHandle {
         Ok(Self { settings, bag })
     }
 
+    /// Load Settings and the secret bag from explicit paths.
+    ///
+    /// The `bool` is `settings_file_present`: false when `providers.json` was
+    /// not on disk. A missing secrets file is an empty bag and still [`Ok`].
+    /// This does not create either file.
+    ///
+    /// # Errors
+    ///
+    /// Path, I/O, or JSON errors. A missing Settings file is [`Ok`] with the
+    /// present flag false. A missing secrets file is an empty bag.
+    pub fn load_paths(settings: &Path, secrets: &Path) -> Result<(Self, bool), HandleError> {
+        let settings_file_present = settings.is_file();
+        let loaded = FileProviderSettings::new(settings)?.load()?;
+        let bag = FileSecretStore::new(secrets)?.load()?;
+        Ok((Self::from_parts(loaded, bag), settings_file_present))
+    }
+
     /// Selected provider id.
     #[must_use]
     pub fn selected_provider(&self) -> ProviderId {
@@ -50,6 +71,17 @@ impl ProviderHandle {
     #[must_use]
     pub fn cached_models(&self) -> &[String] {
         self.settings.models_for(self.settings.selected_provider)
+    }
+
+    /// Last Test report for the selected provider.
+    ///
+    /// `None` when Settings has no report for that id. One report is stored
+    /// per provider, not a history bit.
+    #[must_use]
+    pub fn test_report(&self) -> Option<&TestReport> {
+        self.settings
+            .last_test
+            .get(self.selected_provider().as_str())
     }
 
     /// Bearer token for the selected provider, if configured.

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 rust-version.workspace = true
-description = "Model provider credentials, device-code OAuth, Test probes, and secret bag. Mock transport by default."
+description = "Model provider credentials, device-code OAuth, Test probes, chat completion, and secret bag. Mock transport by default."
 
 [features]
 default = []

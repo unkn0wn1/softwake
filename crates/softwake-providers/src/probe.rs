@@ -4,7 +4,7 @@
 
 use serde_json::{Value, json};
 
-use crate::constants::{OPENAI_API_BASE, XAI_API_BASE};
+use crate::chat::missing_credential_message;
 use crate::constants::{XAI_OAUTH_DEVICE_URL, XAI_OAUTH_TOKEN_URL};
 use crate::ids::ProviderId;
 use crate::models::{filter_chat_models, parse_model_ids};
@@ -13,7 +13,7 @@ use crate::oauth::{
     merge_refresh, parse_device_poll, parse_device_start, parse_token_response, refresh_body,
     token_poll_body,
 };
-use crate::registry::{ProviderFamily, provider_definition};
+use crate::registry::provider_definition;
 use crate::secrets::SecretBag;
 use crate::settings::{ProviderSettings, TestReport};
 use crate::transport::{HttpResponse, Transport, TransportError};
@@ -157,13 +157,13 @@ pub fn run_test<T: Transport>(
     if token.is_empty() {
         return TestOutcome {
             ok: false,
-            message: missing_message(provider),
+            message: missing_credential_message(provider),
             chat_models: Vec::new(),
         };
     }
 
-    let chat_url = format!("{}/chat/completions", api_base(def.family));
-    let models_url = format!("{}/models", api_base(def.family));
+    let chat_url = format!("{}/chat/completions", def.family.api_base());
+    let models_url = format!("{}/models", def.family.api_base());
     let seed = def.chat_seed;
     let body = json!({
         "model": seed,
@@ -259,21 +259,6 @@ pub enum ProbeError {
     /// Refresh failed.
     #[error("xAI sign-in expired; sign in again in Settings")]
     OauthRefresh,
-}
-
-fn api_base(family: ProviderFamily) -> &'static str {
-    match family {
-        ProviderFamily::Xai => XAI_API_BASE,
-        ProviderFamily::Openai => OPENAI_API_BASE,
-    }
-}
-
-fn missing_message(provider: ProviderId) -> String {
-    match provider {
-        ProviderId::XaiOauth => "No xAI sign-in is configured.".to_owned(),
-        ProviderId::XaiKey => "No xAI API key is configured.".to_owned(),
-        ProviderId::Openai => "No OpenAI API key is configured.".to_owned(),
-    }
 }
 
 struct ProbeResult {

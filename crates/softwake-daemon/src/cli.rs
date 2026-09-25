@@ -183,7 +183,12 @@ optional feature (pipewire-native) and is not linked in the default build.
 SOFTWAKE_LOG=debug enables the same detail as --verbose and -v.
 
 Demo commands, one per line:
-  wake, sleep, hibernate, resume, status, reload-soul, tool, confirm, cancel, quit
+  wake, sleep, hibernate, resume, status, reload-soul, tool, confirm, cancel, hear, say, ask, chat, quit
+
+`hear TEXT` injects a mock transcript while awake. `say TEXT` records mock speech.
+`ask TEXT` and `chat TEXT` send one typed line to the selected provider while
+awake. Sleep and hibernate refuse those commands. The default build does not
+open a socket for `ask` or `chat`.
 
 `tool echo` returns pong. `tool echo hello` returns "echo: hello".
 `tool notify hello` waits until `confirm` (or `confirm-tool ID`).

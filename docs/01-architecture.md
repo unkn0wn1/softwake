@@ -27,12 +27,12 @@ Keep crates small and single-purpose. Exact names can shift; responsibilities sh
 
 | Crate | Responsibility |
 |-------|----------------|
-| `softwake-daemon` | Binary: state machine, IPC server, wiring |
+| `softwake-daemon` | Binary: state machine, IPC server, typed demo. `ask` / `chat` call the selected provider when `live-http` is on ([ADR 0013](ADR-0013-session-provider.md)) |
 | `softwake-state` | Sleep / awake / hibernate transitions and invariants |
 | `softwake-audio` | Capture trait, mock backend, PipeWire stub. `pipewire-native` is off unless a developer opts in |
 | `softwake-voice` | Awake STT/TTS boundary (mock default; sherpa stubs feature-gated; [ADR 0007](ADR-0007-awake-stt-tts.md)) |
 | `softwake-wake` | Local wake/sleep phrases. Text table for the typed demo. PCM seam for sherpa-onnx keyword spotting ([ADR 0006](ADR-0006-on-device-wake.md)) |
-| `softwake-session` | Text session for one awake period. Stores that rendered pack. Memory snippets are still not attached. No model client yet |
+| `softwake-session` | Text session for one awake period. Stores the rendered pack. Completer is injected. No HTTP client. Memory snippets are not attached ([ADR 0013](ADR-0013-session-provider.md)) |
 | `softwake-tools` | Tool registry with safe, confirm, and deny metadata. `echo` is safe, `notify` and `email_send` wait for confirmation, `shell` is denied |
 | `softwake-connectors` | World I/O boundary. Email, Drive, and calendar traits with in-memory mocks. Registry is confirm or deny. No live cloud client in the default build. The daemon calls the email mock only ([ADR 0008](ADR-0008-connector-boundary.md)) |
 | `softwake-policy` | Classifies tool names and connector pairs. Unknown subjects are denied. Overrides may only tighten. The daemon asks it before a tool runs ([ADR 0010](ADR-0010-policy-engine.md)) |
@@ -99,7 +99,7 @@ World I/O is a library boundary in `softwake-connectors` ([ADR 0008](ADR-0008-co
 
 ## Model providers
 
-Credentials and Settings Test live in `softwake-providers` ([ADR 0012](ADR-0012-model-providers.md)). Three kinds ship: xAI device-code OAuth, xAI API key, and OpenAI API key. Secrets are a plaintext-at-rest bag under `$XDG_STATE_HOME/softwake/secrets.json` (mode `0600`) with a documented warning. Non-secret selection and the Test model cache are `$XDG_CONFIG_HOME/softwake/providers.json`. The model dropdown stays empty until Test succeeds. Default crate tests use `MockTransport` and do not open a socket. The `live-http` feature enables `ureq`. The window Settings panel talks to this crate through Tauri commands. IPC protocol generation stays 1. The daemon and text session do not call a chat model yet.
+Credentials and Settings Test live in `softwake-providers` ([ADR 0012](ADR-0012-model-providers.md)). Three kinds ship: xAI device-code OAuth, xAI API key, and OpenAI API key. Secrets are a plaintext-at-rest bag under `$XDG_STATE_HOME/softwake/secrets.json` (mode `0600`) with a documented warning. Non-secret selection and the Test model cache are `$XDG_CONFIG_HOME/softwake/providers.json`. The model dropdown stays empty until Test succeeds. Default crate tests use `MockTransport` and do not open a socket. The `live-http` feature enables `ureq`. The window Settings panel talks to this crate through Tauri commands. IPC protocol generation stays 1. While awake, typed `ask` and `chat` on `softwaked demo` send the rendered context pack and the user line to the selected provider ([ADR 0013](ADR-0013-session-provider.md)). Tests use `MockTransport`. The daemon `live-http` feature performs the real call and is off by default; without it the demo returns a clear error and does not open a socket. `softwaked serve` has no chat command.
 
 ## Policy
 
