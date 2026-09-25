@@ -244,21 +244,17 @@ fn contains_arrow(text: &str) -> bool {
 }
 
 fn is_alias_token(alias: &str) -> bool {
-    let mut chars = alias.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_alphabetic() && first != '_' {
+    let bytes = alias.as_bytes();
+    if !(1..=32).contains(&bytes.len()) {
         return false;
     }
-    let mut len = 1usize;
-    for ch in chars {
-        if len == 32 || !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') {
-            return false;
-        }
-        len += 1;
+    let first = bytes[0];
+    if !first.is_ascii_alphabetic() && first != b'_' {
+        return false;
     }
-    true
+    bytes[1..]
+        .iter()
+        .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_' || *byte == b'-')
 }
 
 fn requires_readback(glossary: &Glossary, command: &str, expanded: &str) -> bool {
