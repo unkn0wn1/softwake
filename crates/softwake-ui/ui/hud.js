@@ -21,6 +21,8 @@ let holding = false;
 let talkPending = false;
 let autoListening = false;
 let lastReplyKey = "";
+let refreshInFlight = false;
+let lastStatusMessage = "";
 
 function invoke(command, args) {
   const core = window.__TAURI__ && window.__TAURI__.core;
@@ -54,36 +56,55 @@ function palette() {
   ];
 }
 
-function spawnBurst() {
-  const dens = Math.floor(2 + level * 14);
+function spawnBurstWithLevel(drawLevel) {
+  const dens = Math.floor(2 + drawLevel * 14);
   const colors = palette();
   const cx = canvas.width * 0.5;
   const cy = canvas.height * 0.55;
   for (let i = 0; i < dens; i += 1) {
     const color = colors[Math.floor(Math.random() * colors.length)];
     const angle = Math.random() * Math.PI * 2;
-    const speed = 0.2 + Math.random() * (0.6 + level * 1.8);
+    const speed = 0.2 + Math.random() * (0.6 + drawLevel * 1.8);
     particles.push({
       x: cx + (Math.random() - 0.5) * 18,
       y: cy + (Math.random() - 0.5) * 10,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed - 0.15,
-      r: 3 + Math.random() * (4 + level * 10),
+      r: 3 + Math.random() * (4 + drawLevel * 10),
       life: 1,
       decay: 0.008 + Math.random() * 0.012,
       color,
-      alpha: 0.25 + level * 0.55,
+      alpha: 0.25 + drawLevel * 0.55,
     });
   }
 }
 
+function spawnBurst() {
+  spawnBurstWithLevel(bloomLevel());
+}
+
+/** Local breath while STT/ask/TTS holds the daemon — never await status here. */
+function bloomLevel() {
+  const thinking =
+    talkPending ||
+    lastStatusMessage === "thinking…" ||
+    lastStatusMessage === "thinking...";
+  if (thinking) {
+    const wave = Math.sin(performance.now() / 420);
+    return Math.min(0.92, Math.max(0.22, 0.42 + 0.28 * wave, level));
+  }
+  return level;
+}
+
 function tick() {
+  // Bloom is decoupled from status fetch: always paint from last-known level.
+  const drawLevel = bloomLevel();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  const listening = captureRunning || level > 0.08;
-  if (listening && Math.random() < 0.08 + level * 0.35) {
-    spawnBurst();
+  const listening = captureRunning || drawLevel > 0.08 || talkPending;
+  if (listening && Math.random() < 0.08 + drawLevel * 0.35) {
+    spawnBurstWithLevel(drawLevel);
   } else if (!listening && Math.random() < 0.02) {
-    spawnBurst();
+    spawnBurstWithLevel(drawLevel);
   }
 
   for (let i = particles.length - 1; i >= 0; i -= 1) {
@@ -181,6 +202,11 @@ function updateHint() {
 }
 
 async function refresh() {
+  // Never stack status polls: a stuck GetStatus must not queue behind itself.
+  if (refreshInFlight) {
+    return;
+  }
+  refreshInFlight = true;
   try {
     const snap = await invoke("hud_snapshot");
     state = snap.state || "sleep";
@@ -189,6 +215,7 @@ async function refresh() {
     autoListening = !!snap.auto_listening;
     const message = (snap && snap.message) || "";
     const detail = (snap && snap.detail) || "";
+    lastStatusMessage = message;
     const key = message + "\0" + detail;
     // Surface free-speech / async replies without awaiting the pipeline.
     if (
@@ -213,6 +240,8 @@ async function refresh() {
     captureRunning = false;
     level = 0.02;
     autoListening = false;
+  } finally {
+    refreshInFlight = false;
   }
   updateHint();
 }
@@ -264,6 +293,7 @@ function paintReleasedMic(label) {
   holding = false;
   talkBtn.classList.remove("holding");
   talkBtn.textContent = "Hold";
+  lastStatusMessage = label === "thinking…" || label === "thinking..." ? "thinking…" : lastStatusMessage;
   showReply(label, false);
 }
 
@@ -452,6 +482,7 @@ form.addEventListener("submit", (event) => {
   bumpIdle(POST_ASK_IDLE_MS);
   replyEl.classList.remove("error");
   replyEl.textContent = "thinking…";
+  lastStatusMessage = "thinking…";
   input.value = "";
   talkPending = true;
   // Same as PTT: do not block the particle loop on ask + Eve playback.

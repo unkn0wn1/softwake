@@ -826,3 +826,51 @@ fn ctl_wake_refuses_a_missing_soul_and_leaves_resume_usable() {
 
     drop(server);
 }
+
+#[test]
+fn get_status_returns_cached_snapshot_while_runtime_lock_is_held() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    let temp = TempSocket::new();
+    let soul = TestSoulDir::valid();
+    let server =
+        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock).expect("serve");
+
+    let seeded = ctl::call(temp.path(), Command::GetStatus).expect("seed cache");
+    assert_eq!(seeded.state, VoiceState::Sleep);
+
+    let held = AtomicBool::new(false);
+    let release = AtomicBool::new(false);
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let _guard = server.lock_runtime_for_test();
+            server.publish_thinking_for_test("test hold");
+            held.store(true, Ordering::SeqCst);
+            while !release.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(5));
+            }
+        });
+        let wait_start = Instant::now();
+        while !held.load(Ordering::SeqCst) {
+            assert!(
+                wait_start.elapsed() < Duration::from_secs(2),
+                "runtime lock holder never armed"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        let started = Instant::now();
+        let status = ctl::call(temp.path(), Command::GetStatus).expect("cached status");
+        let elapsed = started.elapsed();
+        release.store(true, Ordering::SeqCst);
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "GetStatus blocked on runtime lock for {elapsed:?}"
+        );
+        assert_eq!(status.message.as_deref(), Some("thinking…"));
+        assert_eq!(status.detail.as_deref(), Some("test hold"));
+    });
+
+    drop(server);
+}
