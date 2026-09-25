@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-25
-- **Amended:** 2026-09-25. Session chat is [ADR 0013](ADR-0013-session-provider.md). OpenRouter and OpenAI-compatible (API key + base URL) join the Settings provider list. This record stays the Settings, Test, and secret-bag decision.
+- **Amended:** 2026-09-25. Session chat is [ADR 0013](ADR-0013-session-provider.md). OpenRouter and OpenAI-compatible (API key + base URL) join the Settings provider list. Provider secrets prefer the OS keyring, with an opt-in plaintext fallback. This record stays the Settings, Test, and secret-bag decision.
 
 ## Decision
 
@@ -33,7 +33,9 @@ Softwake has one acting model role. There is no separate Voice default in this c
 
 Tokens and API keys never enter git. Non-secret Settings (selected provider id, selected model id, cached model lists) are JSON under `$XDG_CONFIG_HOME/softwake/providers.json` (or `~/.config/softwake/providers.json`). Secrets are a separate bag under `$XDG_STATE_HOME/softwake/secrets.json` (or `~/.local/state/softwake/secrets.json`), file mode `0600`, parent dir mode `0700` when this crate creates them.
 
-v1 of the bag is **plaintext at rest** with a `plaintext: true` marker and a one-line warning on load and save. Softwake does not yet depend on an OS keyring crate. A later change may encrypt the bag or move entries into the session keyring; the file format and path stay documented here. The renderer / window script must not log keys or tokens. Probe error messages redact response bodies.
+Version 1 of the bag was plaintext at rest. That file is still read. The current store prefers the OS keyring: Linux Secret Service, and macOS Keychain or Windows Credential Manager through the same crate (those two are not tested in CI). In keyring mode the file is a pointer with `version: 2`, `plaintext: false`, `backend: "keyring"`, and no secret fields. One secret-service item holds the five secret fields, service `softwake`, user `secret-bag`.
+
+Plaintext remains an opt-in fallback (`backend: "plaintext"`, `plaintext_opt_in: true`, loud warning) when the service is unavailable, or when `SOFTWAKE_SECRET_BACKEND=plaintext`. `SOFTWAKE_SECRET_BACKEND=keyring` forces the service and fails closed. Unset means auto. A version-1 file migrates on the first resolved load when the probe succeeds. A pointer is never rewritten as plaintext. The window shows `storage_backend` and `storage_message` and does not receive secret values. Probe errors stay redacted. The renderer / window script must not log keys or tokens. Probe error messages redact response bodies.
 
 ### HTTP and CI
 
@@ -53,6 +55,9 @@ Softwake is an acting conductor, not a dual Voice/AI recorder. One provider and 
 
 - Keep OpenRouter and OpenAI-compatible deferred. Superseded by this amendment: Settings now lists both after OpenAI.
 - OS keyring as the only store. Rejected for v1. Keyring needs a session secret service in CI and on headless boxes. The XDG file with a plaintext warning is demable offline.
+- Encrypt-at-rest with a machine-local key. Rejected in this amendment. It would add a second crypto stack when the keyring plus a plaintext opt-in already covers the headless case.
+- `keyring` 4.x. Rejected for this slice. That line raises the workspace MSRV and splits stores into separate crates.
+- A process-global keyring mock in CI. Rejected. Tests run in parallel, so the fake client is an owned in-memory store.
 - Put provider IPC on the daemon socket and bump protocol generation. Rejected. Settings can use Tauri commands against this crate without a socket change. A later move into the daemon can add additive commands on generation 1.
 - Populate the model picker from the registry before Test. Rejected. Empty until Test matches the product rule.
 - Wire `TextStubSession` to a live chat client. Rejected. This slice stops at credentials, Test, and the picker.
@@ -65,17 +70,21 @@ cargo test -p softwake-providers
 cargo test --workspace
 ```
 
+Those commands do not need a keyring daemon. A headless plaintext demo sets `SOFTWAKE_SECRET_BACKEND=plaintext`.
+
 With a real key (not in CI):
 
 ```bash
-cargo test -p softwake-providers --features live-http -- --ignored
+cargo test -p softwake-providers --features live-http -- --ignored --skip live_secret_service
 ```
+
+The skip leaves out the ignored Secret Service round-trip. That test is not part of `cargo test --workspace`.
 
 In the window: open Settings, pick a provider, paste a key or start xAI sign-in, press Test, then choose a model from the filled dropdown.
 
 ## Consequences
 
 - A new workspace crate and a Settings section in the window.
-- Secrets can sit on disk in plaintext until a later encryption or keyring change. Operators who need stronger storage wait for that change or keep keys only in the environment and never save.
+- A machine with Secret Service stores provider secrets in the keyring after migration. A machine without it keeps the plaintext file only after opt-in (a pre-existing version-1 file counts). Env keys still apply when no secret is saved.
 - Typed session chat is [ADR 0013](ADR-0013-session-provider.md). Live connectors stay open Phase 3 / Phase 4 items.
 - OpenRouter and OpenAI-compatible base URL are part of this ADR (amended). Live connector work stays open.

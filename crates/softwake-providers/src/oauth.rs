@@ -11,7 +11,7 @@ use crate::constants::{
 };
 
 /// Tokens returned by the device or refresh grant.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthTokenSet {
     /// Access token used as a bearer.
     pub access_token: String,
@@ -21,6 +21,18 @@ pub struct OAuthTokenSet {
     pub expires_at_ms: u64,
     /// Token type, usually `Bearer`.
     pub token_type: String,
+}
+
+impl std::fmt::Debug for OAuthTokenSet {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OAuthTokenSet")
+            .field("access_token", &"<redacted>")
+            .field("refresh_token", &"<redacted>")
+            .field("expires_at_ms", &self.expires_at_ms)
+            .field("token_type", &self.token_type)
+            .finish()
+    }
 }
 
 /// Result of starting device authorization.

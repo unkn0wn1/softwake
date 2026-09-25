@@ -1,36 +1,66 @@
-//! Secret bag on disk.
+//! Provider secret bag.
 //!
-//! The bag is plaintext at rest in v1. The document carries `"plaintext": true`
-//! so a later encrypting format can refuse or migrate it. File mode is `0600`.
+//! The on-disk path is unchanged. Version 2 prefers the OS keyring: the file is a
+//! pointer and the secret fields live in one keyring item. Plaintext remains an
+//! opt-in fallback. Version 1 is still read. See [ADR 0012](../../docs/ADR-0012-model-providers.md).
 
 use std::env;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
 use crate::oauth::OAuthTokenSet;
+use crate::secrets_file::{self, FileSecretStore};
+use crate::secrets_keyring::{self, KeyringSecretStore};
 
 /// File name under the Softwake state directory.
 pub const SECRETS_FILE_NAME: &str = "secrets.json";
 
-/// Largest secrets file this backend will read, in bytes.
+/// Largest secrets document or keyring payload this backend will accept, in bytes.
 pub const MAX_SECRETS_BYTES: usize = 256 * 1024;
 
-const DOCUMENT_VERSION: u32 = 1;
+/// Keyring service name for the provider bag.
+pub const KEYRING_SERVICE: &str = "softwake";
 
-/// Warning printed conceptually on load/save. Callers may surface it in UI.
-pub const PLAINTEXT_WARNING: &str = "Softwake stores provider secrets in a local plaintext file (mode 0600). Prefer the environment for keys you do not want on disk.";
+/// Keyring account name for the provider bag. One item holds the whole bag.
+pub const KEYRING_USER: &str = "secret-bag";
 
-/// In-memory secret bag. Never log its fields.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// Account used only to probe Secret Service. The value stored there is `ok`.
+pub const KEYRING_PROBE_USER: &str = "softwake-probe";
+
+/// Status line when the bag is in the OS keyring.
+pub const KEYRING_STATUS: &str = "Provider secrets are stored in the OS keyring.";
+
+/// Warning when the bag is an opt-in plaintext file.
+pub const PLAINTEXT_WARNING: &str = "Softwake is storing provider secrets in a local plaintext file (mode 0600). The OS keyring is not in use.";
+
+/// Warning when no file exists and the keyring probe failed.
+pub const PLAINTEXT_OPT_IN_MESSAGE: &str = "The OS keyring is unavailable. Choose a local plaintext file to save keys on this machine, or leave keys in the environment.";
+
+/// Fixed sentence for a backend label this build does not accept.
+pub const UNSUPPORTED_BACKEND_MESSAGE: &str = "provider secret backend is not supported";
+
+/// Fixed sentence when a pointer's service or user does not match this build.
+pub const POINTER_IDENTITY_MESSAGE: &str = "pointer identity does not match this build";
+
+const SECRET_BACKEND_ENV: &str = "SOFTWAKE_SECRET_BACKEND";
+
+/// Version written by this crate. Version 1 is legacy plaintext and is only read.
+pub(crate) const CURRENT_VERSION: u32 = 2;
+
+const LEGACY_VERSION: u32 = 1;
+
+/// In-memory secret bag. [`Debug`] redacts every secret string.
+///
+/// Backend metadata stays in the on-disk document. This type is only the
+/// credential fields plus the version flags callers already match on.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct SecretBag {
-    /// Document version.
-    #[serde(default = "one")]
+    /// Document version. `1` is legacy plaintext. `2` is the current bag.
+    #[serde(default = "legacy_version")]
     pub version: u32,
-    /// Always true in v1. Marks plaintext-at-rest.
+    /// `true` when the secret fields were loaded from a plaintext file.
     #[serde(default = "always_true")]
     pub plaintext: bool,
     /// Saved xAI API key.
@@ -50,20 +80,50 @@ pub struct SecretBag {
     pub openai_compatible_api_key: Option<String>,
 }
 
-fn one() -> u32 {
-    1
+fn legacy_version() -> u32 {
+    LEGACY_VERSION
 }
 
 fn always_true() -> bool {
     true
 }
 
+fn redact_secret(value: Option<&String>) -> Option<&'static str> {
+    value.map(|_| "<redacted>")
+}
+
+impl std::fmt::Debug for SecretBag {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SecretBag")
+            .field("version", &self.version)
+            .field("plaintext", &self.plaintext)
+            .field("xai_api_key", &redact_secret(self.xai_api_key.as_ref()))
+            .field(
+                "openai_api_key",
+                &redact_secret(self.openai_api_key.as_ref()),
+            )
+            .field("xai_oauth", &self.xai_oauth)
+            .field(
+                "openrouter_api_key",
+                &redact_secret(self.openrouter_api_key.as_ref()),
+            )
+            .field(
+                "openai_compatible_api_key",
+                &redact_secret(self.openai_compatible_api_key.as_ref()),
+            )
+            .finish()
+    }
+}
+
 impl SecretBag {
-    /// Empty bag.
+    /// Empty legacy bag. A missing file loads as this value.
+    ///
+    /// A keyring load uses [`Self::keyring_empty`] instead.
     #[must_use]
     pub fn empty() -> Self {
         Self {
-            version: DOCUMENT_VERSION,
+            version: LEGACY_VERSION,
             plaintext: true,
             xai_api_key: None,
             openai_api_key: None,
@@ -72,15 +132,74 @@ impl SecretBag {
             openai_compatible_api_key: None,
         }
     }
+
+    /// Empty bag after the keyring answered and had no item.
+    #[must_use]
+    pub fn keyring_empty() -> Self {
+        Self {
+            version: CURRENT_VERSION,
+            plaintext: false,
+            ..Self::empty()
+        }
+    }
 }
 
-/// Durable secret bag. Creates parent dirs mode `0700` and the file mode `0600`.
-#[derive(Debug, Clone)]
-pub struct FileSecretStore {
-    path: PathBuf,
+/// Where the secret fields are kept for this process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretBackend {
+    /// OS keyring item, with a pointer file on disk after the first save.
+    Keyring,
+    /// Opt-in or legacy plaintext file.
+    Plaintext,
+    /// No file yet and the keyring probe failed. Load is empty. Save needs opt-in.
+    Unavailable,
 }
 
-/// Failure from [`FileSecretStore`].
+impl SecretBackend {
+    /// Wire value for Settings: `keyring`, `plaintext`, or `unavailable`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Keyring => "keyring",
+            Self::Plaintext => "plaintext",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+/// Status returned to Settings. The message is never a secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageReport {
+    /// Active backend.
+    pub backend: SecretBackend,
+    /// Status or warning. Never a key or token.
+    pub message: String,
+}
+
+impl StorageReport {
+    pub(crate) fn keyring() -> Self {
+        Self {
+            backend: SecretBackend::Keyring,
+            message: KEYRING_STATUS.to_owned(),
+        }
+    }
+
+    pub(crate) fn plaintext() -> Self {
+        Self {
+            backend: SecretBackend::Plaintext,
+            message: PLAINTEXT_WARNING.to_owned(),
+        }
+    }
+
+    pub(crate) fn unavailable() -> Self {
+        Self {
+            backend: SecretBackend::Unavailable,
+            message: PLAINTEXT_OPT_IN_MESSAGE.to_owned(),
+        }
+    }
+}
+
+/// Failure from a [`SecretStore`]. Display text never includes a secret or a raw backend label.
 #[derive(Debug, thiserror::Error)]
 pub enum SecretStoreError {
     /// `XDG_STATE_HOME` and `HOME` were both unset or blank.
@@ -98,21 +217,23 @@ pub enum SecretStoreError {
         path: PathBuf,
         /// Source error.
         #[source]
-        source: Box<io::Error>,
+        source: Box<std::io::Error>,
     },
 
-    /// JSON parse failure.
+    /// JSON that this crate will not treat as a bag.
+    ///
+    /// The serde error is dropped. Its [`Display`](std::fmt::Display) can quote the file body.
     #[error("provider secrets file {} is not valid json", path.display())]
     Invalid {
         /// Path read.
         path: PathBuf,
-        /// Parse error.
-        #[source]
-        source: Box<serde_json::Error>,
     },
 
     /// Unsupported document version.
-    #[error("provider secrets file {} has unsupported version {version}", path.display())]
+    #[error(
+        "provider secrets file {} has unsupported version {version}",
+        path.display()
+    )]
     UnsupportedVersion {
         /// Path read.
         path: PathBuf,
@@ -120,7 +241,7 @@ pub enum SecretStoreError {
         version: u32,
     },
 
-    /// File too large.
+    /// File or payload too large.
     #[error("provider secrets file {} is {len} bytes; max is {max}", path.display())]
     TooLarge {
         /// Path read.
@@ -130,78 +251,311 @@ pub enum SecretStoreError {
         /// Cap.
         max: usize,
     },
+
+    /// Env value or on-disk label this build does not accept. `reason` is a fixed sentence.
+    #[error("{reason}")]
+    UnsupportedBackend {
+        /// Fixed sentence. Never a caller-supplied label.
+        reason: &'static str,
+    },
+
+    /// The keyring was required, or a pointer could not be read, and the service did not answer.
+    #[error("the OS keyring is unavailable")]
+    KeyringUnavailable,
+
+    /// The keyring answered with a failure that is not "no entry".
+    ///
+    /// The platform error is not attached. Its text can echo a password.
+    #[error("the OS keyring rejected the provider secret bag")]
+    Keyring,
+
+    /// Save was attempted before the operator opted in to a plaintext file.
+    #[error(
+        "The OS keyring is unavailable. Choose a local plaintext file to save keys on this machine, or leave keys in the environment."
+    )]
+    PlaintextOptInRequired,
+
+    /// A keyring pointer contained a secret field.
+    #[error(
+        "provider secrets file {} is a keyring pointer and must not contain secret fields",
+        path.display()
+    )]
+    PointerHasSecrets {
+        /// Path read.
+        path: PathBuf,
+    },
+
+    /// A plaintext save would replace a keyring pointer.
+    #[error(
+        "provider secrets file {} is a keyring pointer and cannot be written as plaintext",
+        path.display()
+    )]
+    WrongBackend {
+        /// Path that was left unchanged.
+        path: PathBuf,
+    },
+
+    /// Opt-in was requested while the keyring probe succeeded or a pointer is already on disk.
+    #[error("the OS keyring is available")]
+    KeyringAvailable,
+
+    /// Opt-in was requested while plaintext is already the resolved store.
+    #[error("provider secrets already use a local plaintext file")]
+    PlaintextAlreadySelected,
 }
 
-impl FileSecretStore {
-    /// Store at `path`. Does not read or create the file yet.
+/// What is already at the secrets path. The caller supplies the probe result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnDiskKind {
+    /// No file.
+    Missing,
+    /// Version 1, always treated as plaintext.
+    LegacyV1,
+    /// Version 2 opt-in plaintext.
+    PlaintextV2,
+    /// Version 2 pointer. The secret fields are not in the file.
+    KeyringPointer,
+}
+
+/// `SOFTWAKE_SECRET_BACKEND`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendPref {
+    /// Unset or blank. Probe decides, except a pointer is always the keyring.
+    Auto,
+    /// Force the plaintext file. Does not copy a pointer's payload out of the keyring.
+    Plaintext,
+    /// Force the keyring. Fails closed when the probe fails and the file is not a pointer.
+    Keyring,
+}
+
+/// Result of [`resolve_backend`], aside from a hard error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendChoice {
+    /// Use the keyring. `migrate` writes the pointer after copying a plaintext bag.
+    Keyring {
+        /// When true, copy the plaintext bag into the keyring before returning the store.
+        migrate: bool,
+    },
+    /// Use the plaintext file. The next plaintext save rewrites version 2.
+    Plaintext,
+    /// Load an empty bag. Save returns [`SecretStoreError::PlaintextOptInRequired`].
+    Unavailable,
+}
+
+/// Durable bag. File, keyring, unavailable, and the in-memory fake share this.
+pub trait SecretStore: Send {
+    /// Load the bag.
     ///
     /// # Errors
     ///
-    /// Returns [`SecretStoreError::EmptyPath`] when `path` is empty.
-    pub fn new(path: impl Into<PathBuf>) -> Result<Self, SecretStoreError> {
-        let path = path.into();
-        if path.as_os_str().is_empty() {
-            return Err(SecretStoreError::EmptyPath);
-        }
-        Ok(Self { path })
-    }
+    /// Store-specific read failures. A missing keyring item is an empty bag, not an error.
+    fn load(&self) -> Result<SecretBag, SecretStoreError>;
 
-    /// Path this store reads and writes.
+    /// Replace the bag.
+    ///
+    /// # Errors
+    ///
+    /// Store-specific write failures.
+    fn save(&self, bag: &SecretBag) -> Result<(), SecretStoreError>;
+
+    /// Backend status for Settings. Never includes a secret.
     #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
+    fn report(&self) -> StorageReport;
+}
 
-    /// Load the bag. A missing file is an empty bag.
+/// Keyring I/O behind an owned client so tests never touch the process-global builder.
+pub trait KeyringClient: Send {
+    /// Payload JSON, or [`None`] when the item is absent.
     ///
     /// # Errors
     ///
-    /// Returns parse, version, size, or I/O errors when the file exists but is unusable.
-    pub fn load(&self) -> Result<SecretBag, SecretStoreError> {
-        match fs::read(&self.path) {
-            Ok(bytes) => decode_bytes(&self.path, &bytes),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(SecretBag::empty()),
-            Err(error) => Err(io_err(&self.path, error)),
+    /// Service failures. Absence is [`None`], not an error.
+    fn get_payload(&self) -> Result<Option<String>, SecretStoreError>;
+
+    /// Replace the payload. `json` is the secret bag and must not be logged.
+    ///
+    /// # Errors
+    ///
+    /// Service failures.
+    fn set_payload(&self, json: &str) -> Result<(), SecretStoreError>;
+
+    /// Remove the item. A missing item is success.
+    ///
+    /// # Errors
+    ///
+    /// Service failures other than a missing item.
+    fn delete_payload(&self) -> Result<(), SecretStoreError>;
+}
+
+/// Load, mutate, save.
+///
+/// # Errors
+///
+/// Propagates load or save errors.
+pub fn update_bag(
+    store: &dyn SecretStore,
+    mutator: impl FnOnce(&mut SecretBag),
+) -> Result<SecretBag, SecretStoreError> {
+    let mut bag = store.load()?;
+    mutator(&mut bag);
+    store.save(&bag)?;
+    Ok(bag)
+}
+
+/// Choose a backend. This function does not read the disk and does not talk to dbus.
+///
+/// # Errors
+///
+/// [`SecretStoreError::KeyringUnavailable`] when the preference forces the keyring,
+/// the probe failed, and the file is not already a pointer.
+pub fn resolve_backend(
+    on_disk: OnDiskKind,
+    pref: BackendPref,
+    probe_ok: bool,
+) -> Result<BackendChoice, SecretStoreError> {
+    if on_disk == OnDiskKind::KeyringPointer {
+        return Ok(BackendChoice::Keyring { migrate: false });
+    }
+    match (on_disk, pref, probe_ok) {
+        (OnDiskKind::Missing, BackendPref::Auto | BackendPref::Keyring, true) => {
+            Ok(BackendChoice::Keyring { migrate: false })
+        }
+        (OnDiskKind::Missing, BackendPref::Auto, false) => Ok(BackendChoice::Unavailable),
+        (
+            OnDiskKind::Missing | OnDiskKind::LegacyV1 | OnDiskKind::PlaintextV2,
+            BackendPref::Plaintext,
+            _,
+        )
+        | (OnDiskKind::LegacyV1 | OnDiskKind::PlaintextV2, BackendPref::Auto, false) => {
+            Ok(BackendChoice::Plaintext)
+        }
+        (
+            OnDiskKind::Missing | OnDiskKind::LegacyV1 | OnDiskKind::PlaintextV2,
+            BackendPref::Keyring,
+            false,
+        ) => Err(SecretStoreError::KeyringUnavailable),
+        (
+            OnDiskKind::LegacyV1 | OnDiskKind::PlaintextV2,
+            BackendPref::Auto | BackendPref::Keyring,
+            true,
+        ) => Ok(BackendChoice::Keyring { migrate: true }),
+        (OnDiskKind::KeyringPointer, _, _) => Ok(BackendChoice::Keyring { migrate: false }),
+    }
+}
+
+/// Open the store at `path`, reading `SOFTWAKE_SECRET_BACKEND` and probing once per process.
+///
+/// # Errors
+///
+/// Path, parse, preference, probe-forced keyring, or migration failures.
+pub fn open_store(path: &Path) -> Result<Box<dyn SecretStore + Send>, SecretStoreError> {
+    let pref = pref_from_env()?;
+    let probe_ok = secrets_keyring::cached_probe();
+    open_store_with(
+        path,
+        pref,
+        probe_ok,
+        secrets_keyring::LiveKeyringClient::new(),
+    )
+}
+
+/// Open a store without reading the environment and without probing.
+///
+/// Tests pass `probe_ok` and a fake [`KeyringClient`]. This does not call `keyring::Entry`.
+///
+/// # Errors
+///
+/// Path, parse, preference, or migration failures.
+pub fn open_store_with(
+    path: &Path,
+    pref: BackendPref,
+    probe_ok: bool,
+    client: impl KeyringClient + 'static,
+) -> Result<Box<dyn SecretStore + Send>, SecretStoreError> {
+    if path.as_os_str().is_empty() {
+        return Err(SecretStoreError::EmptyPath);
+    }
+    let kind = secrets_file::classify(path)?;
+    let choice = resolve_backend(kind, pref, probe_ok)?;
+    match choice {
+        BackendChoice::Unavailable => Ok(Box::new(UnavailableSecretStore)),
+        BackendChoice::Plaintext => Ok(Box::new(FileSecretStore::new(path)?)),
+        BackendChoice::Keyring { migrate } => {
+            if migrate {
+                secrets_keyring::migrate_to_keyring(path, &client)?;
+            }
+            Ok(Box::new(KeyringSecretStore::new(path, client)?))
         }
     }
+}
 
-    /// Replace the bag on disk.
-    ///
-    /// # Errors
-    ///
-    /// Returns I/O errors when the directory or file cannot be written.
-    pub fn save(&self, bag: &SecretBag) -> Result<(), SecretStoreError> {
-        let mut document = bag.clone();
-        document.version = DOCUMENT_VERSION;
-        document.plaintext = true;
-        let body =
-            serde_json::to_vec_pretty(&document).map_err(|source| SecretStoreError::Invalid {
-                path: self.path.clone(),
-                source: Box::new(source),
-            })?;
-        if body.len() > MAX_SECRETS_BYTES {
-            return Err(SecretStoreError::TooLarge {
-                path: self.path.clone(),
-                len: body.len(),
-                max: MAX_SECRETS_BYTES,
-            });
+/// Write the empty version-2 plaintext opt-in file when resolution is [`BackendChoice::Unavailable`].
+///
+/// Does not talk to dbus. A keyring choice, including an existing pointer, is left untouched.
+///
+/// # Errors
+///
+/// [`SecretStoreError::KeyringAvailable`], [`SecretStoreError::PlaintextAlreadySelected`],
+/// or a write error.
+pub fn opt_in_plaintext(
+    path: &Path,
+    pref: BackendPref,
+    probe_ok: bool,
+) -> Result<StorageReport, SecretStoreError> {
+    if path.as_os_str().is_empty() {
+        return Err(SecretStoreError::EmptyPath);
+    }
+    let kind = secrets_file::classify(path)?;
+    match resolve_backend(kind, pref, probe_ok)? {
+        BackendChoice::Unavailable => {
+            FileSecretStore::new(path)?.save(&SecretBag::empty())?;
+            Ok(StorageReport::plaintext())
         }
-        atomic_write(&self.path, &body)
+        BackendChoice::Keyring { .. } => Err(SecretStoreError::KeyringAvailable),
+        BackendChoice::Plaintext => Err(SecretStoreError::PlaintextAlreadySelected),
+    }
+}
+
+/// [`opt_in_plaintext`] using the process environment and the cached probe.
+///
+/// # Errors
+///
+/// Same as [`opt_in_plaintext`], plus an unsupported env value.
+pub fn opt_in_plaintext_resolved(path: &Path) -> Result<StorageReport, SecretStoreError> {
+    opt_in_plaintext(path, pref_from_env()?, secrets_keyring::cached_probe())
+}
+
+/// Load a bag without probing and without migrating.
+///
+/// A missing file is empty and is not created. A pointer is read from the keyring.
+pub(crate) fn load_unmigrated(path: &Path) -> Result<SecretBag, SecretStoreError> {
+    if path.as_os_str().is_empty() {
+        return Err(SecretStoreError::EmptyPath);
+    }
+    match secrets_file::read_on_disk(path)? {
+        secrets_file::OnDisk::Missing => Ok(SecretBag::empty()),
+        secrets_file::OnDisk::Legacy(bag) | secrets_file::OnDisk::Plaintext(bag) => Ok(bag),
+        secrets_file::OnDisk::Pointer => {
+            KeyringSecretStore::new(path, secrets_keyring::LiveKeyringClient::new())?.load()
+        }
+    }
+}
+
+/// No file yet, and the operator has not opted in.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct UnavailableSecretStore;
+
+impl SecretStore for UnavailableSecretStore {
+    fn load(&self) -> Result<SecretBag, SecretStoreError> {
+        Ok(SecretBag::empty())
     }
 
-    /// Load, mutate, save.
-    ///
-    /// # Errors
-    ///
-    /// Propagates load or save errors.
-    pub fn update<F>(&self, mutator: F) -> Result<SecretBag, SecretStoreError>
-    where
-        F: FnOnce(&mut SecretBag),
-    {
-        let mut bag = self.load()?;
-        mutator(&mut bag);
-        self.save(&bag)?;
-        Ok(bag)
+    fn save(&self, _bag: &SecretBag) -> Result<(), SecretStoreError> {
+        Err(SecretStoreError::PlaintextOptInRequired)
+    }
+
+    fn report(&self) -> StorageReport {
+        StorageReport::unavailable()
     }
 }
 
@@ -220,15 +574,15 @@ pub fn resolve_secrets_file() -> Result<PathBuf, SecretStoreError> {
 ///
 /// Returns [`SecretStoreError::NoStateDir`] when both bases are unset or blank.
 pub fn resolve_secrets_file_from(
-    xdg_state_home: Option<impl AsRef<std::ffi::OsStr>>,
-    home: Option<impl AsRef<std::ffi::OsStr>>,
+    xdg_state_home: Option<impl AsRef<OsStr>>,
+    home: Option<impl AsRef<OsStr>>,
 ) -> Result<PathBuf, SecretStoreError> {
     Ok(resolve_state_dir_from(xdg_state_home, home)?.join(SECRETS_FILE_NAME))
 }
 
 fn resolve_state_dir_from(
-    xdg_state_home: Option<impl AsRef<std::ffi::OsStr>>,
-    home: Option<impl AsRef<std::ffi::OsStr>>,
+    xdg_state_home: Option<impl AsRef<OsStr>>,
+    home: Option<impl AsRef<OsStr>>,
 ) -> Result<PathBuf, SecretStoreError> {
     if let Some(xdg) = trimmed_os(xdg_state_home) {
         return Ok(PathBuf::from(xdg).join("softwake"));
@@ -239,150 +593,101 @@ fn resolve_state_dir_from(
     Err(SecretStoreError::NoStateDir)
 }
 
-fn trimmed_os(value: Option<impl AsRef<std::ffi::OsStr>>) -> Option<std::ffi::OsString> {
+fn trimmed_os(value: Option<impl AsRef<OsStr>>) -> Option<OsString> {
     let value = value?;
     let text = value.as_ref().to_string_lossy();
     let trimmed = text.trim();
     if trimmed.is_empty() {
         None
     } else {
-        Some(std::ffi::OsString::from(trimmed))
+        Some(OsString::from(trimmed))
     }
 }
 
-fn decode_bytes(path: &Path, bytes: &[u8]) -> Result<SecretBag, SecretStoreError> {
-    if bytes.len() > MAX_SECRETS_BYTES {
+pub(crate) fn pref_from_env() -> Result<BackendPref, SecretStoreError> {
+    match env::var(SECRET_BACKEND_ENV) {
+        Err(env::VarError::NotPresent) => Ok(BackendPref::Auto),
+        Err(env::VarError::NotUnicode(_)) => Err(SecretStoreError::UnsupportedBackend {
+            reason: UNSUPPORTED_BACKEND_MESSAGE,
+        }),
+        Ok(value) => pref_from_str(&value),
+    }
+}
+
+pub(crate) fn pref_from_str(value: &str) -> Result<BackendPref, SecretStoreError> {
+    match value.trim() {
+        "" => Ok(BackendPref::Auto),
+        "plaintext" => Ok(BackendPref::Plaintext),
+        "keyring" => Ok(BackendPref::Keyring),
+        _ => Err(SecretStoreError::UnsupportedBackend {
+            reason: UNSUPPORTED_BACKEND_MESSAGE,
+        }),
+    }
+}
+
+pub(crate) fn bag_has_secret(bag: &SecretBag) -> bool {
+    fn filled(value: Option<&String>) -> bool {
+        value.is_some_and(|text| !text.is_empty())
+    }
+    filled(bag.xai_api_key.as_ref())
+        || filled(bag.openai_api_key.as_ref())
+        || filled(bag.openrouter_api_key.as_ref())
+        || filled(bag.openai_compatible_api_key.as_ref())
+        || bag.xai_oauth.as_ref().is_some_and(|tokens| {
+            !tokens.access_token.is_empty() || !tokens.refresh_token.is_empty()
+        })
+}
+
+/// Keyring item body. No version and no backend fields.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct SecretPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) xai_api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) openai_api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) openrouter_api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) openai_compatible_api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) xai_oauth: Option<OAuthTokenSet>,
+}
+
+pub(crate) fn encode_payload(bag: &SecretBag) -> Result<String, SecretStoreError> {
+    let payload = SecretPayload {
+        xai_api_key: bag.xai_api_key.clone(),
+        openai_api_key: bag.openai_api_key.clone(),
+        openrouter_api_key: bag.openrouter_api_key.clone(),
+        openai_compatible_api_key: bag.openai_compatible_api_key.clone(),
+        xai_oauth: bag.xai_oauth.clone(),
+    };
+    serde_json::to_string(&payload).map_err(|_| SecretStoreError::Keyring)
+}
+
+pub(crate) fn decode_payload(path: &Path, json: &str) -> Result<SecretBag, SecretStoreError> {
+    if json.len() > MAX_SECRETS_BYTES {
         return Err(SecretStoreError::TooLarge {
             path: path.to_owned(),
-            len: bytes.len(),
+            len: json.len(),
             max: MAX_SECRETS_BYTES,
         });
     }
-    let bag: SecretBag =
-        serde_json::from_slice(bytes).map_err(|source| SecretStoreError::Invalid {
-            path: path.to_owned(),
-            source: Box::new(source),
-        })?;
-    if bag.version != DOCUMENT_VERSION {
-        return Err(SecretStoreError::UnsupportedVersion {
-            path: path.to_owned(),
-            version: bag.version,
-        });
+    if json.trim().is_empty() {
+        return Ok(SecretBag::keyring_empty());
     }
-    Ok(bag)
-}
-
-fn atomic_write(path: &Path, body: &[u8]) -> Result<(), SecretStoreError> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(parent)
-                .map_err(|error| io_err(path, error))?;
-        }
-    }
-    let temp = path.with_extension("json.tmp");
-    {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&temp)
-            .map_err(|error| io_err(path, error))?;
-        file.write_all(body).map_err(|error| io_err(path, error))?;
-        file.sync_all().map_err(|error| io_err(path, error))?;
-    }
-    fs::rename(&temp, path).map_err(|error| io_err(path, error))?;
-    // Best-effort mode on the final path (rename may preserve temp mode).
-    let _ = File::open(path).and_then(|file| {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = file.metadata()?.permissions();
-        perms.set_mode(0o600);
-        fs::set_permissions(path, perms)
-    });
-    Ok(())
-}
-
-fn io_err(path: &Path, source: io::Error) -> SecretStoreError {
-    SecretStoreError::Io {
-        path: path.to_owned(),
-        source: Box::new(source),
-    }
+    let payload: SecretPayload =
+        serde_json::from_str(json).map_err(|_| SecretStoreError::Keyring)?;
+    Ok(SecretBag {
+        version: CURRENT_VERSION,
+        plaintext: false,
+        xai_api_key: payload.xai_api_key,
+        openai_api_key: payload.openai_api_key,
+        xai_oauth: payload.xai_oauth,
+        openrouter_api_key: payload.openrouter_api_key,
+        openai_compatible_api_key: payload.openai_compatible_api_key,
+    })
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    use super::{FileSecretStore, PLAINTEXT_WARNING, resolve_secrets_file_from};
-    use crate::oauth::OAuthTokenSet;
-
-    struct TempDir {
-        path: std::path::PathBuf,
-    }
-
-    impl TempDir {
-        fn new() -> Self {
-            static NEXT: AtomicU64 = AtomicU64::new(1);
-            let n = NEXT.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "softwake-providers-secrets-{}-{n}",
-                std::process::id()
-            ));
-            std::fs::create_dir_all(&path).expect("temp");
-            Self { path }
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
-    }
-
-    #[test]
-    fn round_trip_keys_and_tokens() {
-        let dir = TempDir::new();
-        let store = FileSecretStore::new(dir.path.join("secrets.json")).expect("store");
-        assert!(store.load().expect("missing").xai_api_key.is_none());
-        store
-            .update(|bag| {
-                bag.xai_api_key = Some("xai-secret".to_owned());
-                bag.openai_api_key = Some("sk-test".to_owned());
-                bag.openrouter_api_key = Some("or-test".to_owned());
-                bag.openai_compatible_api_key = Some("compat-test".to_owned());
-                bag.xai_oauth = Some(OAuthTokenSet {
-                    access_token: "a".to_owned(),
-                    refresh_token: "r".to_owned(),
-                    expires_at_ms: 9,
-                    token_type: "Bearer".to_owned(),
-                });
-            })
-            .expect("save");
-        let loaded = store.load().expect("load");
-        assert_eq!(loaded.xai_api_key.as_deref(), Some("xai-secret"));
-        assert_eq!(loaded.openai_api_key.as_deref(), Some("sk-test"));
-        assert_eq!(loaded.openrouter_api_key.as_deref(), Some("or-test"));
-        assert_eq!(
-            loaded.openai_compatible_api_key.as_deref(),
-            Some("compat-test")
-        );
-        assert_eq!(
-            loaded.xai_oauth.as_ref().map(|t| t.refresh_token.as_str()),
-            Some("r")
-        );
-        assert!(loaded.plaintext);
-        assert!(!PLAINTEXT_WARNING.is_empty());
-    }
-
-    #[test]
-    fn resolve_prefers_xdg_state() {
-        let path = resolve_secrets_file_from(Some("/state"), Some("/home")).expect("path");
-        assert_eq!(
-            path,
-            std::path::PathBuf::from("/state/softwake/secrets.json")
-        );
-    }
-}
+#[path = "secrets_tests.rs"]
+mod tests;

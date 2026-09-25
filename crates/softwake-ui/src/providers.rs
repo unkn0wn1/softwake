@@ -9,10 +9,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use softwake_providers::{
-    CredentialKind, DevicePoll, FileProviderSettings, FileSecretStore, OAuthTokenSet,
-    PLAINTEXT_WARNING, PROVIDER_REGISTRY, ProviderId, ProviderSettings, apply_test_outcome,
-    poll_device_code, resolve_bearer, resolve_providers_file, resolve_secrets_file, run_test,
-    start_device_code,
+    CredentialKind, DevicePoll, FileProviderSettings, OAuthTokenSet, PROVIDER_REGISTRY, ProviderId,
+    ProviderSettings, SecretBag, SecretStore, StorageReport, apply_test_outcome,
+    opt_in_plaintext_resolved, poll_device_code, resolve_bearer, resolve_providers_file,
+    resolve_secrets_file, run_test, start_device_code, update_bag,
 };
 
 #[cfg(not(feature = "live-http"))]
@@ -85,8 +85,10 @@ pub struct ProviderSnapshot {
     pub has_xai_oauth: bool,
     /// In-progress device-code sign-in, if any.
     pub oauth_pending: Option<OAuthPendingView>,
-    /// Plaintext secret-bag warning.
-    pub plaintext_warning: String,
+    /// `keyring`, `plaintext`, or `unavailable`.
+    pub storage_backend: String,
+    /// Status or warning. Never a key or token.
+    pub storage_message: String,
 }
 
 fn now_ms() -> u64 {
@@ -100,9 +102,9 @@ fn open_settings() -> Result<FileProviderSettings, String> {
         .map_err(|e| e.to_string())
 }
 
-fn open_secrets() -> Result<FileSecretStore, String> {
-    FileSecretStore::new(resolve_secrets_file().map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())
+fn open_secrets() -> Result<Box<dyn SecretStore + Send>, String> {
+    let path = resolve_secrets_file().map_err(|error| error.to_string())?;
+    softwake_providers::open_store(&path).map_err(|error| error.to_string())
 }
 
 fn credential_name(kind: CredentialKind) -> &'static str {
@@ -115,17 +117,10 @@ fn credential_name(kind: CredentialKind) -> &'static str {
     }
 }
 
-#[allow(
-    clippy::fn_params_excessive_bools,
-    reason = "mirrors ProviderSnapshot has_* fields for each credential kind"
-)]
 fn snapshot_from(
     settings: &ProviderSettings,
-    has_xai_key: bool,
-    has_openai_key: bool,
-    has_openrouter_key: bool,
-    has_openai_compatible_key: bool,
-    has_xai_oauth: bool,
+    bag: &SecretBag,
+    report: &StorageReport,
 ) -> Result<ProviderSnapshot, String> {
     let pending = PENDING_OAUTH
         .lock()
@@ -146,40 +141,41 @@ fn snapshot_from(
             })
             .collect(),
         models: settings.models_for(selected).to_vec(),
-        last_test_ok: last.map(|report| report.ok),
-        last_test_message: last.map_or_else(String::new, |report| report.message.clone()),
-        has_xai_key,
-        has_openai_key,
-        has_openrouter_key,
-        has_openai_compatible_key,
+        last_test_ok: last.map(|test| test.ok),
+        last_test_message: last.map_or_else(String::new, |test| test.message.clone()),
+        has_xai_key: bag
+            .xai_api_key
+            .as_ref()
+            .is_some_and(|key| !key.trim().is_empty()),
+        has_openai_key: bag
+            .openai_api_key
+            .as_ref()
+            .is_some_and(|key| !key.trim().is_empty()),
+        has_openrouter_key: bag
+            .openrouter_api_key
+            .as_ref()
+            .is_some_and(|key| !key.trim().is_empty()),
+        has_openai_compatible_key: bag
+            .openai_compatible_api_key
+            .as_ref()
+            .is_some_and(|key| !key.trim().is_empty()),
         openai_compatible_base_url: settings.openai_compatible_base_url.clone(),
-        has_xai_oauth,
+        has_xai_oauth: bag
+            .xai_oauth
+            .as_ref()
+            .is_some_and(|tokens| !tokens.access_token.trim().is_empty()),
         oauth_pending: pending,
-        plaintext_warning: PLAINTEXT_WARNING.to_owned(),
+        storage_backend: report.backend.as_str().to_owned(),
+        storage_message: report.message.clone(),
     })
 }
 
 fn load_snapshot() -> Result<ProviderSnapshot, String> {
-    let settings = open_settings()?.load().map_err(|e| e.to_string())?;
-    let bag = open_secrets()?.load().map_err(|e| e.to_string())?;
-    snapshot_from(
-        &settings,
-        bag.xai_api_key
-            .as_ref()
-            .is_some_and(|k| !k.trim().is_empty()),
-        bag.openai_api_key
-            .as_ref()
-            .is_some_and(|k| !k.trim().is_empty()),
-        bag.openrouter_api_key
-            .as_ref()
-            .is_some_and(|k| !k.trim().is_empty()),
-        bag.openai_compatible_api_key
-            .as_ref()
-            .is_some_and(|k| !k.trim().is_empty()),
-        bag.xai_oauth
-            .as_ref()
-            .is_some_and(|t| !t.access_token.trim().is_empty()),
-    )
+    let settings = open_settings()?.load().map_err(|error| error.to_string())?;
+    let store = open_secrets()?;
+    let report = store.report();
+    let bag = store.load().map_err(|error| error.to_string())?;
+    snapshot_from(&settings, &bag, &report)
 }
 
 /// Current provider Settings snapshot.
@@ -223,15 +219,14 @@ pub fn provider_set_key(provider_id: String, key: String) -> Result<ProviderSnap
         return Err("API key is empty".to_owned());
     }
     let store = open_secrets()?;
-    store
-        .update(|bag| match id {
-            ProviderId::XaiKey => bag.xai_api_key = Some(trimmed.clone()),
-            ProviderId::Openai => bag.openai_api_key = Some(trimmed.clone()),
-            ProviderId::Openrouter => bag.openrouter_api_key = Some(trimmed.clone()),
-            ProviderId::OpenaiCompatible => bag.openai_compatible_api_key = Some(trimmed.clone()),
-            ProviderId::XaiOauth => {}
-        })
-        .map_err(|e| e.to_string())?;
+    update_bag(store.as_ref(), |bag| match id {
+        ProviderId::XaiKey => bag.xai_api_key = Some(trimmed.clone()),
+        ProviderId::Openai => bag.openai_api_key = Some(trimmed.clone()),
+        ProviderId::Openrouter => bag.openrouter_api_key = Some(trimmed.clone()),
+        ProviderId::OpenaiCompatible => bag.openai_compatible_api_key = Some(trimmed.clone()),
+        ProviderId::XaiOauth => {}
+    })
+    .map_err(|error| error.to_string())?;
     let _ = trimmed;
     load_snapshot()
 }
@@ -245,15 +240,14 @@ pub fn provider_set_key(provider_id: String, key: String) -> Result<ProviderSnap
 pub fn provider_clear_cred(provider_id: String) -> Result<ProviderSnapshot, String> {
     let id: ProviderId = ProviderId::from_str(&provider_id).map_err(|e| e.to_string())?;
     let store = open_secrets()?;
-    store
-        .update(|bag| match id {
-            ProviderId::XaiKey => bag.xai_api_key = None,
-            ProviderId::Openai => bag.openai_api_key = None,
-            ProviderId::Openrouter => bag.openrouter_api_key = None,
-            ProviderId::OpenaiCompatible => bag.openai_compatible_api_key = None,
-            ProviderId::XaiOauth => bag.xai_oauth = None,
-        })
-        .map_err(|e| e.to_string())?;
+    update_bag(store.as_ref(), |bag| match id {
+        ProviderId::XaiKey => bag.xai_api_key = None,
+        ProviderId::Openai => bag.openai_api_key = None,
+        ProviderId::Openrouter => bag.openrouter_api_key = None,
+        ProviderId::OpenaiCompatible => bag.openai_compatible_api_key = None,
+        ProviderId::XaiOauth => bag.xai_oauth = None,
+    })
+    .map_err(|error| error.to_string())?;
     if id == ProviderId::XaiOauth {
         *PENDING_OAUTH
             .lock()
@@ -436,10 +430,18 @@ pub fn provider_set_model(model_id: String) -> Result<ProviderSnapshot, String> 
 }
 
 fn save_oauth_tokens(tokens: OAuthTokenSet) -> Result<(), String> {
-    open_secrets()?
-        .update(|bag| {
-            bag.xai_oauth = Some(tokens);
-        })
-        .map_err(|e| e.to_string())?;
+    let store = open_secrets()?;
+    update_bag(store.as_ref(), |bag| {
+        bag.xai_oauth = Some(tokens);
+    })
+    .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+/// Opt in to a local plaintext secret file. The command writes no key.
+#[tauri::command]
+pub fn provider_opt_in_plaintext() -> Result<ProviderSnapshot, String> {
+    let path = resolve_secrets_file().map_err(|error| error.to_string())?;
+    opt_in_plaintext_resolved(&path).map_err(|error| error.to_string())?;
+    load_snapshot()
 }

@@ -84,6 +84,11 @@ description = "Save the selected model id."
 commands.allow = ["provider_set_model"]
 
 [[permission]]
+identifier = "allow-provider-opt-in-plaintext"
+description = "Opt in to a local plaintext secret file. The command writes no key."
+commands.allow = ["provider_opt_in_plaintext"]
+
+[[permission]]
 identifier = "allow-pack-snapshot"
 description = "Read the four soul-pack files for the General editors."
 commands.allow = ["pack_snapshot"]
