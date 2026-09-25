@@ -39,3 +39,8 @@ ADR 0015 shipped tray + HUD with a UI-only mock level because `Status` had no en
 - `softwaked ctl status` prints `capture level: …` when present.
 - README documents how to try audio (serve + UI, optional `pipewire-native`).
 - ADR 0015 level section points here for the real path.
+
+## Amendment — real microphone (2026-09-25)
+
+When `softwaked` is built with `pipewire-capture` and started with `--capture pipewire` (or `SOFTWAKE_CAPTURE=pipewire`), drained frames come from the default PipeWire input instead of the mock listening tone. `capture_level` and HUD particle bloom follow that PCM. Default builds and CI stay on mock capture. Wake-from-voice still waits on KWS weights ([ADR 0006](ADR-0006-on-device-wake.md)).
+

@@ -9,11 +9,12 @@
 //! machine and listens on a Unix socket. `ctl` sends one command to that
 //! socket. `ctl ask` and `ctl chat` forward one awake turn to that daemon.
 //! The demo uses mock capture and does not open a microphone.
-//! Native `PipeWire` stays behind the `pipewire-native` feature. While awake, `echo`
+//! Native `PipeWire` capture stays behind the daemon `pipewire-capture` feature (audio `pipewire-native`). While awake, `echo`
 //! runs immediately. `notify` and `email_send` wait for confirmation. `shell` is denied.
 //! Sleep and hibernate refuse every tool. Confirming `email_send` appends one
 //! in-memory message and does not open a socket.
 
+mod capture;
 mod chat;
 mod cli;
 mod ctl;

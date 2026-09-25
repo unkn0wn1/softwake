@@ -4,17 +4,19 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 rust-version.workspace = true
-description = "Audio capture boundary. Mock backend and a feature-gated PipeWire stub."
+description = "Audio capture boundary. Mock backend and a feature-gated PipeWire capture."
 
 [features]
 # Compiles the trait-shaped PipeWire stub. No native PipeWire dependency.
 default = ["pipewire"]
 pipewire = []
-# Same stub, distinct error. Does not link libpipewire and is not enabled in CI.
-pipewire-native = ["pipewire"]
+# Links libpipewire via the `pipewire` crate and opens the default input.
+# Off in CI. Requires libpipewire-0.3 (dev headers at build time).
+pipewire-native = ["pipewire", "dep:pipewire"]
 
 [dependencies]
 thiserror.workspace = true
+pipewire = { version = "0.9", optional = true }
 
 [lints]
 workspace = true

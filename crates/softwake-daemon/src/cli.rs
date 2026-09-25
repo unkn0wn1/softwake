@@ -15,6 +15,7 @@ use softwake_soul::resolve_soul_dir;
 use softwake_state::{CooldownConfig, Machine};
 use softwake_wake::PhraseTable;
 
+use crate::capture::{self, CaptureKind};
 use crate::ctl::CtlAction;
 use crate::demo::Demo;
 use crate::{ctl, serve};
@@ -36,7 +37,11 @@ where
             print_help();
             ExitCode::SUCCESS
         }
-        Ok(Mode::Serve { socket, soul_dir }) => {
+        Ok(Mode::Serve {
+            socket,
+            soul_dir,
+            capture,
+        }) => {
             let dir = match resolve_soul_dir(soul_dir.as_deref()) {
                 Ok(dir) => dir,
                 Err(error) => {
@@ -44,7 +49,7 @@ where
                     return ExitCode::from(1);
                 }
             };
-            match serve::run(socket.as_deref(), dir) {
+            match serve::run(socket.as_deref(), dir, capture) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
                     eprintln!("softwaked: {error}");
@@ -164,6 +169,7 @@ Usage:
   softwaked --serve         same as serve
   softwaked serve --socket PATH
   softwaked serve --soul-dir PATH
+  softwaked serve --capture mock|pipewire
   softwaked ctl status      print the running daemon's voice state
   softwaked ctl hibernate   hibernate (stop capture)
   softwaked ctl resume      leave hibernate and land in sleep
@@ -208,9 +214,11 @@ parse as an alias map. Each file is at most 1 MiB. Hibernate, sleep,
 and resume still run when the pack is missing. reload-soul reads the
 files again; the new text applies on the next awake.
 
-Serve owns the voice-state machine and mock capture. It speaks
-newline-delimited JSON (protocol 1) on a Unix socket. A stale socket file
-is removed on startup. If another serve is already listening, startup
+Serve owns the voice-state machine and capture. Default capture is mock.
+`--capture pipewire` (or SOFTWAKE_CAPTURE=pipewire) opens the default
+microphone when the binary was built with `--features pipewire-capture`.
+It speaks newline-delimited JSON (protocol 1) on a Unix socket. A stale socket
+file is removed on startup. If another serve is already listening, startup
 fails and leaves that socket in place.
 
 Socket path, first match wins:
@@ -233,7 +241,7 @@ read is ok or missing.
 `ctl ask TEXT` and `ctl chat TEXT` send one typed line to the running daemon.
 Both use the same socket message. The daemon must already be awake. `ctl wake`
 enters awake when the four-file pack is valid. `ctl resume` lands in sleep and
-does not enter awake. Serve does not wake from the microphone.
+does not enter awake. Serve does not wake from the microphone yet (NullDetector until KWS weights).
 The default build does not call the provider. A live answer needs the daemon
 built with live-http. The assistant text is printed after the status lines.
 A refusal exits non-zero.
@@ -262,6 +270,7 @@ enum Mode {
     Serve {
         socket: Option<PathBuf>,
         soul_dir: Option<PathBuf>,
+        capture: CaptureKind,
     },
     Ctl {
         socket: Option<PathBuf>,
@@ -305,15 +314,33 @@ fn parse_demo_flags(args: impl IntoIterator<Item = String>) -> Result<Mode, Stri
 fn parse_serve_flags(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
     let mut socket = None;
     let mut soul_dir = None;
+    let mut capture_flag = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--socket" => take_value("serve", "--socket", &mut args, &mut socket)?,
             "--soul-dir" => take_value("serve", "--soul-dir", &mut args, &mut soul_dir)?,
+            "--capture" => {
+                if capture_flag.is_some() {
+                    return Err("serve accepts one --capture".to_owned());
+                }
+                let Some(value) = args.next() else {
+                    return Err("--capture needs mock or pipewire".to_owned());
+                };
+                capture_flag = Some(value);
+            }
             other => return Err(format!("unknown serve argument {other}")),
         }
     }
-    Ok(Mode::Serve { socket, soul_dir })
+    let capture = capture::resolve_capture_kind(
+        capture_flag.as_deref(),
+        env::var("SOFTWAKE_CAPTURE").ok().as_deref(),
+    )?;
+    Ok(Mode::Serve {
+        socket,
+        soul_dir,
+        capture,
+    })
 }
 
 fn parse_ctl(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
@@ -412,6 +439,7 @@ fn take_value(
 
 #[cfg(test)]
 mod tests {
+    use crate::capture::CaptureKind;
     use std::path::PathBuf;
 
     use super::{Mode, debug_log_requested, help_text, parse_args, status_line, strip_line_ending};
@@ -549,7 +577,8 @@ mod tests {
             parse_args(["serve".to_owned()]),
             Ok(Mode::Serve {
                 socket: None,
-                soul_dir: None
+                soul_dir: None,
+                capture: CaptureKind::Mock
             })
         );
         assert_eq!(
@@ -562,7 +591,8 @@ mod tests {
             ]),
             Ok(Mode::Serve {
                 socket: Some(PathBuf::from("/tmp/sw.sock")),
-                soul_dir: Some(PathBuf::from("/tmp/soul"))
+                soul_dir: Some(PathBuf::from("/tmp/soul")),
+                capture: CaptureKind::Mock
             })
         );
         assert_eq!(

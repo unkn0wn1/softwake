@@ -23,6 +23,7 @@ use softwake_ipc::{
 
 use softwake_soul::SoulDir;
 
+use crate::capture::CaptureKind;
 use crate::runtime::{Outcome, Runtime};
 
 const OUTBOUND_CAPACITY: usize = 32;
@@ -41,6 +42,10 @@ pub(crate) enum ServeError {
     /// The accept thread panicked.
     #[error("serve thread panicked")]
     Panicked,
+
+    /// The selected capture backend could not be opened.
+    #[error(transparent)]
+    Capture(#[from] crate::capture::CaptureError),
 }
 
 /// Bind, print the listening line, and block until the accept thread ends.
@@ -49,12 +54,17 @@ pub(crate) enum ServeError {
 ///
 /// Returns [`ServeError`] when the socket is unavailable or the accept thread
 /// panics. A peer that still holds the socket produces [`SocketError::InUse`].
-pub(crate) fn run(socket: Option<&Path>, soul_dir: SoulDir) -> Result<(), ServeError> {
+pub(crate) fn run(
+    socket: Option<&Path>,
+    soul_dir: SoulDir,
+    capture: CaptureKind,
+) -> Result<(), ServeError> {
     let path = resolve_socket_path(socket)?;
-    let handle = spawn(path.clone(), soul_dir)?;
+    let handle = spawn(path.clone(), soul_dir, capture)?;
     println!("softwaked serve");
     println!("listening: {}", path.display());
     println!("protocol: {PROTOCOL_VERSION}");
+    println!("capture: {}", capture.as_str());
     handle.wait()
 }
 
@@ -63,14 +73,18 @@ pub(crate) fn run(socket: Option<&Path>, soul_dir: SoulDir) -> Result<(), ServeE
 /// # Errors
 ///
 /// Returns [`ServeError`] when the socket cannot be bound.
-pub(crate) fn spawn(path: PathBuf, soul_dir: SoulDir) -> Result<ServeHandle, ServeError> {
+pub(crate) fn spawn(
+    path: PathBuf,
+    soul_dir: SoulDir,
+    capture: CaptureKind,
+) -> Result<ServeHandle, ServeError> {
     let listener = Listener::bind(&path)?;
     if listener.replaced_stale() {
         eprintln!("softwaked: removed stale socket {}", path.display());
     }
     let shutdown = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&shutdown);
-    let shared = Arc::new(Shared::new(soul_dir));
+    let shared = Arc::new(Shared::new(soul_dir, capture)?);
     #[cfg(test)]
     let shared_for_handle = Arc::clone(&shared);
     let join = thread::Builder::new()
@@ -221,13 +235,13 @@ enum Outbound {
 }
 
 impl Shared {
-    fn new(soul_dir: SoulDir) -> Self {
-        Self {
-            runtime: Mutex::new(Runtime::new(soul_dir)),
+    fn new(soul_dir: SoulDir, capture: CaptureKind) -> Result<Self, crate::capture::CaptureError> {
+        Ok(Self {
+            runtime: Mutex::new(Runtime::with_capture(soul_dir, capture)?),
             subscribers: Mutex::new(Vec::new()),
             clients: Mutex::new(Vec::new()),
             next_subscriber: AtomicU64::new(1),
-        }
+        })
     }
 
     fn spawn_client(self: &Arc<Self>, stream: UnixStream) {
