@@ -131,7 +131,8 @@ button:hover {
 button:focus-visible,
 select:focus-visible,
 input:focus-visible,
-textarea:focus-visible {
+textarea:focus-visible,
+a.oauth-open:focus-visible {
   outline: 2px solid var(--cyan);
   outline-offset: 2px;
 }
@@ -234,8 +235,36 @@ textarea {
   background: oklch(0.78 0.13 200 / 0.12);
 }
 
-#oauth-code {
+#oauth-code,
+#oauth-link,
+#oauth-url-text {
   overflow-wrap: anywhere;
+}
+
+#oauth-link {
+  color: var(--cyan);
+}
+
+a.oauth-open {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: oklch(1 0 0 / 0.04);
+  color: var(--text);
+  font: inherit;
+  padding: 12px 14px;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+a.oauth-open:not(.hidden) {
+  display: inline-block;
+  margin-inline-start: 10px;
+}
+
+a.oauth-open:hover {
+  background: oklch(1 0 0 / 0.08);
 }
 
 .row {

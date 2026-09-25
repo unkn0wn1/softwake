@@ -23,6 +23,10 @@ const saveKeyBtn = document.querySelector("#save-key");
 const clearKeyBtn = document.querySelector("#clear-key");
 const oauthStatus = document.querySelector("#oauth-status");
 const oauthCode = document.querySelector("#oauth-code");
+const oauthLink = document.querySelector("#oauth-link");
+const oauthUrlText = document.querySelector("#oauth-url-text");
+const oauthOpen = document.querySelector("#oauth-open");
+const oauthBrowserNote = document.querySelector("#oauth-browser-note");
 const oauthStartBtn = document.querySelector("#oauth-start");
 const oauthPollBtn = document.querySelector("#oauth-poll");
 const oauthSignOutBtn = document.querySelector("#oauth-sign-out");
@@ -202,24 +206,40 @@ function renderProviders(snap) {
 
   if (isOauth) {
     if (snap.oauth_pending) {
+      const pending = snap.oauth_pending;
       oauthStatus.textContent = "Sign-in in progress.";
-      oauthCode.textContent =
-        "Code " + snap.oauth_pending.user_code + " — open " + snap.oauth_pending.verification_url;
+      oauthCode.textContent = "Code " + pending.user_code;
+      if (pending.link_openable) {
+        oauthLink.setAttribute("href", pending.verification_url);
+        oauthLink.textContent = pending.verification_url;
+        oauthUrlText.textContent = "";
+        oauthOpen.setAttribute("href", pending.verification_url);
+        oauthOpen.textContent = "Open link";
+        oauthOpen.classList.remove("hidden");
+      } else {
+        oauthLink.removeAttribute("href");
+        oauthLink.textContent = "";
+        oauthOpen.removeAttribute("href");
+        oauthUrlText.textContent = pending.verification_url;
+        oauthOpen.classList.add("hidden");
+      }
+      oauthBrowserNote.textContent = pending.browser_note || "";
       oauthPollBtn.disabled = false;
-      scheduleOauthPoll(snap.oauth_pending.interval_sec);
+      scheduleOauthPoll(pending.interval_sec);
     } else if (snap.has_xai_oauth) {
       clearOauthPoll();
       oauthStatus.textContent = "Signed in.";
-      oauthCode.textContent = "";
+      clearOauthLink(snap);
       oauthPollBtn.disabled = true;
     } else {
       clearOauthPoll();
       oauthStatus.textContent = "Not signed in.";
-      oauthCode.textContent = "";
+      clearOauthLink(snap);
       oauthPollBtn.disabled = true;
     }
   } else {
     clearOauthPoll();
+    clearOauthLink(snap);
     apiKeyInput.value = "";
     const needsBase = row && row.credential === "openai-compatible-key";
     baseUrlField.classList.toggle("hidden", !needsBase);
@@ -269,6 +289,19 @@ function renderProviders(snap) {
     modelSelect.disabled = false;
     modelSelect.value = models.includes(snap.selected_model) ? snap.selected_model : models[0];
   }
+}
+
+function clearOauthLink(snap) {
+  if (!snap || !snap.oauth_pending) {
+    oauthCode.textContent = "";
+  }
+  oauthLink.removeAttribute("href");
+  oauthLink.textContent = "";
+  oauthUrlText.textContent = "";
+  oauthOpen.removeAttribute("href");
+  oauthOpen.textContent = "";
+  oauthOpen.classList.add("hidden");
+  oauthBrowserNote.textContent = "";
 }
 
 function clearOauthPoll() {

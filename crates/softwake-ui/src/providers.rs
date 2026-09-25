@@ -19,6 +19,11 @@ use softwake_providers::{
 use softwake_providers::MockTransport;
 #[cfg(feature = "live-http")]
 use softwake_providers::live::LiveTransport;
+#[cfg(feature = "live-http")]
+use tauri_plugin_opener::OpenerExt;
+
+#[cfg(feature = "live-http")]
+use crate::oauth_open::{BROWSER_NOTE, openable_verification_url};
 
 /// Public device-code fields while sign-in is in progress.
 #[derive(Debug, Clone, Serialize)]
@@ -31,6 +36,10 @@ pub struct OAuthPendingView {
     pub interval_sec: u64,
     /// Expiry as unix milliseconds.
     pub expires_at_ms: u64,
+    /// Empty when the browser was asked to open. Otherwise a fixed note.
+    pub browser_note: String,
+    /// True only when the verification URL is safe to open or link.
+    pub link_openable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -264,9 +273,14 @@ pub fn provider_clear_cred(provider_id: String) -> Result<ProviderSnapshot, Stri
 
 /// Start xAI device-code sign-in.
 #[tauri::command]
-pub fn provider_oauth_start() -> Result<ProviderSnapshot, String> {
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri injects AppHandle by value"
+)]
+pub fn provider_oauth_start(app: tauri::AppHandle) -> Result<ProviderSnapshot, String> {
     #[cfg(not(feature = "live-http"))]
     {
+        let _ = app;
         let _ = MockTransport::new();
         return Err(
             "live HTTP is disabled in this build; rebuild softwake-ui with the live-http feature"
@@ -277,11 +291,28 @@ pub fn provider_oauth_start() -> Result<ProviderSnapshot, String> {
     {
         let transport = LiveTransport::new();
         let start = start_device_code(&transport, now_ms()).map_err(|e| e.to_string())?;
+        let link_openable = openable_verification_url(&start.verification_url);
+        let browser_note = if link_openable {
+            match app
+                .opener()
+                .open_url(start.verification_url.clone(), None::<&str>)
+            {
+                Ok(()) => String::new(),
+                Err(err) => {
+                    eprintln!("softwake-ui: could not open verification URL: {err}");
+                    BROWSER_NOTE.to_owned()
+                }
+            }
+        } else {
+            BROWSER_NOTE.to_owned()
+        };
         let view = OAuthPendingView {
             user_code: start.user_code,
             verification_url: start.verification_url,
             interval_sec: start.interval_sec,
             expires_at_ms: start.expires_at_ms,
+            browser_note,
+            link_openable,
         };
         *PENDING_OAUTH
             .lock()
