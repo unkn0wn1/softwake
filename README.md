@@ -330,3 +330,4 @@ On Linux the window links WebKitGTK. The packages used in CI are `libwebkit2gtk-
 | [docs/ADR-0011-context-pack.md](docs/ADR-0011-context-pack.md) | Context pack and confirm-echo foundation |
 | [docs/ADR-0012-model-providers.md](docs/ADR-0012-model-providers.md) | Provider Settings: xAI sign-in, API keys, Test, model picker |
 | [docs/ADR-0013-session-provider.md](docs/ADR-0013-session-provider.md) | Awake session chat to the selected provider |
+| [docs/ADR-0014-skills-hub.md](docs/ADR-0014-skills-hub.md) | Skills hub, refine loop, and webhook wake (direction) |
