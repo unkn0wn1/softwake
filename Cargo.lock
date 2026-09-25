@@ -2760,6 +2760,7 @@ dependencies = [
  "softwake-audio",
  "softwake-connectors",
  "softwake-ipc",
+ "softwake-policy",
  "softwake-session",
  "softwake-soul",
  "softwake-state",
@@ -2783,6 +2784,14 @@ name = "softwake-memory"
 version = "0.1.0"
 dependencies = [
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "softwake-policy"
+version = "0.1.0"
+dependencies = [
+ "softwake-connectors",
+ "softwake-tools",
 ]
 
 [[package]]

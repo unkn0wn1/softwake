@@ -60,6 +60,7 @@ Phase 1 shipped `echo` only ([ADR 0004](ADR-0004-first-safe-tool.md)). Phase 2 r
 - State transitions covered by tests
 - No widen of tool allowlist without docs update
 - A connector action is a separate registry from tools. A network client or a new tool name needs an ADR
+- A policy override may tighten a known row and must not loosen one. A new tool or connector action still needs an ADR and a registry row
 - Docs updated when behaviour changes (especially voice states)
 
 ## Explicit non-gates (phase 1)

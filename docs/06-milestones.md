@@ -36,9 +36,9 @@
 2. [ ] Long-term memory
    - [x] Decision ([ADR 0009](ADR-0009-long-term-memory.md)): thin local store behind a `Memory` trait in `softwake-memory`. `MockMemory` is in-process and off until enabled. Honcho is not the default and is not a dependency.
    - [ ] Productized durable store
-3. [ ] Stricter policy engine
+3. [x] Stricter policy engine
    - [x] Connector actions are confirm or deny; unknown pairs fail closed ([ADR 0008](ADR-0008-connector-boundary.md)).
-   - [ ] Policy beyond the connector registry
+   - [x] Policy beyond the connector registry ([ADR 0010](ADR-0010-policy-engine.md)): `softwake-policy` evaluates tool names and connector pairs. Unknown subjects are denied. Overrides may only tighten. The daemon classifies through that engine. No live cloud client.
 
 ## Deferred ideas (do not pull into phase 1)
 

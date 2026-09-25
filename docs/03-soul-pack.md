@@ -16,7 +16,7 @@ Both are required for a valid pack. Missing files → daemon refuses to enter **
 | Piece | Role |
 |-------|------|
 | Long-term memory | Separate crate `softwake-memory` ([ADR 0009](ADR-0009-long-term-memory.md)). Thin local store behind a trait. Off until the operator enables a backend. Honcho is not the default |
-| `tools.md` or policy TOML | Human-readable tool policy mirroring allowlists |
+| `tools.md` or policy TOML | Human-readable tool policy mirroring allowlists. A later file may only raise a known row's risk, or be refused ([ADR 0010](ADR-0010-policy-engine.md)) |
 | `AGENTS.md`-style lane rules | Optional; keep out of phase 1 unless needed |
 
 The runtime policy stub names `echo` (safe), `notify` (confirm), `email_send` (confirm), and `shell` (deny). `email_send` runs only after `confirm_tool` ([ADR 0008](ADR-0008-connector-boundary.md)).
