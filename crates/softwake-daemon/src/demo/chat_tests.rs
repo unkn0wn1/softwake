@@ -553,3 +553,76 @@ fn low_context_limit_compacts_before_ask() {
         "expected summary in {contents:?}"
     );
 }
+
+#[test]
+fn slash_clear_empties_session_without_provider_post() {
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    install(
+        &mut demo,
+        xai_handle(
+            "grok-4.5",
+            &["grok-4.5"],
+            Some(true),
+            Some("sk-test-secret"),
+        ),
+        pong_body(),
+    );
+    wake(&mut demo);
+    let asked = demo.handle_line("ask remember the blue folder", Duration::ZERO);
+    assert!(
+        asked.lines.iter().any(|l| l.starts_with("assistant:")),
+        "{asked:?}"
+    );
+    assert!(!demo.session_turns().is_empty());
+    let posts_before = demo.chat_posts().len();
+    let cleared = demo.handle_line("ask /clear", Duration::ZERO);
+    assert!(
+        cleared
+            .lines
+            .iter()
+            .any(|l| l.contains("Context cleared") && l.contains("auto-compact at")),
+        "{cleared:?}"
+    );
+    assert!(demo.session_turns().is_empty());
+    assert_eq!(demo.chat_posts().len(), posts_before);
+}
+
+#[test]
+fn slash_halve_reduces_session_without_provider_post() {
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    install(
+        &mut demo,
+        xai_handle(
+            "grok-4.5",
+            &["grok-4.5"],
+            Some(true),
+            Some("sk-test-secret"),
+        ),
+        pong_body(),
+    );
+    wake(&mut demo);
+    for i in 0..4 {
+        let line = format!("ask turn-{i}-aaaaaaaaaaaaaaaa");
+        let result = demo.handle_line(&line, Duration::ZERO);
+        assert!(
+            result.lines.iter().any(|l| l.starts_with("assistant:")),
+            "{result:?}"
+        );
+    }
+    let before = demo.session_turns().len();
+    assert!(before >= 4, "expected several user turns, got {before}");
+    let posts_before = demo.chat_posts().len();
+    let halved = demo.handle_line("ask /halve", Duration::ZERO);
+    assert!(
+        halved.lines.iter().any(|l| l.contains("Context halved")),
+        "{halved:?}"
+    );
+    let after = demo.session_turns().len();
+    assert!(after < before, "expected fewer turns: {after} vs {before}");
+    assert_eq!(demo.chat_posts().len(), posts_before);
+}
+
+#[test]
+fn default_compact_threshold_is_eighty() {
+    assert_eq!(softwake_providers::DEFAULT_COMPACT_AT_PERCENT, 80);
+}

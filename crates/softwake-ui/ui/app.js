@@ -161,7 +161,11 @@ function show(status, keepError) {
       const pct = status.context_limit
         ? Math.min(100, Math.round((100 * status.context_used) / status.context_limit))
         : 0;
-      let line = `context ~${status.context_used} / ${status.context_limit} (${pct}%)`;
+      const threshold =
+        status.context_compact_at != null && status.context_compact_at > 0
+          ? status.context_compact_at
+          : 80;
+      let line = `context ~${status.context_used} / ${status.context_limit} (${pct}%) · auto-compact at ${threshold}%`;
       if (status.context_compacted) line += " — compacted";
       contextLineEl.textContent = line;
     } else {
@@ -258,7 +262,7 @@ function renderProviders(snap) {
         : "";
   }
   if (compactAtInput) {
-    compactAtInput.value = String(snap.compact_at_percent || 70);
+    compactAtInput.value = String(snap.compact_at_percent || 80);
   }
   plaintextWarning.textContent = snap.storage_message || "";
   const showPlaintextOptIn = snap.storage_backend === "unavailable";
@@ -497,7 +501,7 @@ if (saveContextBtn) {
   saveContextBtn.addEventListener("click", () => {
     const rawLimit = (contextLimitInput && contextLimitInput.value.trim()) || "0";
     const tokens = Math.max(0, Number.parseInt(rawLimit, 10) || 0);
-    const rawPct = (compactAtInput && compactAtInput.value.trim()) || "70";
+    const rawPct = (compactAtInput && compactAtInput.value.trim()) || "80";
     let percent = Number.parseInt(rawPct, 10);
     if (!Number.isFinite(percent) || percent < 1) percent = 70;
     if (percent > 100) percent = 100;

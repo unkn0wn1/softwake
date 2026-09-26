@@ -42,6 +42,13 @@
             <button type="button" id="hud-allow-no">Not now</button>
           </div>
         </div>
+        <div id="context-meter" class="context-meter" hidden>
+          <div class="context-meter-track" aria-hidden="true">
+            <div id="context-meter-fill" class="context-meter-fill"></div>
+            <div id="context-meter-mark" class="context-meter-mark" title="Auto-compact threshold"></div>
+          </div>
+          <p id="context-meter-label" class="context-meter-label"></p>
+        </div>
         <form id="ask-form" autocomplete="off">
           <button type="button" id="talk" aria-label="Hold to talk" aria-pressed="false">
             <svg class="mic-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
@@ -55,7 +62,7 @@
             id="ask-input"
             type="text"
             maxlength="2000"
-            placeholder="Ask Softwake…"
+            placeholder="Ask…  /clear /halve /compact"
             aria-label="Ask Softwake"
           />
           <button type="submit" id="ask-send">Send</button>

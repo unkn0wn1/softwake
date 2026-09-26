@@ -209,6 +209,52 @@ impl TextStubSession {
         self.messages.extend(tail);
     }
 
+    /// Drop all turns while keeping the session open and the system pack.
+    ///
+    /// No-op when closed. Does not touch [`Self::instructions`].
+    pub fn clear_messages(&mut self) {
+        if self.phase != SessionPhase::Open {
+            return;
+        }
+        self.messages.clear();
+    }
+
+    /// Drop older turns until roughly half the message character mass remains.
+    ///
+    /// Keeps the newest suffix. No-op when closed, empty, or a single message.
+    /// Character count (Unicode scalars) matches the char/4 token estimator spirit
+    /// without importing the providers crate.
+    pub fn keep_newest_half(&mut self) {
+        if self.phase != SessionPhase::Open {
+            return;
+        }
+        let len = self.messages.len();
+        if len <= 1 {
+            return;
+        }
+        let total: usize = self
+            .messages
+            .iter()
+            .map(|message| message.content.chars().count())
+            .sum();
+        if total == 0 {
+            self.messages.clear();
+            return;
+        }
+        // Keep at least ~half the character mass from the newest end.
+        let target = total.div_ceil(2);
+        let mut kept = 0usize;
+        let mut keep_from = len;
+        while keep_from > 0 && kept < target {
+            keep_from -= 1;
+            kept = kept.saturating_add(self.messages[keep_from].content.chars().count());
+        }
+        if keep_from == 0 {
+            return;
+        }
+        self.messages.drain(0..keep_from);
+    }
+
     /// Record `user_text`, call `complete(system, messages)`, then store the assistant reply.
     ///
     /// `memory_appendix` is appended after the stored pack when non-empty.
@@ -468,5 +514,43 @@ mod tests {
         assert_eq!(session.messages()[2].content, "a5");
         assert_eq!(session.messages()[3].content, "u6");
         assert_eq!(session.messages()[4].content, "a6");
+    }
+
+    #[test]
+    fn clear_messages_keeps_session_open_and_instructions() {
+        let mut session = TextStubSession::open("be brief");
+        session
+            .ask("hello", "", |_, _| Ok("pong".to_owned()))
+            .expect("ask");
+        assert!(!session.messages().is_empty());
+        session.clear_messages();
+        assert!(session.messages().is_empty());
+        assert_eq!(session.phase(), SessionPhase::Open);
+        assert_eq!(session.instructions(), Some("be brief"));
+    }
+
+    #[test]
+    fn keep_newest_half_drops_older_prefix() {
+        let mut session = TextStubSession::open("be brief");
+        for i in 1..=4 {
+            // Long-ish lines so char mass is easy to reason about.
+            session
+                .ask(&format!("user-turn-{i}-aaaaaaaa"), "", |_, _| {
+                    Ok(format!("asst-turn-{i}-bbbbbbbb"))
+                })
+                .expect("ask");
+        }
+        let before = session.messages().len();
+        assert_eq!(before, 8);
+        session.keep_newest_half();
+        let after = session.messages().len();
+        assert!(
+            after < before,
+            "expected fewer messages: {after} vs {before}"
+        );
+        assert!(!session.messages().is_empty());
+        // Newest pair should remain.
+        let last = session.messages().last().expect("tail");
+        assert_eq!(last.content, "asst-turn-4-bbbbbbbb");
     }
 }

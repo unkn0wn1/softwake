@@ -82,6 +82,8 @@ pub(crate) struct Runtime {
     last_context_limit: Option<u32>,
     /// Whether the last ask compacted.
     last_context_compacted: bool,
+    /// Last resolved compact-at percent (Status while awake).
+    last_context_compact_at: Option<u8>,
     /// KWS / voice test mode. Default off. Phrases still transition; mic speech is not asked.
     voice_test: bool,
     /// State-announcement prompts recorded in tests. Production speaks them off-thread.
@@ -173,6 +175,7 @@ impl Runtime {
             last_context_used: None,
             last_context_limit: None,
             last_context_compacted: false,
+            last_context_compact_at: None,
             voice_test: false,
             #[cfg(test)]
             announced_prompts: Vec::new(),
@@ -213,6 +216,7 @@ impl Runtime {
         let mut pcm_events = self.drain_pcm();
         match command {
             Command::GetStatus => {
+                self.refresh_context_meter();
                 let mut outcome = Self::quiet(self.snapshot(
                     self.last_status_message.clone(),
                     self.last_status_detail.clone(),
@@ -330,6 +334,9 @@ impl Runtime {
         }
         if self.session.phase() != SessionPhase::Open {
             return Self::chat_rejected("session is closed");
+        }
+        if let Some(outcome) = self.try_context_command(text) {
+            return outcome;
         }
         if let Some(outcome) = self.try_shell_ask(text) {
             return outcome;
@@ -509,6 +516,136 @@ impl Runtime {
             return;
         }
         let _ = self.arm_mode(crate::mode_confirm::ConfirmKind::FuzzyWake);
+    }
+
+    /// Slash / clear-typed context commands (`/clear`, `/compact`, `/halve`).
+    fn try_context_command(&mut self, text: &str) -> Option<Outcome> {
+        let command = crate::chat::parse_context_command(text)?;
+        Some(self.run_context_command(command))
+    }
+
+    fn run_context_command(&mut self, command: crate::chat::ContextCommand) -> Outcome {
+        let Some(instructions) = self.session.instructions().map(str::to_owned) else {
+            return Self::chat_rejected("session is closed");
+        };
+        let tools_settings = self.hands.tools_settings();
+        let appendix = crate::chat::system_appendix("", &tools_settings);
+        let system = softwake_session::assemble_system(&instructions, &appendix);
+        let budget = self.resolve_context_budget();
+        let context = {
+            #[cfg(test)]
+            {
+                if let Some(fixture) = self.chat_fixture.as_ref() {
+                    let prepared = crate::chat::prepare_fixture(fixture);
+                    let transport = std::sync::Arc::clone(&fixture.transport);
+                    let context = match prepared {
+                        Ok((prepared, bearer)) => {
+                            let call = prepared.clone();
+                            let bearer_c = bearer.clone();
+                            crate::chat::apply_context_command(
+                                &mut self.session,
+                                command,
+                                &system,
+                                budget,
+                                move |older| {
+                                    crate::chat::compact_fixture(
+                                        &transport, &call, &bearer_c, older,
+                                    )
+                                },
+                            )
+                        }
+                        Err(_) => crate::chat::apply_context_command(
+                            &mut self.session,
+                            command,
+                            &system,
+                            budget,
+                            |_| Err("no fixture compact".to_owned()),
+                        ),
+                    };
+                    return self.finish_context_command(command, context);
+                }
+            }
+            match crate::chat::load_disk_chat() {
+                Ok(disk) => {
+                    let call = disk.prepared.clone();
+                    let bearer = disk.bearer.clone();
+                    crate::chat::apply_context_command(
+                        &mut self.session,
+                        command,
+                        &system,
+                        disk.budget,
+                        move |older| crate::chat::finish_prepared_compact(&call, &bearer, older),
+                    )
+                }
+                Err(_) => crate::chat::apply_context_command(
+                    &mut self.session,
+                    command,
+                    &system,
+                    budget,
+                    |_| Err("compact unavailable".to_owned()),
+                ),
+            }
+        };
+        self.finish_context_command(command, context)
+    }
+
+    fn finish_context_command(
+        &mut self,
+        command: crate::chat::ContextCommand,
+        context: crate::chat::AskContext,
+    ) -> Outcome {
+        self.last_context_used = Some(context.used);
+        self.last_context_limit = Some(context.limit);
+        self.last_context_compacted = context.compacted;
+        self.last_context_compact_at = Some(context.threshold_percent);
+        let reply = crate::chat::format_context_command_reply(command, &context);
+        let detail = Some(format!(
+            "context ~{} / {} ({}%); auto-compact at {}%",
+            context.used, context.limit, context.percent, context.threshold_percent
+        ));
+        self.retain_status_text(Some(reply.clone()), detail.clone());
+        // No TTS — operator typed a meter command, not a chat turn.
+        Self::quiet(self.snapshot(Some(reply), detail))
+    }
+
+    /// Resolve Settings + model context budget (fixture in tests, disk otherwise).
+    fn resolve_context_budget(&self) -> crate::chat::ContextBudget {
+        #[cfg(test)]
+        if let Some(fixture) = self.chat_fixture.as_ref() {
+            return crate::chat::budget_for_handle(&fixture.handle);
+        }
+        match crate::chat::load_disk_chat() {
+            Ok(disk) => disk.budget,
+            Err(_) => crate::chat::ContextBudget {
+                limit: self
+                    .last_context_limit
+                    .unwrap_or(softwake_providers::DEFAULT_CONTEXT_LIMIT_TOKENS),
+                compact_at_percent: self
+                    .last_context_compact_at
+                    .unwrap_or(softwake_providers::DEFAULT_COMPACT_AT_PERCENT),
+                keep_recent: softwake_providers::resolve_keep_recent_turns(0),
+            },
+        }
+    }
+
+    /// Keep Status context fields fresh while awake (HUD meter between asks).
+    fn refresh_context_meter(&mut self) {
+        if self.session.phase() != SessionPhase::Open {
+            return;
+        }
+        if self.last_context_limit.is_none() || self.last_context_compact_at.is_none() {
+            let budget = self.resolve_context_budget();
+            self.last_context_limit = Some(budget.limit);
+            self.last_context_compact_at = Some(budget.compact_at_percent);
+        }
+        let Some(instructions) = self.session.instructions() else {
+            return;
+        };
+        let tools_settings = self.hands.tools_settings();
+        let appendix = crate::chat::system_appendix("", &tools_settings);
+        let system = softwake_session::assemble_system(instructions, &appendix);
+        let used = crate::chat::estimate_session_usage(&system, self.session.messages());
+        self.last_context_used = Some(used);
     }
 
     /// When shell is not deny, turn clear shell/ssh ask lines into a tool call.
@@ -751,6 +888,7 @@ impl Runtime {
         self.last_context_used = Some(context.used);
         self.last_context_limit = Some(context.limit);
         self.last_context_compacted = context.compacted;
+        self.last_context_compact_at = Some(context.threshold_percent);
         self.speak_if_configured(&reply);
         let mut detail = self.last_speech_note.clone();
         if context.compacted {
@@ -1573,6 +1711,7 @@ impl Runtime {
                     self.last_context_used = None;
                     self.last_context_limit = None;
                     self.last_context_compacted = false;
+                    self.last_context_compact_at = None;
                     self.talk.clear();
                     self.auto_utt.reset();
                     self.pending_auto_pcm = None;
@@ -1634,6 +1773,9 @@ impl Runtime {
                 .filter(|_| self.session.phase() == softwake_session::SessionPhase::Open),
             context_compacted: self.last_context_compacted
                 && self.session.phase() == softwake_session::SessionPhase::Open,
+            context_compact_at: self
+                .last_context_compact_at
+                .filter(|_| self.session.phase() == softwake_session::SessionPhase::Open),
             voice_test: self.voice_test,
         }
     }
@@ -3453,6 +3595,43 @@ mod tests {
         assert!(runtime.chat_posts().is_empty());
         assert!(runtime.session_turns().is_empty());
         assert!(!format!("{outcome:?}").contains("sk-test-secret"));
+    }
+
+    #[test]
+    fn slash_clear_updates_status_context_meter() {
+        let soul = TestSoulDir::valid();
+        let mut runtime = Runtime::new(soul.soul_dir());
+        wake(&mut runtime);
+        runtime.install_chat_fixture(crate::chat::xai_key_fixture(
+            true,
+            Some("sk-test-secret"),
+            "pong",
+        ));
+        let asked = runtime.ask("remember the blue folder please");
+        assert!(asked.body.status().is_some());
+        assert!(!runtime.session_turns().is_empty());
+        let posts_before = runtime.chat_posts().len();
+        let cleared = runtime.ask("/clear");
+        let status = cleared.body.status().expect("status");
+        assert_eq!(status.state, VoiceState::Awake);
+        assert!(
+            status
+                .message
+                .as_deref()
+                .unwrap_or("")
+                .contains("Context cleared"),
+            "{status:?}"
+        );
+        assert!(status.context_used.is_some());
+        assert!(status.context_limit.is_some());
+        assert_eq!(status.context_compact_at, Some(80));
+        assert!(runtime.session_turns().is_empty());
+        assert_eq!(runtime.chat_posts().len(), posts_before);
+        // GetStatus keeps the meter while awake.
+        let polled = runtime.handle(Command::GetStatus);
+        let polled_status = polled.body.status().expect("status");
+        assert!(polled_status.context_used.is_some());
+        assert_eq!(polled_status.context_compact_at, Some(80));
     }
 
     #[test]

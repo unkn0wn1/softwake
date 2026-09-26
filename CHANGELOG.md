@@ -4,6 +4,8 @@
 
 ### Added
 
+- Expanded HUD **context fullness meter** (used / limit / % + auto-compact threshold) while awake. Slash commands `/clear`, `/halve` (or `/reduce`), `/compact` (and clear-typed `clear context` / `halve context` / `compact context`) manage the model session without a chat completion. Default auto-compact threshold is **80%** (was 70); Settings overrides unchanged. Auto-compact still runs before ask when over threshold. HUD display history is not seeded into the model on wake. See [ADR 0027](docs/ADR-0027-context-meter-slash.md).
+
 - Per-profile HUD chat history (`profiles/<id>/hud-chat.json`, display only) with optional softwake-ui passphrase unlock (Argon2id + ChaCha20-Poly1305) and OS keyring wrap (`softwake` / `ui-data-key`). See [ADR 0026](docs/ADR-0026-hud-chat-unlock.md).
 - Chat API tool-calling: non-deny Tools Settings tools are advertised on
   `/chat/completions`; the daemon runs a capped tool loop through Hands so

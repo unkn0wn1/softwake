@@ -26,6 +26,10 @@ const vaultError = document.querySelector("#vault-error");
 const vaultUnlockBtn = document.querySelector("#vault-unlock");
 const vaultSetBtn = document.querySelector("#vault-set");
 const vaultSkipBtn = document.querySelector("#vault-skip");
+const contextMeter = document.querySelector("#context-meter");
+const contextMeterFill = document.querySelector("#context-meter-fill");
+const contextMeterMark = document.querySelector("#context-meter-mark");
+const contextMeterLabel = document.querySelector("#context-meter-label");
 
 const IDLE_MIN_MS = 1000;
 const IDLE_MAX_MS = 30000;
@@ -796,6 +800,40 @@ async function acceptAlwaysAllow() {
   }
 }
 
+function applyContextMeter(snap) {
+  if (!contextMeter || !contextMeterFill || !contextMeterLabel) {
+    return;
+  }
+  const awake = (snap && snap.state) === "awake";
+  const used = snap && snap.context_used != null ? Number(snap.context_used) : null;
+  const limit = snap && snap.context_limit != null ? Number(snap.context_limit) : null;
+  if (!awake || used == null || limit == null || !(limit > 0)) {
+    contextMeter.hidden = true;
+    contextMeterLabel.textContent = "";
+    contextMeterFill.style.width = "0%";
+    contextMeterFill.classList.remove("warn", "hot");
+    return;
+  }
+  const pct = Math.min(100, Math.round((100 * used) / limit));
+  const threshold =
+    snap.context_compact_at != null && Number(snap.context_compact_at) > 0
+      ? Math.min(100, Number(snap.context_compact_at))
+      : 80;
+  contextMeter.hidden = false;
+  contextMeterFill.style.width = pct + "%";
+  contextMeterFill.classList.toggle("warn", pct >= threshold - 10 && pct < threshold);
+  contextMeterFill.classList.toggle("hot", pct >= threshold);
+  if (contextMeterMark) {
+    contextMeterMark.style.left = threshold + "%";
+    contextMeterMark.title = "Auto-compact at " + threshold + "%";
+  }
+  let line = "context ~" + used + " / " + limit + " (" + pct + "%) · auto @" + threshold + "%";
+  if (snap.context_compacted) {
+    line += " · compacted";
+  }
+  contextMeterLabel.textContent = line;
+}
+
 async function refresh() {
   if (refreshInFlight) {
     return;
@@ -812,11 +850,13 @@ async function refresh() {
     lastStatusMessage = message;
     considerStatus(message, detail);
     applyPending(snap && snap.pending_tool);
+    applyContextMeter(snap);
   } catch (_error) {
     state = "sleep";
     captureRunning = false;
     level = 0.02;
     autoListening = false;
+    applyContextMeter({ state: "sleep" });
   } finally {
     refreshInFlight = false;
   }
@@ -1092,6 +1132,13 @@ form.addEventListener("submit", (event) => {
   invoke("hud_ask", { text: asked })
     .then((status) => {
       applyPending(status && status.pending_tool);
+      applyContextMeter({
+        state: (status && status.state) || state,
+        context_used: status && status.context_used,
+        context_limit: status && status.context_limit,
+        context_compact_at: status && status.context_compact_at,
+        context_compacted: !!(status && status.context_compacted),
+      });
       const message = (status && (status.message || status.detail)) || "(no reply text)";
       const detail = (status && status.detail) || "";
       lastReplyKey = message + "\0" + detail;

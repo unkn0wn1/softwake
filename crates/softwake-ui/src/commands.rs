@@ -180,6 +180,17 @@ pub struct HudSnapshot {
     /// Confirm-gated tool waiting for Approve or Deny. Omitted when nothing is waiting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_tool: Option<softwake_ipc::PendingTool>,
+    /// Estimated awake context tokens (char/4). Omitted when asleep / unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_used: Option<u32>,
+    /// Resolved context window limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_limit: Option<u32>,
+    /// Auto-compact threshold percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_compact_at: Option<u8>,
+    /// True when the latest ask compacted older turns.
+    pub context_compacted: bool,
 }
 
 /// Status plus a listening level for the HUD capsule.
@@ -208,6 +219,10 @@ pub async fn hud_snapshot() -> Result<HudSnapshot, String> {
             talking: status.talking,
             auto_listening: status.auto_listening,
             pending_tool: status.pending_tool,
+            context_used: status.context_used,
+            context_limit: status.context_limit,
+            context_compact_at: status.context_compact_at,
+            context_compacted: status.context_compacted,
         })
     })
     .await

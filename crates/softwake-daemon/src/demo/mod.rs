@@ -440,11 +440,102 @@ impl Demo {
         if self.session.phase() != SessionPhase::Open {
             return self.chat_rejected("session is closed", None);
         }
+        if let Some(lines) = self.try_context_command(text) {
+            return lines;
+        }
         #[cfg(test)]
         if self.chat_fixture.is_some() {
             return self.ask_fixture(text);
         }
         self.ask_disk(text)
+    }
+
+    /// `/clear`, `/compact`, `/halve` (and clear-typed forms) while awake.
+    fn try_context_command(&mut self, text: &str) -> Option<Vec<String>> {
+        let command = crate::chat::parse_context_command(text)?;
+        let Some(instructions) = self.session.instructions().map(str::to_owned) else {
+            return Some(self.chat_rejected("session is closed", None));
+        };
+        let tools_settings = self.hands.tools_settings();
+        let appendix = crate::chat::system_appendix("", &tools_settings);
+        let system = softwake_session::assemble_system(&instructions, &appendix);
+        let budget = self.context_budget_for_command();
+        let context = self.apply_context_command_with_budget(command, &system, budget);
+        let reply = crate::chat::format_context_command_reply(command, &context);
+        let mut lines = vec![format!("assistant: {reply}")];
+        if self.verbose {
+            lines.insert(
+                0,
+                format!(
+                    "verbose: context command {:?} used={} limit={} compact_at={}%",
+                    command, context.used, context.limit, context.threshold_percent
+                ),
+            );
+        }
+        Some(self.with_status(lines))
+    }
+
+    #[allow(
+        clippy::unused_self,
+        reason = "test builds read the chat fixture from self; release uses disk only"
+    )]
+    fn context_budget_for_command(&self) -> crate::chat::ContextBudget {
+        #[cfg(test)]
+        if let Some(fixture) = self.chat_fixture.as_ref() {
+            return crate::chat::budget_for_handle(&fixture.handle);
+        }
+        match crate::chat::load_disk_chat() {
+            Ok(disk) => disk.budget,
+            Err(_) => crate::chat::ContextBudget {
+                limit: softwake_providers::DEFAULT_CONTEXT_LIMIT_TOKENS,
+                compact_at_percent: softwake_providers::DEFAULT_COMPACT_AT_PERCENT,
+                keep_recent: softwake_providers::resolve_keep_recent_turns(0),
+            },
+        }
+    }
+
+    fn apply_context_command_with_budget(
+        &mut self,
+        command: crate::chat::ContextCommand,
+        system: &str,
+        budget: crate::chat::ContextBudget,
+    ) -> crate::chat::AskContext {
+        #[cfg(test)]
+        if let Some(fixture) = self.chat_fixture.as_ref() {
+            let prepared = crate::chat::prepare_fixture(fixture);
+            let transport = std::sync::Arc::clone(&fixture.transport);
+            if let Ok((prepared, bearer)) = prepared {
+                let call = prepared.clone();
+                let bearer_c = bearer.clone();
+                return crate::chat::apply_context_command(
+                    &mut self.session,
+                    command,
+                    system,
+                    budget,
+                    move |older| crate::chat::compact_fixture(&transport, &call, &bearer_c, older),
+                );
+            }
+        }
+        match crate::chat::load_disk_chat() {
+            Ok(disk) => {
+                let call = disk.prepared.clone();
+                let bearer = disk.bearer.clone();
+                crate::chat::apply_context_command(
+                    &mut self.session,
+                    command,
+                    system,
+                    disk.budget,
+                    move |older| crate::chat::finish_prepared_compact(&call, &bearer, older),
+                )
+            }
+            Err(_) => crate::chat::apply_context_command(
+                &mut self.session,
+                command,
+                system,
+                budget,
+                |_| Err("compact unavailable".to_owned()),
+            ),
+        }
     }
 
     #[cfg(test)]

@@ -526,6 +526,7 @@ fn publish_thinking(shared: &Shared, detail: &str) {
             context_used: None,
             context_limit: None,
             context_compacted: false,
+            context_compact_at: None,
             voice_test: false,
         });
     }
@@ -575,6 +576,7 @@ fn placeholder_status() -> Status {
         context_used: None,
         context_limit: None,
         context_compacted: false,
+        context_compact_at: None,
         voice_test: false,
     }
 }
