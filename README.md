@@ -237,7 +237,9 @@ The outbox line appears only after `confirm`. `cancel` prints `cancelled 1: emai
 
 A `> ` prompt is printed before each line is read. The same path accepts a pipe (`printf 'wake\nstatus\nquit\n' | cargo run -p softwake-daemon -- demo`). `softwaked --demo` is the same mode.
 
-`softwaked demo --verbose` and `softwaked demo -v` (also `--demo -v`) print extra `verbose:` lines for each command: the raw input, the parsed command, for `wake` / `sleep` the phrase, the detector hit, and whether the transition succeeded or why it was rejected, and for `ask` / `chat` the provider id and model id. The bearer is not printed. `SOFTWAKE_LOG=debug` enables that same detail. `softwaked --help` prints usage.
+`softwaked demo --verbose` and `softwaked demo -v` (also `--demo -v`) print extra `verbose:` lines for each command: the raw input, the parsed command, for `wake` / `sleep` the phrase, the detector hit, and whether the transition succeeded or why it was rejected, and for `ask` / `chat` the provider id and model id. The bearer is not printed. `SOFTWAKE_LOG=debug` enables that same detail.
+
+`softwaked serve -v` (or `softwaked -v serve`) prints KWS **hear/match** lines on stderr when the spotter decodes a keyword: the raw tag, `match=wake|sleep|none`, voice state, mic RMS, and the configured wake/sleep phrase lists. `softwaked serve -vv` (or `SOFTWAKE_LOG=trace`) also prints periodic mic-energy lines while sleeping with weights loaded and no match yet. Startup always logs the active agent, KWS backend, feature flag, weights path, and phrase lists when weights load. `softwaked --help` prints usage.
 
 Type one command per line. `sleep` in the 800 ms after `wake` stays awake. `wake` in the 800 ms after `sleep` or `resume` stays asleep. `hibernate` is a UI command and applies on the next line.
 
@@ -366,10 +368,10 @@ Speak into the default input; the HUD capsule particles should bloom with your v
 ### Voice wake / sleep (KWS)
 
 1. Install weights (once): `./scripts/install-kws-weights.sh` → files under `$XDG_DATA_HOME/softwake/kws` (or `~/.local/share/softwake/kws`).
-2. Build with KWS + mic: `cargo build -p softwake-daemon --features sherpa-kws,pipewire-capture` (and the UI as usual).
-3. Set the active profile **name** in Settings → Profiles (e.g. `Ada`). That name is the primary wake word; `hey Softwake` / `Softwake` remain fallbacks.
-4. Start serve with PipeWire capture; leave Softwake in **sleep**.
-5. Say the profile name (or “hey Softwake”) → awake. Say “go to sleep” or “goodnight &lt;name&gt;” → sleep.
+2. Build with KWS + mic: `cargo build -p softwake-daemon --features live-http,sherpa-kws,pipewire-capture` (and the UI as usual), then install the binary (e.g. `cargo install --path crates/softwake-daemon --features live-http,sherpa-kws,pipewire-capture --force`).
+3. Set the active profile **name** in Settings → Profiles (e.g. `Sally`). Configured wake phrases are `<name>`, `hey <name>`, `hey softwake`, `softwake` — not bare greetings like `hi`.
+4. Start serve with PipeWire capture and optional verbosity: `softwaked serve --capture pipewire -vv`. Leave Softwake in **sleep**.
+5. Say the profile name (or “hey Softwake”) → awake. Look for `softwaked: KWS heard keyword=… match=wake` on stderr. Say “go to sleep” or “goodnight &lt;name&gt;” → sleep.
 6. Free speech / PTT / Eve TTS while awake are unchanged; sleep-phrase KWS still runs so you can dismiss by voice.
 
 Without weights or without `sherpa-kws`, PCM stays on `NullDetector` and CI stays mic-free. See [ADR 0006](docs/ADR-0006-on-device-wake.md). Download is operator-consent only; weights are not vendored.

@@ -63,13 +63,17 @@ pub(crate) fn run(
     socket: Option<&Path>,
     soul_dir: SoulDir,
     capture: CaptureKind,
+    verbosity: u8,
 ) -> Result<(), ServeError> {
     let path = resolve_socket_path(socket)?;
-    let handle = spawn(path.clone(), soul_dir, capture)?;
+    let handle = spawn(path.clone(), soul_dir, capture, verbosity)?;
     println!("softwaked serve");
     println!("listening: {}", path.display());
     println!("protocol: {PROTOCOL_VERSION}");
     println!("capture: {}", capture.as_str());
+    if verbosity > 0 {
+        println!("verbose: {verbosity}");
+    }
     handle.wait()
 }
 
@@ -82,11 +86,12 @@ pub(crate) fn spawn(
     path: PathBuf,
     soul_dir: SoulDir,
     capture: CaptureKind,
+    verbosity: u8,
 ) -> Result<ServeHandle, ServeError> {
     // Build the runtime *before* binding. A sticky Secret Service Unlock (or any
     // other init stall) must not leave a listening socket that queues clients
     // forever with no accept thread.
-    let shared = Arc::new(Shared::new(soul_dir, capture)?);
+    let shared = Arc::new(Shared::new(soul_dir, capture, verbosity)?);
     #[cfg(test)]
     let shared_for_handle = Arc::clone(&shared);
     let listener = Listener::bind(&path)?;
@@ -258,9 +263,15 @@ enum Outbound {
 }
 
 impl Shared {
-    fn new(soul_dir: SoulDir, capture: CaptureKind) -> Result<Self, crate::capture::CaptureError> {
+    fn new(
+        soul_dir: SoulDir,
+        capture: CaptureKind,
+        verbosity: u8,
+    ) -> Result<Self, crate::capture::CaptureError> {
         Ok(Self {
-            runtime: Mutex::new(Runtime::with_capture(soul_dir, capture)?),
+            runtime: Mutex::new(Runtime::with_capture_verbosity(
+                soul_dir, capture, verbosity,
+            )?),
             last_status: Mutex::new(None),
             subscribers: Mutex::new(Vec::new()),
             clients: Mutex::new(Vec::new()),

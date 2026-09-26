@@ -112,17 +112,36 @@ impl SherpaKwsDetector {
 
 impl WakeDetector for SherpaKwsDetector {
     fn push_samples(&mut self, samples: &[i16]) -> PhraseHit {
+        self.push_samples_detailed(samples).hit
+    }
+}
+
+impl SherpaKwsDetector {
+    /// Score samples and return the last decoded keyword (if any) with the hit.
+    ///
+    /// Used by the daemon for `-v` / `-vv` hear logs. Without weights, or on
+    /// silence with no decode, [`SpotDetail::keyword`] stays `None`.
+    #[must_use]
+    pub fn push_samples_detailed(&mut self, samples: &[i16]) -> crate::SpotDetail {
         let Some(engine) = self.engine.as_mut() else {
-            return PhraseHit::None;
+            return crate::SpotDetail {
+                hit: PhraseHit::None,
+                keyword: None,
+            };
         };
         if samples.is_empty() {
-            return PhraseHit::None;
+            return crate::SpotDetail {
+                hit: PhraseHit::None,
+                keyword: None,
+            };
         }
         let float_samples: Vec<f32> = samples
             .iter()
             .map(|sample| f32::from(*sample) / f32::from(i16::MAX))
             .collect();
         engine.stream.accept_waveform(16_000, &float_samples);
+        let mut last_keyword = None;
+        let mut last_hit = PhraseHit::None;
         while engine.spotter.is_ready(&engine.stream) {
             engine.spotter.decode(&engine.stream);
             if let Some(result) = engine.spotter.get_result(&engine.stream) {
@@ -130,13 +149,21 @@ impl WakeDetector for SherpaKwsDetector {
                     let hit =
                         hit_from_keyword(&result.keyword, &self.wake_phrases, &self.sleep_phrases);
                     engine.spotter.reset(&engine.stream);
+                    last_keyword = Some(result.keyword);
+                    last_hit = hit;
                     if hit != PhraseHit::None {
-                        return hit;
+                        return crate::SpotDetail {
+                            hit,
+                            keyword: last_keyword,
+                        };
                     }
                 }
             }
         }
-        PhraseHit::None
+        crate::SpotDetail {
+            hit: last_hit,
+            keyword: last_keyword,
+        }
     }
 }
 
@@ -269,8 +296,11 @@ fn build_keywords_buf(
 ) -> Option<String> {
     let mut lines = Vec::new();
     for phrase in wake_phrases.iter().chain(sleep_phrases.iter()) {
-        let line = encode_keyword_line(pieces, phrase)?;
-        lines.push(line);
+        // Skip phrases the BPE table cannot encode instead of failing the
+        // whole keyword list (one bad name must not idle voice wake).
+        if let Some(line) = encode_keyword_line(pieces, phrase) {
+            lines.push(line);
+        }
     }
     if lines.is_empty() {
         None

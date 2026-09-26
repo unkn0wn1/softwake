@@ -45,7 +45,7 @@ fn ctl_hibernate_then_resume_lands_in_sleep() {
     let temp = TempSocket::new();
     let soul = TestSoulDir::valid();
     let server =
-        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock).expect("serve");
+        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock, 0).expect("serve");
 
     let status = ctl::call(temp.path(), Command::GetStatus).expect("status");
     assert_eq!(status.state, VoiceState::Sleep);
@@ -81,7 +81,7 @@ fn reload_soul_rereads_and_a_second_client_sees_state_changed() {
     let temp = TempSocket::new();
     let soul = TestSoulDir::valid();
     let server =
-        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock).expect("serve");
+        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock, 0).expect("serve");
 
     let mut watcher = Client::connect(temp.path()).expect("watcher");
     watcher
@@ -139,9 +139,9 @@ fn a_live_socket_is_kept_and_a_bad_hello_does_not_stop_serve() {
     let temp = TempSocket::new();
     let soul = TestSoulDir::valid();
     let server =
-        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock).expect("serve");
+        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock, 0).expect("serve");
     let error =
-        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock).expect_err("second");
+        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock, 0).expect_err("second");
     assert!(error.to_string().contains("is listening"), "{error}");
 
     let stream = connect_stream(temp.path()).expect("connect");
@@ -168,7 +168,7 @@ fn a_live_socket_is_kept_and_a_bad_hello_does_not_stop_serve() {
     drop(server);
 
     let restarted =
-        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock).expect("restart");
+        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock, 0).expect("restart");
     drop(restarted);
 }
 
@@ -177,7 +177,7 @@ fn status_reports_a_missing_soul_and_hibernate_still_works() {
     let temp = TempSocket::new();
     let soul = TestSoulDir::empty();
     let server =
-        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock).expect("serve");
+        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock, 0).expect("serve");
 
     let status = ctl::call(temp.path(), Command::GetStatus).expect("status");
     assert_eq!(status.state, VoiceState::Sleep);
@@ -219,7 +219,7 @@ fn ctl_tool_is_refused_until_awake_then_echo_is_deterministic() {
     let temp = TempSocket::new();
     let soul = TestSoulDir::valid();
     let server =
-        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock).expect("serve");
+        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock, 0).expect("serve");
 
     let asleep = ctl::call_tool(temp.path(), "echo", &["hello".to_owned()]).expect_err("asleep");
     assert!(
@@ -304,7 +304,7 @@ fn ctl_notify_confirms_once_and_cancel_does_not_run() {
     let temp = TempSocket::new();
     let soul = TestSoulDir::valid();
     let server =
-        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock).expect("serve");
+        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock, 0).expect("serve");
     let woke = server.wake_phrase_for_test();
     assert!(woke.body.status().is_some(), "wake should apply: {woke:?}");
 
@@ -389,7 +389,7 @@ fn ctl_cancel_and_hibernate_clear_a_pending_notification() {
     let temp = TempSocket::new();
     let soul = TestSoulDir::valid();
     let server =
-        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock).expect("serve");
+        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock, 0).expect("serve");
     assert!(
         server.wake_phrase_for_test().body.status().is_some(),
         "wake should apply"
@@ -470,7 +470,7 @@ fn ctl_email_send_confirms_once() {
     let temp = TempSocket::new();
     let soul = TestSoulDir::valid();
     let server =
-        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock).expect("serve");
+        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock, 0).expect("serve");
     let woke = server.wake_phrase_for_test();
     assert!(woke.body.status().is_some(), "wake should apply: {woke:?}");
 
@@ -564,7 +564,7 @@ fn ctl_ask_is_refused_until_awake_then_returns_the_fixture_reply() {
     let temp = TempSocket::new();
     let soul = TestSoulDir::valid();
     let server =
-        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock).expect("serve");
+        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock, 0).expect("serve");
     server.install_chat_fixture_for_test(crate::chat::xai_key_fixture(
         true,
         Some("sk-test-secret"),
@@ -653,7 +653,7 @@ fn ctl_ask_rejects_a_failed_test_and_a_missing_bearer() {
     let temp = TempSocket::new();
     let soul = TestSoulDir::valid();
     let server =
-        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock).expect("serve");
+        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock, 0).expect("serve");
     let woke = server.wake_phrase_for_test();
     assert!(woke.body.status().is_some(), "wake should apply: {woke:?}");
 
@@ -694,7 +694,7 @@ fn ctl_wake_enters_awake_and_ask_returns_the_fixture() {
     let temp = TempSocket::new();
     let soul = TestSoulDir::valid();
     let server =
-        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock).expect("serve");
+        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock, 0).expect("serve");
     server.install_chat_fixture_for_test(crate::chat::xai_key_fixture(
         true,
         Some("sk-test-secret"),
@@ -806,7 +806,7 @@ fn ctl_wake_refuses_a_missing_soul_and_leaves_resume_usable() {
     let temp = TempSocket::new();
     let soul = TestSoulDir::empty();
     let server =
-        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock).expect("serve");
+        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock, 0).expect("serve");
 
     let refused = ctl::call_wake(temp.path()).expect_err("missing");
     let text = refused.to_string();
@@ -839,7 +839,7 @@ fn get_status_returns_cached_snapshot_while_runtime_lock_is_held() {
     let temp = TempSocket::new();
     let soul = TestSoulDir::valid();
     let server =
-        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock).expect("serve");
+        serve::spawn(temp.path.clone(), soul.soul_dir(), CaptureKind::Mock, 0).expect("serve");
 
     let seeded = ctl::call(temp.path(), Command::GetStatus).expect("seed cache");
     assert_eq!(seeded.state, VoiceState::Sleep);
