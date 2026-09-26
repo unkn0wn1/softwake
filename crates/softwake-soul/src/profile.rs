@@ -3,7 +3,7 @@
 //! Layout under the Softwake config root:
 //!
 //! ```text
-//! softwake.json                 # { "version": 1, "active_profile": "<id>" }
+//! softwake.json                 # { "version": 1, "active_profile": "<id>", optional kws_*_milli }
 //! profiles/<id>/profile.json    # { "id": "<id>", "name": "<agent name>" }
 //! profiles/<id>/{soul,user,rules,glossary}.md
 //! soul/                         # legacy pack; migration source only
@@ -45,7 +45,7 @@ const MAX_CONFIG_BYTES: u64 = 256 * 1024;
 
 const PACK_FILES: [&str; 4] = ["soul.md", "user.md", "rules.md", "glossary.md"];
 
-/// Softwake app Settings: which profile is active.
+/// Softwake app Settings: which profile is active, plus optional KWS knobs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
     /// Document version.
@@ -53,10 +53,26 @@ pub struct AppConfig {
     pub version: u32,
     /// Active profile id under `profiles/`.
     pub active_profile: String,
+    /// Global KWS trigger threshold in milli-units (150 = 0.15). Lower = easier.
+    ///
+    /// Missing key → product default. Clamped by the wake crate when applied.
+    #[serde(default = "default_kws_threshold_milli")]
+    pub kws_threshold_milli: u16,
+    /// Short-word per-keyword threshold in milli-units (100 = 0.10).
+    #[serde(default = "default_kws_short_threshold_milli")]
+    pub kws_short_threshold_milli: u16,
 }
 
 fn app_config_version() -> u32 {
     APP_CONFIG_VERSION
+}
+
+fn default_kws_threshold_milli() -> u16 {
+    150
+}
+
+fn default_kws_short_threshold_milli() -> u16 {
+    100
 }
 
 impl Default for AppConfig {
@@ -64,6 +80,8 @@ impl Default for AppConfig {
         Self {
             version: APP_CONFIG_VERSION,
             active_profile: DEFAULT_PROFILE_ID.to_owned(),
+            kws_threshold_milli: default_kws_threshold_milli(),
+            kws_short_threshold_milli: default_kws_short_threshold_milli(),
         }
     }
 }
@@ -291,10 +309,9 @@ pub fn set_active_profile(config_dir: &Path, profile_id: &str) -> Result<AppConf
             id: profile_id.to_owned(),
         });
     }
-    let config = AppConfig {
-        version: APP_CONFIG_VERSION,
-        active_profile: profile_id.to_owned(),
-    };
+    let mut config = load_app_config(config_dir).unwrap_or_default();
+    config.version = APP_CONFIG_VERSION;
+    profile_id.clone_into(&mut config.active_profile);
     write_app_config(config_dir, &config)?;
     Ok(config)
 }
@@ -693,5 +710,14 @@ mod tests {
         );
         let renamed = rename_profile(&root.path, &created.id, "Nova").expect("rename");
         assert_eq!(renamed.name, "Nova");
+    }
+
+    #[test]
+    fn missing_kws_keys_deserialize_to_product_defaults() {
+        let raw = br#"{"version":1,"active_profile":"default"}"#;
+        let app: AppConfig = serde_json::from_slice(raw).expect("parse");
+        assert_eq!(app.kws_threshold_milli, 150);
+        assert_eq!(app.kws_short_threshold_milli, 100);
+        assert_eq!(AppConfig::default().kws_threshold_milli, 150);
     }
 }

@@ -35,16 +35,26 @@ impl WakeDetector for PcmEngine {
 }
 
 impl PcmEngine {
-    /// Build the PCM detector for `agent_name`.
+    /// Build the PCM detector for `agent_name` (near-miss probe off).
     ///
     /// When `sherpa-kws` is enabled and weights load, returns the sherpa
     /// engine configured with profile-driven wake/sleep phrases. Otherwise
-    /// returns [`NullDetector`].
+    /// returns [`NullDetector`]. Runtime prefers [`Self::for_agent_with_verbosity`].
     #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn for_agent(agent_name: &str) -> Self {
+        Self::for_agent_with_verbosity(agent_name, 0)
+    }
+
+    /// Build the PCM detector for `agent_name`, enabling the near-miss probe at `-vv`.
+    #[must_use]
+    pub(crate) fn for_agent_with_verbosity(agent_name: &str, verbosity: u8) -> Self {
         #[cfg(feature = "sherpa-kws")]
         {
-            let detector = softwake_wake::SherpaKwsDetector::for_agent(agent_name);
+            let thresholds = resolve_kws_thresholds();
+            let mut detector =
+                softwake_wake::SherpaKwsDetector::for_agent_with_thresholds(agent_name, thresholds);
+            detector.set_near_miss_probe(verbosity >= 2);
             if detector.weights_loaded() {
                 eprintln!(
                     "softwaked: KWS profile={agent_name} weights loaded from {}",
@@ -57,8 +67,25 @@ impl PcmEngine {
                 softwake_wake::SherpaKwsDetector::default_model_dir().display()
             );
         }
-        let _ = agent_name;
+        let _ = (agent_name, verbosity);
         Self::Null(NullDetector)
+    }
+
+    /// Active thresholds when sherpa is loaded.
+    #[must_use]
+    pub(crate) fn thresholds_display(&self) -> Option<String> {
+        #[cfg(feature = "sherpa-kws")]
+        {
+            if let Self::Sherpa(detector) = self {
+                let t = detector.thresholds();
+                return Some(format!(
+                    "global={:.2} short={:.2} probe={:.2}",
+                    t.global, t.short, t.probe
+                ));
+            }
+        }
+        let _ = self;
+        None
     }
 
     /// `true` when real KWS weights are loaded.
@@ -140,6 +167,7 @@ impl PcmEngine {
             Self::Null(detector) => SpotDetail {
                 hit: detector.push_samples(samples),
                 keyword: None,
+                near_miss: None,
             },
             #[cfg(feature = "sherpa-kws")]
             Self::Sherpa(detector) => detector.push_samples_detailed(samples),
@@ -152,7 +180,11 @@ impl PcmEngine {
                     PhraseHit::Hibernate => Some("scripted-hibernate".to_owned()),
                     PhraseHit::None => None,
                 });
-                SpotDetail { hit, keyword }
+                SpotDetail {
+                    hit,
+                    keyword,
+                    near_miss: None,
+                }
             }
         }
     }
@@ -207,9 +239,12 @@ impl PcmEngine {
             }
             self.log_registered_keywords(profile, verbosity);
         }
+        if let Some(thresholds) = self.thresholds_display() {
+            eprintln!("softwaked: KWS {profile} thresholds {thresholds}");
+        }
         if verbosity >= 1 {
             eprintln!(
-                "softwaked: KWS {profile} verbose={verbosity} (-v logs keyword hear/match; -vv also logs mic energy while sleeping)"
+                "softwaked: KWS {profile} verbose={verbosity} (-v logs keyword hear/match; -vv also logs mic energy / near-miss while sleeping)"
             );
         }
     }
@@ -252,6 +287,41 @@ pub(crate) fn score_frame(detector: &mut impl WakeDetector, frame: &AudioFrame) 
 #[must_use]
 pub(crate) fn score_frame_detailed(engine: &mut PcmEngine, frame: &AudioFrame) -> SpotDetail {
     engine.score_detailed(frame.samples())
+}
+
+/// Resolve KWS thresholds from `softwake.json`, then env overrides.
+///
+/// `SOFTWAKE_KWS_THRESHOLD` / `SOFTWAKE_KWS_SHORT_THRESHOLD` are floats
+/// (e.g. `0.12`). Missing config uses product defaults (0.15 / 0.10).
+#[cfg(feature = "sherpa-kws")]
+#[must_use]
+pub(crate) fn resolve_kws_thresholds() -> softwake_wake::KwsThresholds {
+    use softwake_wake::{
+        DEFAULT_GLOBAL_THRESHOLD, DEFAULT_PROBE_THRESHOLD, DEFAULT_SHORT_THRESHOLD, KwsThresholds,
+    };
+
+    let mut global = DEFAULT_GLOBAL_THRESHOLD;
+    let mut short = DEFAULT_SHORT_THRESHOLD;
+
+    let xdg = std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from);
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    if let Ok(config_dir) = softwake_soul::resolve_config_dir(xdg.as_deref(), home.as_deref()) {
+        if let Ok(app) = softwake_soul::load_app_config(&config_dir) {
+            global = f32::from(app.kws_threshold_milli) / 1000.0;
+            short = f32::from(app.kws_short_threshold_milli) / 1000.0;
+        }
+    }
+    if let Ok(raw) = std::env::var("SOFTWAKE_KWS_THRESHOLD") {
+        if let Ok(value) = raw.parse::<f32>() {
+            global = value;
+        }
+    }
+    if let Ok(raw) = std::env::var("SOFTWAKE_KWS_SHORT_THRESHOLD") {
+        if let Ok(value) = raw.parse::<f32>() {
+            short = value;
+        }
+    }
+    KwsThresholds::clamped(global, short, DEFAULT_PROBE_THRESHOLD)
 }
 
 #[cfg(test)]

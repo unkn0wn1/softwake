@@ -39,6 +39,30 @@ pub(crate) fn format_kws_heard(line: &KwsHeardLine<'_>) -> String {
     )
 }
 
+/// Fields for one `-vv` KWS near-miss line.
+pub(crate) struct KwsNearMissLine<'a> {
+    /// `profile=<name>` or `profile=<name> id=<id>`.
+    pub profile: &'a str,
+    /// Raw probe keyword that did not reach the fire threshold.
+    pub keyword: &'a str,
+    /// Peak-normalized RMS of the window.
+    pub mic_rms: f32,
+    /// Threshold summary (`global=… short=… probe=…`).
+    pub thresholds: &'a str,
+}
+
+/// `softwaked: KWS profile=… near-miss keyword=…`
+#[must_use]
+pub(crate) fn format_kws_near_miss(line: &KwsNearMissLine<'_>) -> String {
+    format!(
+        "softwaked: KWS {profile} near-miss keyword=`{keyword}` mic_rms={mic_rms:.3} thresholds {thresholds} (probe fired below fire threshold; not a match)",
+        profile = line.profile,
+        keyword = line.keyword,
+        mic_rms = line.mic_rms,
+        thresholds = line.thresholds,
+    )
+}
+
 /// `softwaked: KWS profile=… wake match refused: …`
 #[must_use]
 pub(crate) fn format_kws_refuse(profile: &str, kind: &str, error: &str) -> String {
@@ -53,7 +77,10 @@ pub(crate) fn format_voice_transition(profile: &str, from: &str, to: &str, event
 
 #[cfg(test)]
 mod tests {
-    use super::{KwsHeardLine, format_kws_heard, format_kws_refuse, format_voice_transition};
+    use super::{
+        KwsHeardLine, KwsNearMissLine, format_kws_heard, format_kws_near_miss, format_kws_refuse,
+        format_voice_transition,
+    };
 
     #[test]
     fn kws_and_voice_lines_include_the_loaded_profile() {
@@ -78,6 +105,17 @@ mod tests {
         assert_eq!(
             format_voice_transition("profile=sally id=default", "sleep", "awake", "wake phrase"),
             "softwaked: voice profile=sally id=default sleep -> awake (wake phrase)"
+        );
+
+        let near = format_kws_near_miss(&KwsNearMissLine {
+            profile: "profile=sally",
+            keyword: "sally",
+            mic_rms: 0.350,
+            thresholds: "global=0.15 short=0.10 probe=0.05",
+        });
+        assert_eq!(
+            near,
+            "softwaked: KWS profile=sally near-miss keyword=`sally` mic_rms=0.350 thresholds global=0.15 short=0.10 probe=0.05 (probe fired below fire threshold; not a match)"
         );
     }
 }

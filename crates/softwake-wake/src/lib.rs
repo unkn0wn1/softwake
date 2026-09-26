@@ -12,6 +12,7 @@ mod phrases;
 #[cfg(feature = "sherpa-kws")]
 mod sherpa;
 mod short_word;
+mod thresholds;
 // The sample budget is a pure counter. Tests run it without ONNX weights.
 // The sherpa detector is the only caller outside tests, so the budget stays
 // behind that feature except in `cfg(test)`.
@@ -23,6 +24,9 @@ use std::fmt;
 
 pub use phrases::{AgentPhrases, DEFAULT_AGENT_NAME, hit_from_keyword, phrases_for_agent};
 pub use short_word::is_short_single_word;
+pub use thresholds::{
+    DEFAULT_GLOBAL_THRESHOLD, DEFAULT_PROBE_THRESHOLD, DEFAULT_SHORT_THRESHOLD, KwsThresholds,
+};
 
 #[cfg(feature = "sherpa-kws")]
 pub use sherpa::SherpaKwsDetector;
@@ -70,6 +74,9 @@ pub struct SpotDetail {
     pub hit: PhraseHit,
     /// Raw keyword tag from the spotter (`@sally`, `sally`, …), when any.
     pub keyword: Option<String>,
+    /// Keyword seen on the low-threshold probe stream but not on the fire
+    /// stream. Used for `-vv` near-miss logs. Never drives a state change.
+    pub near_miss: Option<String>,
 }
 
 /// Scores capture windows for the configured wake and sleep phrases.

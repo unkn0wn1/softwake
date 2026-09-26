@@ -54,6 +54,7 @@ pub(crate) struct Runtime {
     last_energy_log: Option<Instant>,
     /// Rate-limit for verbose KWS hear lines (`-v` / `-vv`).
     last_kws_log: Option<Instant>,
+    last_near_miss_log: Option<Instant>,
     /// `0` quiet, `1` (`-v`) keyword hear/match, `2` (`-vv`) also mic energy.
     verbosity: u8,
     soul: LoadedSoul,
@@ -127,7 +128,7 @@ impl Runtime {
         let soul = LoadedSoul::open(soul_dir);
         let agent = soul.agent_name();
         let profile = soul.profile_log_token();
-        let pcm = PcmEngine::for_agent(&agent);
+        let pcm = PcmEngine::for_agent_with_verbosity(&agent, verbosity);
         pcm.log_startup(&profile, verbosity);
         eprintln!(
             "softwaked: listen state={} capture={}",
@@ -144,6 +145,7 @@ impl Runtime {
             last_capture_level: None,
             last_energy_log: None,
             last_kws_log: None,
+            last_near_miss_log: None,
             verbosity,
             soul,
             session: TextStubSession::default(),
@@ -882,7 +884,7 @@ impl Runtime {
     /// Short words are not dropped when free speech or press-to-talk is long.
     /// A 1.5 s suppress cut real `sleep` commands during awake chat. A 400 ms
     /// silence reset of the online stream chopped keywords mid-utterance.
-    /// Both gates are gone. The 3 s stream budget still refreshes a long session.
+    /// Both gates are gone. Soft 5 s / hard 10 s stream budget still refreshes a long session.
     fn observe_kws_frame(&mut self, frame: &softwake_audio::AudioFrame) -> PhraseHit {
         let detail = score_frame_detailed(&mut self.pcm, frame);
         let level = self.last_capture_level.unwrap_or(0.0);
@@ -893,6 +895,10 @@ impl Runtime {
     /// Log one KWS observation when verbosity asks for it.
     fn log_kws_observation(&mut self, detail: &softwake_wake::SpotDetail, level: f32) {
         if self.verbosity == 0 {
+            return;
+        }
+        if detail.keyword.is_none() {
+            self.log_kws_near_miss(detail, level);
             return;
         }
         let Some(keyword) = detail.keyword.as_deref() else {
@@ -934,6 +940,38 @@ impl Runtime {
         );
     }
 
+    /// `-vv` near-miss: probe stream fired below the product threshold.
+    fn log_kws_near_miss(&mut self, detail: &softwake_wake::SpotDetail, level: f32) {
+        if self.verbosity < 2 {
+            return;
+        }
+        let Some(keyword) = detail.near_miss.as_deref() else {
+            return;
+        };
+        let now = Instant::now();
+        let should_log = self
+            .last_near_miss_log
+            .is_none_or(|previous| now.duration_since(previous).as_secs() >= 2);
+        if !should_log {
+            return;
+        }
+        self.last_near_miss_log = Some(now);
+        let profile = self.soul.profile_log_token();
+        let thresholds = self
+            .pcm
+            .thresholds_display()
+            .unwrap_or_else(|| "unknown".to_owned());
+        eprintln!(
+            "{}",
+            crate::verbose_log::format_kws_near_miss(&crate::verbose_log::KwsNearMissLine {
+                profile: &profile,
+                keyword,
+                mic_rms: level,
+                thresholds: &thresholds,
+            })
+        );
+    }
+
     /// Rebuild the PCM detector after a soul / profile reload.
     ///
     /// Reloads ONNX only when the agent / profile name actually changed.
@@ -944,7 +982,7 @@ impl Runtime {
         if agent == self.pcm_agent {
             return;
         }
-        self.pcm = PcmEngine::for_agent(&agent);
+        self.pcm = PcmEngine::for_agent_with_verbosity(&agent, self.verbosity);
         self.pcm
             .log_startup(&self.soul.profile_log_token(), self.verbosity);
         self.pcm_agent = agent;
