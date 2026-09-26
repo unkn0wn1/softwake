@@ -22,10 +22,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// Join deadline for the background reaper. Longer than a short reply, shorter
-/// than leaving a zombie player overnight.
+/// Product default for the TTS playback reaper (60 s).
 ///
-/// Spoken audio that runs past this can be cut even when the text reply
+/// Longer than a short reply, shorter than leaving a zombie player overnight.
+/// `speak_reply` passes the resolved Settings/env duration instead of this
+/// const. Tests still pass this named default into [`play_audio`].
+/// Settings stores `tts_playback_timeout_ms` (30-300 s).
+///
+/// Spoken audio that runs past the deadline can be cut even when the text reply
 /// already arrived in full. The chat HTTP budget is separate and longer.
 pub const PLAYBACK_TIMEOUT: Duration = Duration::from_secs(60);
 

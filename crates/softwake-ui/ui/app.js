@@ -1203,6 +1203,87 @@ if (freeSpeechSilenceInput) {
   refreshFreeSpeechSilence();
 }
 
+const ttsPlaybackRange = document.querySelector("#tts-playback-range");
+const ttsPlaybackSeconds = document.querySelector("#tts-playback-seconds");
+const ttsPlaybackStatus = document.querySelector("#tts-playback-status");
+const ttsPlaybackError = document.querySelector("#tts-playback-error");
+let ttsPlaybackTimer = null;
+
+function showTtsPlaybackError(error) {
+  if (!ttsPlaybackError) return;
+  ttsPlaybackError.textContent =
+    typeof error === "string" ? error : error && error.message ? error.message : "request failed";
+}
+
+function applyTtsPlaybackSnapshot(snap) {
+  if (snap && typeof snap.seconds === "number") {
+    const seconds = String(Math.round(snap.seconds));
+    if (ttsPlaybackRange) ttsPlaybackRange.value = seconds;
+    if (ttsPlaybackSeconds) ttsPlaybackSeconds.value = seconds;
+  }
+  if (ttsPlaybackStatus) {
+    ttsPlaybackStatus.textContent = (snap && snap.message) || "";
+  }
+}
+
+async function refreshTtsPlaybackTimeout() {
+  if (!ttsPlaybackRange && !ttsPlaybackSeconds) return;
+  try {
+    if (ttsPlaybackError) ttsPlaybackError.textContent = "";
+    const snap = await invoke("tts_playback_timeout_snapshot");
+    applyTtsPlaybackSnapshot(snap);
+  } catch (error) {
+    showTtsPlaybackError(error);
+  }
+}
+
+async function saveTtsPlaybackTimeout(seconds) {
+  try {
+    if (ttsPlaybackError) ttsPlaybackError.textContent = "";
+    const snap = await invoke("tts_playback_timeout_set", {
+      seconds: Number(seconds),
+    });
+    applyTtsPlaybackSnapshot(snap);
+  } catch (error) {
+    showTtsPlaybackError(error);
+    refreshTtsPlaybackTimeout();
+  }
+}
+
+function scheduleTtsPlaybackSave(seconds) {
+  // Debounce live ReloadPlayback the same way free-speech debounces ReloadUtterance.
+  if (ttsPlaybackTimer) clearTimeout(ttsPlaybackTimer);
+  ttsPlaybackTimer = setTimeout(() => {
+    ttsPlaybackTimer = null;
+    saveTtsPlaybackTimeout(seconds);
+  }, 450);
+}
+
+if (ttsPlaybackRange && ttsPlaybackSeconds) {
+  ttsPlaybackRange.addEventListener("input", () => {
+    ttsPlaybackSeconds.value = ttsPlaybackRange.value;
+    scheduleTtsPlaybackSave(ttsPlaybackRange.value);
+  });
+  ttsPlaybackSeconds.addEventListener("input", () => {
+    const seconds = Math.round(Number(ttsPlaybackSeconds.value));
+    if (Number.isFinite(seconds)) {
+      ttsPlaybackRange.value = String(seconds);
+    }
+    scheduleTtsPlaybackSave(ttsPlaybackSeconds.value);
+  });
+  ttsPlaybackSeconds.addEventListener("change", () => {
+    const seconds = Math.round(Number(ttsPlaybackSeconds.value));
+    if (Number.isFinite(seconds)) {
+      ttsPlaybackSeconds.value = String(seconds);
+      ttsPlaybackRange.value = String(seconds);
+      scheduleTtsPlaybackSave(seconds);
+    } else {
+      scheduleTtsPlaybackSave(ttsPlaybackSeconds.value);
+    }
+  });
+  refreshTtsPlaybackTimeout();
+}
+
 function showPane(name) {
   for (const pane of panes) {
     const section = document.querySelector(`#pane-${pane}`);

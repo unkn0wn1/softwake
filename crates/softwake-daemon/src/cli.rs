@@ -192,6 +192,8 @@ Usage:
   softwaked ctl reload-kws  rebuild the keyword spotter from softwake.json thresholds
   softwaked ctl reload-utterance
                             re-read free-speech end silence without rebuilding KWS
+  softwaked ctl reload-playback
+                            re-read the TTS playback reaper deadline (next speak uses it)
   softwaked ctl voice-test [on|off]
                             show or set voice test mode (default off; not saved)
   softwaked ctl tool NAME [ARG...]
@@ -461,7 +463,7 @@ fn parse_ctl(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
 fn ctl_command(positional: &[String]) -> Result<CtlAction, String> {
     match positional {
         [] => Err(
-            "ctl needs a command: status, hibernate, resume, wake, sleep, reload-soul, reload-kws, reload-utterance, voice-test, tool, confirm-tool, cancel-tool, ask, chat"
+            "ctl needs a command: status, hibernate, resume, wake, sleep, reload-soul, reload-kws, reload-utterance, reload-playback, voice-test, tool, confirm-tool, cancel-tool, ask, chat"
                 .to_owned(),
         ),
         [name] if name == "tool" => Err("ctl tool needs a tool name".to_owned()),
@@ -780,6 +782,17 @@ mod tests {
             Ok(Mode::Ctl {
                 socket: Some(PathBuf::from("/tmp/sw.sock")),
                 command: CtlAction::Status
+            })
+        );
+    }
+
+    #[test]
+    fn reload_playback_parses() {
+        assert_eq!(
+            parse_args(["ctl".to_owned(), "reload-playback".to_owned()]),
+            Ok(Mode::Ctl {
+                socket: None,
+                command: CtlAction::ReloadPlayback
             })
         );
     }

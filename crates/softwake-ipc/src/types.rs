@@ -652,6 +652,16 @@ pub enum ClientMessage {
         /// Client-chosen id. The daemon echoes it and does not interpret it.
         id: u64,
     },
+    /// Re-read the TTS playback reaper deadline from `softwake.json` (then env).
+    ///
+    /// Additive on protocol generation 1. The deadline is applied when the next
+    /// speak starts; this message does not change an in-flight player, the energy
+    /// gate, or the keyword spotter. Settings → General writes the file and then
+    /// sends this so the status line can say the running daemon accepted it.
+    ReloadPlayback {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+    },
 }
 
 /// Daemon messages after a client connects.
@@ -970,6 +980,10 @@ mod tests {
         assert_round_trip(&reload_utterance);
         let reload_utterance_json = serde_json::to_string(&reload_utterance).expect("encode");
         assert!(reload_utterance_json.contains("\"type\":\"reload_utterance\""));
+        let reload_playback = ClientMessage::ReloadPlayback { id: 17 };
+        assert_round_trip(&reload_playback);
+        let reload_playback_json = serde_json::to_string(&reload_playback).expect("encode");
+        assert!(reload_playback_json.contains("\"type\":\"reload_playback\""));
         let talk_stop_json = serde_json::to_string(&talk_stop).expect("encode");
         assert!(talk_stop_json.contains("\"type\":\"talk_stop\""));
         let talk_rejected = IpcError::TalkRejected {

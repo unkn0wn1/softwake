@@ -481,7 +481,8 @@ impl ServerConnection {
             | ClientMessage::TalkStop { .. }
             | ClientMessage::SetVoiceTest { .. }
             | ClientMessage::ReloadKws { .. }
-            | ClientMessage::ReloadUtterance { .. } => {
+            | ClientMessage::ReloadUtterance { .. }
+            | ClientMessage::ReloadPlayback { .. } => {
                 let message = "expected a hello message".to_owned();
                 endpoint.write(&ServerMessage::HelloRejected {
                     protocol_version: PROTOCOL_VERSION,
@@ -754,6 +755,16 @@ impl Client {
     pub fn reload_utterance(&mut self) -> Result<Status, CallError> {
         let id = self.allocate_id();
         self.round_trip(&ClientMessage::ReloadUtterance { id }, id)
+    }
+
+    /// Re-read the TTS playback reaper deadline from `softwake.json` / env.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] on transport failure or a rejected reload.
+    pub fn reload_playback(&mut self) -> Result<Status, CallError> {
+        let id = self.allocate_id();
+        self.round_trip(&ClientMessage::ReloadPlayback { id }, id)
     }
 
     /// Confirm the pending tool and return the status after it runs.

@@ -92,6 +92,24 @@
           </p>
           <p id="free-speech-silence-status" class="meta" role="status"></p>
           <p id="free-speech-silence-error" class="error" role="status"></p>
+          <label class="field">
+            <span>Max spoken reply (TTS playback reaper, seconds)</span>
+            <span class="idle-controls">
+              <input id="tts-playback-range" type="range" min="30" max="300" step="1" value="60" aria-describedby="tts-playback-hint" />
+              <input id="tts-playback-seconds" type="number" min="30" max="300" step="1" value="60" inputmode="numeric" aria-label="Max spoken reply seconds" />
+            </span>
+          </label>
+          <p id="tts-playback-hint" class="meta">
+            How long Eve may keep speaking before the playback reaper stops the player.
+            The written reply is not cut. Range 30–300 seconds, default 60.
+            Saved in softwake.json as <code>tts_playback_timeout_ms</code> (30000–300000).
+            The next speak uses the new value. An in-flight clip keeps the deadline it started with.
+            Changes debounce about 450&nbsp;ms.
+            Env <code>SOFTWAKE_TTS_PLAYBACK_TIMEOUT_MS</code> wins over the file when set.
+            Chat wait stays 120 seconds. Free-speech silence, wake-word sensitivity, HUD idle collapse, and the short mute after playback are unchanged.
+          </p>
+          <p id="tts-playback-status" class="meta" role="status"></p>
+          <p id="tts-playback-error" class="error" role="status"></p>
           <label class="field row-check">
             <input id="voice-test" type="checkbox" />
             <span>Voice test mode</span>

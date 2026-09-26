@@ -22,8 +22,9 @@ use softwake_session::{
 ///
 /// A 30s budget aborted slow completions while the provider was still writing,
 /// so long replies never arrived. 120s is the whole-call ceiling. Spoken
-/// playback is a separate 60s reaper (`softwake_voice::PLAYBACK_TIMEOUT`) and
-/// can still stop audio after the text reply is already complete.
+/// playback is a separate reaper, default 60 s (`PLAYBACK_TIMEOUT` /
+/// `tts_playback_timeout_ms`, Settings 30-300 s), and can still stop audio
+/// after the text reply is complete.
 #[cfg_attr(not(feature = "live-http"), allow(dead_code))]
 pub(crate) const CHAT_TIMEOUT: Duration = Duration::from_secs(120);
 
