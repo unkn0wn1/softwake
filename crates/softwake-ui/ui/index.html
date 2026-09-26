@@ -18,6 +18,7 @@
         </div>
         <button type="button" class="nav" id="nav-providers" data-pane="providers">Providers</button>
         <button type="button" class="nav" id="nav-tools" data-pane="tools">Tools</button>
+        <button type="button" class="nav" id="nav-skills" data-pane="skills">Skills</button>
         <button type="button" class="nav" id="nav-email" data-pane="email">Email</button>
         <button type="button" class="nav" id="nav-status" data-pane="status" aria-current="page">Status</button>
       </nav>
@@ -279,6 +280,45 @@
           </div>
           <p id="tools-status" class="meta" aria-live="polite"></p>
           <p id="tools-error" class="error" role="alert"></p>
+        </section>
+
+        
+        <section id="pane-skills" class="pane glass hidden" hidden aria-labelledby="skills-title">
+          <h2 id="skills-title">Skills</h2>
+          <p class="meta">
+            Skills are Markdown procedures Softwake can reuse (procedure / pitfalls / verify).
+            User-added skills and agent-learned skills both appear here. Soul rules still beat skills.
+            Webhook wake is not in this build.
+          </p>
+          <p id="skills-dir" class="meta">Directory: …</p>
+          <label class="field">
+            <span>Skills</span>
+            <select id="skills-list" aria-label="Skill list"></select>
+          </label>
+          <label class="field">
+            <span>Title</span>
+            <input id="skills-title-input" type="text" maxlength="120" autocomplete="off" spellcheck="false" placeholder="Skill title" />
+          </label>
+          <p id="skills-source" class="meta">Source: —</p>
+          <label class="field">
+            <span>Procedure</span>
+            <textarea id="skills-procedure" rows="6" spellcheck="false"></textarea>
+          </label>
+          <label class="field">
+            <span>Pitfalls</span>
+            <textarea id="skills-pitfalls" rows="4" spellcheck="false"></textarea>
+          </label>
+          <label class="field">
+            <span>Verify</span>
+            <textarea id="skills-verify" rows="4" spellcheck="false"></textarea>
+          </label>
+          <div class="row">
+            <button type="button" class="btn" id="skills-new">New</button>
+            <button type="button" class="btn" id="skills-save">Save</button>
+            <button type="button" class="btn" id="skills-delete">Delete</button>
+          </div>
+          <p id="skills-status" class="meta" aria-live="polite"></p>
+          <p id="skills-error" class="error" role="alert"></p>
         </section>
 
         <section id="pane-email" class="pane glass hidden" hidden aria-labelledby="email-title">

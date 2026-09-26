@@ -31,12 +31,13 @@ use softwake_connectors::{
 use softwake_policy::{
     PolicyDecision, PolicyEngine, Subject, effective_tool_decision, permits_confirmed_connector,
 };
+use softwake_skills::{Skill, SkillSource, resolve_skills_dir, save_skill};
 use softwake_soul::Glossary;
 use softwake_state::{Machine, StateError, VoiceState};
 use softwake_tools::{
-    EMAIL_SEND_TOOL, FileToolsSettings, NOTIFY_TOOL, SHELL_TOOL, ToolError, ToolPermission,
-    ToolRegistry, ToolResult, ToolRisk, ToolsSettings, format_shell_output, parse_email_send_args,
-    resolve_tools_file, run_shell,
+    EMAIL_SEND_TOOL, FileToolsSettings, NOTIFY_TOOL, SHELL_TOOL, SKILL_SAVE_TOOL, ToolError,
+    ToolPermission, ToolRegistry, ToolResult, ToolRisk, ToolsSettings, format_shell_output,
+    parse_email_send_args, parse_skill_save_args, resolve_tools_file, run_shell,
 };
 
 use crate::email_tool::{commit_detail, commit_email_send};
@@ -788,6 +789,9 @@ impl Hands {
         if name == SHELL_TOOL {
             return self.spawn_shell(&args.join(" "));
         }
+        if name == SKILL_SAVE_TOOL {
+            return self.save_skill_row(args);
+        }
         let detail = match self.registry.invoke_confirmed(name, args) {
             Ok(ToolResult { detail }) => detail,
             Err(error) => return Err(self.fail_tool(error)),
@@ -796,6 +800,52 @@ impl Hands {
             self.push_notification(detail.clone());
         }
         Ok(detail)
+    }
+
+    /// Persist a confirm-gated `skill_save` to the XDG data skills dir.
+    fn save_skill_row(&mut self, args: &[String]) -> Result<String, DispatchError> {
+        let parsed = match parse_skill_save_args(args) {
+            Ok(parsed) => parsed,
+            Err(error) => return Err(self.fail_tool(error)),
+        };
+        if let Err(error) = self.registry.invoke_confirmed(SKILL_SAVE_TOOL, args) {
+            return Err(self.fail_tool(error));
+        }
+        let dir = match resolve_skills_dir() {
+            Ok(dir) => dir,
+            Err(error) => {
+                let message = error.to_string();
+                self.record(
+                    SKILL_SAVE_TOOL,
+                    Some(ToolRisk::Confirm),
+                    ToolOutcome::Unknown,
+                    Some(message.clone()),
+                );
+                return Err(DispatchError::Shell { message });
+            }
+        };
+        let skill = Skill {
+            id: String::new(),
+            title: parsed.title.clone(),
+            source: SkillSource::Agent,
+            procedure: parsed.procedure,
+            pitfalls: parsed.pitfalls,
+            verify: parsed.verify,
+            updated: None,
+        };
+        match save_skill(&dir, skill) {
+            Ok(saved) => Ok(format!("skill saved: {} ({})", saved.title, saved.id)),
+            Err(error) => {
+                let message = error.to_string();
+                self.record(
+                    SKILL_SAVE_TOOL,
+                    Some(ToolRisk::Confirm),
+                    ToolOutcome::Unknown,
+                    Some(message.clone()),
+                );
+                Err(DispatchError::Shell { message })
+            }
+        }
     }
 
     /// Spawn `/bin/sh -c` on an already expanded command. Does not log the command line.

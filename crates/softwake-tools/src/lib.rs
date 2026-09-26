@@ -38,6 +38,9 @@ pub const EMAIL_SEND_TOOL: &str = "email_send";
 /// Confirm-gated shell. Operator default is deny; the daemon spawns only after Ask or Always allow.
 pub const SHELL_TOOL: &str = "shell";
 
+/// Confirm-gated skill write. Daemon saves Markdown after confirm.
+pub const SKILL_SAVE_TOOL: &str = "skill_save";
+
 /// How the daemon may treat a registered tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolRisk {
@@ -98,6 +101,11 @@ const PHASE2: &[ToolMeta] = &[
         name: SHELL_TOOL,
         risk: ToolRisk::Confirm,
         description: "Run a shell command after confirm. Off until enabled in Tools Settings.",
+    },
+    ToolMeta {
+        name: SKILL_SAVE_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Save a Markdown skill (procedure / pitfalls / verify) after confirm.",
     },
 ];
 
@@ -236,6 +244,9 @@ impl ToolRegistry {
                 if name == EMAIL_SEND_TOOL {
                     parse_email_send_args(args)?;
                 }
+                if name == SKILL_SAVE_TOOL {
+                    parse_skill_save_args(args)?;
+                }
                 Ok(ToolResult {
                     detail: render(name, args),
                 })
@@ -263,6 +274,10 @@ fn render(name: &str, args: &[String]) -> String {
     match name {
         ECHO_TOOL => echo_detail(args),
         NOTIFY_TOOL | SHELL_TOOL => args.join(" "),
+        SKILL_SAVE_TOOL => match parse_skill_save_args(args) {
+            Ok(parsed) => format!("skill_save: {}", parsed.title),
+            Err(_) => args.join(" "),
+        },
         _ => String::new(),
     }
 }
@@ -305,6 +320,47 @@ pub fn parse_email_send_args(args: &[String]) -> Result<EmailSendArgs, ToolError
     })
 }
 
+/// Slots for [`SKILL_SAVE_TOOL`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillSaveArgs {
+    /// Skill title.
+    pub title: String,
+    /// Procedure section.
+    pub procedure: String,
+    /// Pitfalls section.
+    pub pitfalls: String,
+    /// Verify section.
+    pub verify: String,
+}
+
+/// Split `skill_save` arguments into title, procedure, pitfalls, and verify.
+///
+/// `args[0]` title, `args[1]` procedure, `args[2]` pitfalls, `args[3..]` joined as verify.
+/// Present slots may be empty except title.
+///
+/// # Errors
+///
+/// [`ToolError::InvalidArgs`] when fewer than four arguments.
+pub fn parse_skill_save_args(args: &[String]) -> Result<SkillSaveArgs, ToolError> {
+    if args.len() < 4 {
+        return Err(ToolError::InvalidArgs {
+            name: SKILL_SAVE_TOOL.to_owned(),
+        });
+    }
+    let title = args[0].trim();
+    if title.is_empty() {
+        return Err(ToolError::InvalidArgs {
+            name: SKILL_SAVE_TOOL.to_owned(),
+        });
+    }
+    Ok(SkillSaveArgs {
+        title: title.to_owned(),
+        procedure: args[1].clone(),
+        pitfalls: args[2].clone(),
+        verify: args[3..].join(" "),
+    })
+}
+
 fn invalid_email_args() -> ToolError {
     ToolError::InvalidArgs {
         name: EMAIL_SEND_TOOL.to_owned(),
@@ -327,8 +383,8 @@ fn echo_detail(args: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ECHO_TOOL, EMAIL_SEND_TOOL, EmailSendArgs, NOTIFY_TOOL, SHELL_TOOL, ToolError,
-        ToolRegistry, ToolResult, ToolRisk, parse_email_send_args,
+        ECHO_TOOL, EMAIL_SEND_TOOL, EmailSendArgs, NOTIFY_TOOL, SHELL_TOOL, SKILL_SAVE_TOOL,
+        ToolError, ToolRegistry, ToolResult, ToolRisk, parse_email_send_args,
     };
 
     fn registry() -> ToolRegistry {
@@ -349,6 +405,7 @@ mod tests {
                 (NOTIFY_TOOL, ToolRisk::Confirm),
                 (EMAIL_SEND_TOOL, ToolRisk::Confirm),
                 (SHELL_TOOL, ToolRisk::Confirm),
+                (SKILL_SAVE_TOOL, ToolRisk::Confirm),
             ]
         );
         assert_eq!(registry.risk("echo"), Some(ToolRisk::Safe));

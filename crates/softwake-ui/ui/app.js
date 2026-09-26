@@ -10,7 +10,7 @@ const confirmBtn = document.querySelector("#confirm");
 const cancelBtn = document.querySelector("#cancel");
 const navStatus = document.querySelector("#nav-status");
 
-const panes = ["general", "profiles", "providers", "tools", "email", "status"];
+const panes = ["general", "profiles", "providers", "tools", "skills", "email", "status"];
 
 const providerSelect = document.querySelector("#provider-select");
 const keyPanel = document.querySelector("#key-panel");
@@ -943,6 +943,106 @@ function renderTools(snap) {
   toolsError.textContent = "";
 }
 
+
+let skillsSnap = null;
+let skillsSelectedId = "";
+const skillsList = document.querySelector("#skills-list");
+const skillsTitleInput = document.querySelector("#skills-title-input");
+const skillsProcedure = document.querySelector("#skills-procedure");
+const skillsPitfalls = document.querySelector("#skills-pitfalls");
+const skillsVerify = document.querySelector("#skills-verify");
+const skillsSource = document.querySelector("#skills-source");
+const skillsDir = document.querySelector("#skills-dir");
+const skillsStatus = document.querySelector("#skills-status");
+const skillsError = document.querySelector("#skills-error");
+
+function showSkillsError(error) {
+  const text = typeof error === "string" ? error : error && error.message ? error.message : "request failed";
+  if (skillsError) skillsError.textContent = text;
+}
+
+function renderSkills(snap) {
+  skillsSnap = snap;
+  if (skillsError) skillsError.textContent = "";
+  if (skillsDir) skillsDir.textContent = "Directory: " + (snap.skills_dir || "…");
+  if (skillsList) {
+    skillsList.innerHTML = "";
+    for (const row of snap.skills || []) {
+      const opt = document.createElement("option");
+      opt.value = row.id;
+      opt.textContent = row.title + " (" + row.source + ")";
+      if (row.id === snap.selected_id) opt.selected = true;
+      skillsList.appendChild(opt);
+    }
+  }
+  skillsSelectedId = snap.selected_id || "";
+  if (skillsTitleInput) skillsTitleInput.value = snap.selected_title || "";
+  if (skillsProcedure) skillsProcedure.value = snap.procedure || "";
+  if (skillsPitfalls) skillsPitfalls.value = snap.pitfalls || "";
+  if (skillsVerify) skillsVerify.value = snap.verify || "";
+  if (skillsSource) skillsSource.textContent = "Source: " + (snap.selected_source || "—");
+}
+
+async function refreshSkills(selectedId) {
+  try {
+    renderSkills(await invoke("skills_snapshot", { selectedId: selectedId || skillsSelectedId || null }));
+  } catch (error) {
+    showSkillsError(error);
+  }
+}
+
+if (skillsList) {
+  skillsList.addEventListener("change", () => {
+    refreshSkills(skillsList.value);
+  });
+}
+const skillsNewBtn = document.querySelector("#skills-new");
+const skillsSaveBtn = document.querySelector("#skills-save");
+const skillsDeleteBtn = document.querySelector("#skills-delete");
+if (skillsNewBtn) {
+  skillsNewBtn.addEventListener("click", () => {
+    skillsSelectedId = "";
+    if (skillsList) skillsList.selectedIndex = -1;
+    if (skillsTitleInput) skillsTitleInput.value = "";
+    if (skillsProcedure) skillsProcedure.value = "";
+    if (skillsPitfalls) skillsPitfalls.value = "";
+    if (skillsVerify) skillsVerify.value = "";
+    if (skillsSource) skillsSource.textContent = "Source: user (new)";
+    if (skillsStatus) skillsStatus.textContent = "New skill — enter a title and Save.";
+    if (skillsError) skillsError.textContent = "";
+  });
+}
+if (skillsSaveBtn) {
+  skillsSaveBtn.addEventListener("click", async () => {
+    try {
+      const snap = await invoke("skills_save", {
+        id: skillsSelectedId || "",
+        title: skillsTitleInput ? skillsTitleInput.value : "",
+        procedure: skillsProcedure ? skillsProcedure.value : "",
+        pitfalls: skillsPitfalls ? skillsPitfalls.value : "",
+        verify: skillsVerify ? skillsVerify.value : "",
+        forceUser: false,
+      });
+      renderSkills(snap);
+      if (skillsStatus) skillsStatus.textContent = "Skill saved.";
+    } catch (error) {
+      showSkillsError(error);
+    }
+  });
+}
+if (skillsDeleteBtn) {
+  skillsDeleteBtn.addEventListener("click", async () => {
+    if (!skillsSelectedId) return;
+    try {
+      const snap = await invoke("skills_delete", { id: skillsSelectedId });
+      renderSkills(snap);
+      if (skillsStatus) skillsStatus.textContent = "Skill deleted.";
+    } catch (error) {
+      showSkillsError(error);
+    }
+  });
+}
+
 async function refreshTools() {
   try {
     renderTools(await invoke("tools_snapshot"));
@@ -1391,6 +1491,10 @@ function showPane(name) {
   if (name === "tools") {
     refreshTools();
   }
+  if (name === "skills") {
+    refreshSkills();
+  }
+
 }
 
 for (const pane of panes) {

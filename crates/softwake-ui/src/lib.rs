@@ -16,6 +16,7 @@ mod pack;
 mod playback_prefs;
 mod profiles;
 mod providers;
+mod skills;
 mod tools;
 mod tray;
 mod ui_prefs;
@@ -81,6 +82,9 @@ pub fn run() {
             tools::tools_snapshot,
             tools::tools_save,
             tools::tools_set_permission,
+            skills::skills_snapshot,
+            skills::skills_save,
+            skills::skills_delete,
             ui_prefs::ui_prefs_snapshot,
             ui_prefs::ui_prefs_set_text_size,
             ui_prefs::ui_prefs_set_hud_idle_collapse_ms,
@@ -392,6 +396,9 @@ mod tests {
         "tools_snapshot",
         "tools_save",
         "tools_set_permission",
+        "skills_snapshot",
+        "skills_save",
+        "skills_delete",
         "ui_prefs_snapshot",
         "ui_prefs_set_text_size",
         "ui_prefs_set_hud_idle_collapse_ms",
@@ -447,6 +454,9 @@ mod tests {
         "allow-tools-snapshot",
         "allow-tools-save",
         "allow-tools-set-permission",
+        "allow-skills-snapshot",
+        "allow-skills-save",
+        "allow-skills-delete",
         "allow-ui-prefs-snapshot",
         "allow-ui-prefs-set-text-size",
         "allow-ui-prefs-set-hud-idle",
