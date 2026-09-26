@@ -49,6 +49,14 @@ const SLEEP_PATTERNS: &[&str] = &[
     "done bit",
     "enough",
     "time sleep",
+    "going sleep",
+];
+
+/// Trailing soft closers / duration words stripped after fillers, so
+/// "go to sleep for a little while" collapses to `go sleep`.
+const DURATION_TAILS: &[&str] = &[
+    "little", "while", "bit", "awhile", "moment", "second", "seconds", "minute", "minutes", "hour",
+    "hours", "nap", "break", "rest", "few",
 ];
 
 const YES_LINES: &[&str] = &[
@@ -104,7 +112,8 @@ pub(crate) fn classify_mode(text: &str, agent_name: &str) -> Option<ModeIntent> 
     if words.is_empty() || is_question(&words) || has_negation(&words) {
         return None;
     }
-    let line = drop_fillers(&words, agent_name).join(" ");
+    let muted = drop_fillers(&words, agent_name);
+    let line = strip_duration_tails(&muted).join(" ");
     if line == "deep sleep" || line == "hibernate" {
         return Some(ModeIntent::Hibernate);
     }
@@ -257,6 +266,17 @@ fn drop_fillers(words: &[String], agent_name: &str) -> Vec<String> {
         .collect()
 }
 
+fn strip_duration_tails(words: &[String]) -> Vec<String> {
+    let mut out = words.to_vec();
+    while out
+        .last()
+        .is_some_and(|word| DURATION_TAILS.contains(&word.as_str()))
+    {
+        out.pop();
+    }
+    out
+}
+
 fn contains_phrase(haystack: &str, phrase: &str) -> bool {
     let phrase = phrase.trim();
     if phrase.is_empty() || haystack.is_empty() {
@@ -317,6 +337,11 @@ mod tests {
         let sleep = [
             "put yourself to sleep",
             "go to sleep",
+            "go to sleep for a little while",
+            "go to sleep for a bit",
+            "hey sally go to sleep for a while",
+            "I'm going to sleep",
+            "sleep for a few minutes",
             "I'm done for a bit",
             "I'm done",
             "goodnight Sally",
