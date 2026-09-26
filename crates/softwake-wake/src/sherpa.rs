@@ -34,8 +34,6 @@ pub struct SherpaKwsDetector {
     engine: Option<LoadedEngine>,
     /// Accepted audio since the last `KeywordSpotter::reset`.
     stream_budget: crate::stream_budget::StreamBudget,
-    /// Consecutive silence, so a pause can reset the stream before the 3s budget.
-    silence: crate::silence_reset::SilenceReset,
 }
 
 struct LoadedEngine {
@@ -98,7 +96,6 @@ impl SherpaKwsDetector {
             skipped_phrases,
             engine,
             stream_budget: crate::stream_budget::StreamBudget::new(),
-            silence: crate::silence_reset::SilenceReset::new(),
         }
     }
 
@@ -186,31 +183,21 @@ impl SherpaKwsDetector {
             return crate::SpotDetail {
                 hit: PhraseHit::None,
                 keyword: None,
-                silence_reset: false,
             };
         }
         if samples.is_empty() {
             return crate::SpotDetail {
                 hit: PhraseHit::None,
                 keyword: None,
-                silence_reset: false,
             };
-        }
-        // A pause drops decoder context so the next short word is closer to an
-        // isolated utterance. This is not a grammar. The 3s budget below still
-        // resets when speech never goes quiet.
-        let silence_reset = self.silence.observe(samples.len(), window_rms(samples));
-        if silence_reset {
-            self.stream_budget.reset();
-            if let Some(engine) = self.engine.as_mut() {
-                engine.spotter.reset(&engine.stream);
-            }
         }
         // sherpa-onnx auto-resets only after ~1.5 s of trailing blanks. Awake
         // speech never builds that run, and a keyword is the only other reset,
         // so a long awake session stops emitting keywords. Reset before this
-        // window once the sample budget is spent. `begin_window` / `finish_window`
-        // match `stream_budget` tests (CI does not link sherpa).
+        // window once the 3 s sample budget is spent. A shorter silence reset
+        // was withdrawn: pauses and quiet edges chopped keywords mid-utterance.
+        // `begin_window` / `finish_window` match `stream_budget` tests (CI does
+        // not link sherpa).
         if self.stream_budget.begin_window()
             && let Some(engine) = self.engine.as_mut()
         {
@@ -220,7 +207,6 @@ impl SherpaKwsDetector {
             return crate::SpotDetail {
                 hit: PhraseHit::None,
                 keyword: None,
-                silence_reset,
             };
         };
         let float_samples: Vec<f32> = samples
@@ -256,26 +242,8 @@ impl SherpaKwsDetector {
         crate::SpotDetail {
             hit: last_hit,
             keyword: last_keyword,
-            silence_reset,
         }
     }
-}
-
-fn window_rms(samples: &[i16]) -> f32 {
-    if samples.is_empty() {
-        return 0.0;
-    }
-    let mut sum_sq = 0.0_f32;
-    for sample in samples {
-        let unit = f32::from(*sample) / f32::from(i16::MAX);
-        sum_sq += unit * unit;
-    }
-    #[allow(
-        clippy::cast_precision_loss,
-        reason = "a capture window is a few hundred samples"
-    )]
-    let mean = sum_sq / samples.len() as f32;
-    mean.sqrt().clamp(0.0, 1.0)
 }
 
 fn load_engine(

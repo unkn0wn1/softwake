@@ -140,24 +140,19 @@ impl PcmEngine {
             Self::Null(detector) => SpotDetail {
                 hit: detector.push_samples(samples),
                 keyword: None,
-                silence_reset: false,
             },
             #[cfg(feature = "sherpa-kws")]
             Self::Sherpa(detector) => detector.push_samples_detailed(samples),
             #[cfg(test)]
             Self::Scripted(detector) => {
-                let hit = detector.push_samples(samples);
-                let keyword = match hit {
+                let (hit, keyword) = detector.pop_detailed();
+                let keyword = keyword.or_else(|| match hit {
                     PhraseHit::Wake => Some("scripted-wake".to_owned()),
                     PhraseHit::Sleep => Some("scripted-sleep".to_owned()),
                     PhraseHit::Hibernate => Some("scripted-hibernate".to_owned()),
                     PhraseHit::None => None,
-                };
-                SpotDetail {
-                    hit,
-                    keyword,
-                    silence_reset: false,
-                }
+                });
+                SpotDetail { hit, keyword }
             }
         }
     }
@@ -166,6 +161,15 @@ impl PcmEngine {
     #[cfg(test)]
     pub(crate) fn scripted(hits: impl IntoIterator<Item = PhraseHit>) -> Self {
         Self::Scripted(softwake_wake::ScriptedDetector::new(hits))
+    }
+
+    /// Install scripted hits with the raw keyword tag (tests only).
+    #[cfg(test)]
+    pub(crate) fn scripted_keywords<S>(hits: impl IntoIterator<Item = (PhraseHit, S)>) -> Self
+    where
+        S: Into<String>,
+    {
+        Self::Scripted(softwake_wake::ScriptedDetector::with_keywords(hits))
     }
 
     /// One-shot startup summary (profile phrases, backend, weights).

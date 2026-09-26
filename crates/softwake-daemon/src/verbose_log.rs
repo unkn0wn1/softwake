@@ -9,7 +9,7 @@ pub(crate) struct KwsHeardLine<'a> {
     pub profile: &'a str,
     /// Raw spotter keyword.
     pub keyword: &'a str,
-    /// `match=wake` or `match=suppressed reason=long-utterance`.
+    /// `match=wake`, `match=sleep`, `match=hibernate`, or `match=none`.
     pub match_label: &'a str,
     /// Voice state spelling.
     pub state: &'a str,
@@ -45,12 +45,6 @@ pub(crate) fn format_kws_refuse(profile: &str, kind: &str, error: &str) -> Strin
     format!("softwaked: KWS {profile} {kind} match refused: {error}")
 }
 
-/// `softwaked: KWS profile=… silence reset`
-#[must_use]
-pub(crate) fn format_kws_silence(profile: &str) -> String {
-    format!("softwaked: KWS {profile} silence reset")
-}
-
 /// `softwaked: voice profile=… sleep -> awake (wake phrase)`
 #[must_use]
 pub(crate) fn format_voice_transition(profile: &str, from: &str, to: &str, event: &str) -> String {
@@ -59,10 +53,7 @@ pub(crate) fn format_voice_transition(profile: &str, from: &str, to: &str, event
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        KwsHeardLine, format_kws_heard, format_kws_refuse, format_kws_silence,
-        format_voice_transition,
-    };
+    use super::{KwsHeardLine, format_kws_heard, format_kws_refuse, format_voice_transition};
 
     #[test]
     fn kws_and_voice_lines_include_the_loaded_profile() {
@@ -83,10 +74,6 @@ mod tests {
         assert_eq!(
             format_kws_refuse("profile=sally", "hibernate", "soul pack is missing"),
             "softwaked: KWS profile=sally hibernate match refused: soul pack is missing"
-        );
-        assert_eq!(
-            format_kws_silence("profile=sally"),
-            "softwaked: KWS profile=sally silence reset"
         );
         assert_eq!(
             format_voice_transition("profile=sally id=default", "sleep", "awake", "wake phrase"),

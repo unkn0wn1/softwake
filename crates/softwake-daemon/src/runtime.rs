@@ -752,6 +752,16 @@ impl Runtime {
         self.pcm_agent = "scripted".to_owned();
     }
 
+    /// Replace the PCM engine with scripted hits and raw keyword tags (tests only).
+    #[cfg(test)]
+    fn install_scripted_pcm_keywords<S>(&mut self, hits: impl IntoIterator<Item = (PhraseHit, S)>)
+    where
+        S: Into<String>,
+    {
+        self.pcm = PcmEngine::scripted_keywords(hits);
+        self.pcm_agent = "scripted".to_owned();
+    }
+
     /// Pull every queued frame into the PCM detector.
     ///
     /// Keeps the **first** actionable [`PhraseHit::Wake`] / [`PhraseHit::Sleep`]
@@ -867,38 +877,21 @@ impl Runtime {
         self.apply_pcm_hit(hit)
     }
 
-    /// Score one frame. A short keyword inside a long awake utterance becomes none.
+    /// Score one frame and return the spotter hit unchanged.
     ///
-    /// sherpa has no grammar. This only drops bare short words after about 1.5s
-    /// of speech that is already buffered.
+    /// Short words are not dropped when free speech or press-to-talk is long.
+    /// A 1.5 s suppress cut real `sleep` commands during awake chat. A 400 ms
+    /// silence reset of the online stream chopped keywords mid-utterance.
+    /// Both gates are gone. The 3 s stream budget still refreshes a long session.
     fn observe_kws_frame(&mut self, frame: &softwake_audio::AudioFrame) -> PhraseHit {
-        let mut detail = score_frame_detailed(&mut self.pcm, frame);
-        if detail.silence_reset {
-            self.log_kws_silence_reset();
-        }
-        let speech = Self::speech_samples(
-            self.auto_utt.buffered_samples(),
-            self.talk.buffered_samples(),
-        );
-        let suppressed = detail
-            .keyword
-            .as_deref()
-            .is_some_and(|keyword| softwake_wake::suppress_short_keyword(keyword, speech));
-        if suppressed {
-            detail.hit = PhraseHit::None;
-        }
+        let detail = score_frame_detailed(&mut self.pcm, frame);
         let level = self.last_capture_level.unwrap_or(0.0);
-        self.log_kws_observation(&detail, level, suppressed);
+        self.log_kws_observation(&detail, level);
         detail.hit
     }
 
     /// Log one KWS observation when verbosity asks for it.
-    fn log_kws_observation(
-        &mut self,
-        detail: &softwake_wake::SpotDetail,
-        level: f32,
-        suppressed: bool,
-    ) {
+    fn log_kws_observation(&mut self, detail: &softwake_wake::SpotDetail, level: f32) {
         if self.verbosity == 0 {
             return;
         }
@@ -907,8 +900,7 @@ impl Runtime {
         };
         let now = Instant::now();
         // Always log a real keyword immediately once; rate-limit repeats.
-        let should_log = suppressed
-            || detail.hit != PhraseHit::None
+        let should_log = detail.hit != PhraseHit::None
             || self
                 .last_kws_log
                 .is_none_or(|previous| now.duration_since(previous).as_millis() >= 250);
@@ -916,15 +908,11 @@ impl Runtime {
             return;
         }
         self.last_kws_log = Some(now);
-        let match_label = if suppressed {
-            "match=suppressed reason=long-utterance"
-        } else {
-            match detail.hit {
-                PhraseHit::Wake => "match=wake",
-                PhraseHit::Sleep => "match=sleep",
-                PhraseHit::Hibernate => "match=hibernate",
-                PhraseHit::None => "match=none",
-            }
+        let match_label = match detail.hit {
+            PhraseHit::Wake => "match=wake",
+            PhraseHit::Sleep => "match=sleep",
+            PhraseHit::Hibernate => "match=hibernate",
+            PhraseHit::None => "match=none",
         };
         let profile = self.soul.profile_log_token();
         let state = wire_state(self.machine.state()).as_str();
@@ -943,16 +931,6 @@ impl Runtime {
                 sleep: &sleep,
                 hibernate: &hibernate,
             })
-        );
-    }
-
-    fn log_kws_silence_reset(&self) {
-        if self.verbosity == 0 {
-            return;
-        }
-        eprintln!(
-            "{}",
-            crate::verbose_log::format_kws_silence(&self.soul.profile_log_token())
         );
     }
 
@@ -1113,10 +1091,6 @@ impl Runtime {
             }
             Err(error) => Self::rejected(map_err(error)),
         }
-    }
-
-    fn speech_samples(auto: usize, talk: usize) -> u64 {
-        u64::try_from(auto.max(talk)).unwrap_or(u64::MAX)
     }
 
     fn quiet(snapshot: Status) -> Outcome {
@@ -1724,6 +1698,54 @@ mod tests {
             )),
             "expected sleep→awake event, got {events:?}"
         );
+    }
+
+    /// Bare `sleep` must still apply after a long awake utterance.
+    ///
+    /// The withdrawn gate ignored short keywords once free speech had buffered
+    /// `24_000` samples (1.5 s at 16 kHz). This fills past that point, then
+    /// scores keyword `sleep`. Reintroducing the suppress turns this into a
+    /// stay-awake failure.
+    #[test]
+    fn short_sleep_stands_after_a_long_awake_buffer() {
+        let _guard = softwake_voice::INPUT_MUTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        softwake_voice::clear_input_mute_for_test();
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        runtime.machine.advance(Duration::from_millis(800));
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Awake);
+
+        // 20 ms frames. Stay loud so the energy gate keeps the utterance open
+        // (silence would end it and clear the buffer before the keyword).
+        let loud = vec![8_000_i16; 320];
+        let mut pushed = 0_u32;
+        while runtime.auto_utt.buffered_samples() < 24_000 {
+            assert!(
+                runtime.capture_mock().push_frame(&loud),
+                "capture stopped while filling the awake buffer"
+            );
+            runtime.drain_pcm();
+            pushed += 1;
+            assert!(
+                pushed < 400,
+                "utterance closed before 1.5 s of speech was buffered"
+            );
+        }
+        assert!(runtime.auto_utt.is_buffering());
+        assert!(
+            runtime.pending_auto_pcm.is_none(),
+            "the utterance must still be open when sleep is scored"
+        );
+        assert!(runtime.auto_utt.buffered_samples() >= 24_000);
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Awake);
+
+        runtime.install_scripted_pcm_keywords([(PhraseHit::Sleep, "sleep")]);
+        assert!(runtime.capture_mock().push_frame(&loud));
+        runtime.drain_pcm();
+        assert_eq!(runtime.last_pcm_hit, Some(PhraseHit::Sleep));
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Sleep);
     }
 
     #[test]
