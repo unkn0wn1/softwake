@@ -24,7 +24,11 @@ mod xdg;
 pub use energy_utt::{EnergyUtterance, SILENCE_FRAMES_END, SILENCE_RMS, START_FRAMES, START_RMS};
 pub use mock::{MockStt, MockTts};
 pub use pcm_wav::{TALK_MAX_SAMPLES, TALK_MIN_SAMPLES, TalkBuffer, wav_from_pcm16};
-pub use playback::{PLAYBACK_TIMEOUT, PlaybackMode, PlayedClip, interrupt_playback, play_audio};
+pub use playback::{
+    INPUT_MUTE_TEST_LOCK, PLAYBACK_MUTE_GRACE, PLAYBACK_TIMEOUT, PlaybackMode, PlayedClip,
+    begin_input_mute, clear_input_mute_for_test, end_input_mute, input_muted, interrupt_playback,
+    play_audio,
+};
 #[cfg(feature = "sherpa-asr")]
 pub use sherpa_asr::SherpaAsr;
 #[cfg(feature = "sherpa-tts")]
