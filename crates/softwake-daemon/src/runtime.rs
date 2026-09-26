@@ -116,7 +116,11 @@ impl Runtime {
         soul_dir: SoulDir,
         kind: CaptureKind,
     ) -> Result<Self, crate::capture::CaptureError> {
-        Self::with_capture_verbosity(soul_dir, kind, 0)
+        let mut runtime = Self::with_capture_verbosity(soul_dir, kind, 0)?;
+        // Existing tests count SILENCE_FRAMES_END. The operator's softwake.json
+        // and SOFTWAKE_FREE_SPEECH_END_SILENCE_MS must not change that count.
+        runtime.auto_utt = EnergyUtterance::new();
+        Ok(runtime)
     }
 
     /// Sleep with capture and stderr verbosity (`0` / `-v` / `-vv`).
@@ -159,7 +163,9 @@ impl Runtime {
             stt: MockStt::default(),
             tts: MockTts::default(),
             talk: crate::talk::TalkSession::default(),
-            auto_utt: EnergyUtterance::new(),
+            auto_utt: EnergyUtterance::with_silence_frames_end(
+                crate::free_speech::resolve_free_speech_end_silence_frames(),
+            ),
             pending_auto_pcm: None,
             last_voice_activity: None,
             last_status_message: None,
@@ -1225,6 +1231,23 @@ impl Runtime {
         Self::quiet(self.snapshot(Some(note.clone()), Some(note)))
     }
 
+    /// Re-read free-speech end silence and update the energy gate.
+    ///
+    /// Does not rebuild the keyword spotter and does not change voice state.
+    /// An in-flight utterance keeps its samples; the next frame uses the new
+    /// silence count.
+    pub(crate) fn reload_utterance(&mut self) -> Outcome {
+        let frames = crate::free_speech::resolve_free_speech_end_silence_frames();
+        self.auto_utt.set_silence_frames_end(frames);
+        let ms = frames.saturating_mul(softwake_voice::CAPTURE_FRAME_MS);
+        if self.verbosity >= 1 {
+            eprintln!("softwaked: free-speech end silence updated live ({ms} ms)");
+        }
+        let note = format!("free-speech end silence reloaded ({ms} ms)");
+        self.retain_status_text(Some(note.clone()), Some(note.clone()));
+        Self::quiet(self.snapshot(Some(note.clone()), Some(note)))
+    }
+
     /// Apply a KWS hit to the voice machine when the state allows it.
     fn apply_pcm_hit(&mut self, hit: PhraseHit) -> Vec<WireEvent> {
         match hit {
@@ -2128,6 +2151,49 @@ mod tests {
             "unexpected message: {message}"
         );
         assert_eq!(runtime.pcm_agent, before);
+    }
+
+    #[test]
+    fn reload_utterance_updates_silence_without_rebuilding_kws_or_resetting_audio() {
+        let _guard = softwake_voice::INPUT_MUTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        softwake_voice::clear_input_mute_for_test();
+        let (mut runtime, _soul) = valid_runtime();
+        runtime.install_scripted_pcm([PhraseHit::None]);
+        let sleep_state = runtime.machine.state();
+        let outcome = runtime.reload_utterance();
+        let message = outcome
+            .body
+            .status()
+            .and_then(|status| status.message.clone())
+            .unwrap_or_default();
+        assert!(
+            message.contains("free-speech end silence reloaded"),
+            "unexpected message: {message}"
+        );
+        assert_eq!(runtime.machine.state(), sleep_state);
+        assert_eq!(runtime.pcm_agent, "scripted");
+        assert!(matches!(&runtime.pcm, crate::pcm::PcmEngine::Scripted(_)));
+        assert_eq!(
+            runtime.auto_utt.silence_frames_end(),
+            crate::free_speech::resolve_free_speech_end_silence_frames()
+        );
+
+        wake(&mut runtime);
+        let loud = vec![8_000_i16; 320];
+        for _ in 0..8 {
+            assert!(runtime.capture_mock().push_frame(&loud));
+            runtime.drain_pcm();
+        }
+        assert!(runtime.auto_utt.is_buffering());
+        let stored = runtime.auto_utt.buffered_samples();
+        let awake_state = runtime.machine.state();
+        runtime.reload_utterance();
+        assert_eq!(runtime.machine.state(), awake_state);
+        assert_eq!(runtime.pcm_agent, "scripted");
+        assert!(runtime.auto_utt.is_buffering());
+        assert_eq!(runtime.auto_utt.buffered_samples(), stored);
     }
 
     #[test]

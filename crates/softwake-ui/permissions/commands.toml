@@ -242,3 +242,13 @@ commands.allow = ["kws_thresholds_snapshot"]
 identifier = "allow-kws-thresholds-set"
 description = "Save KWS wake-word thresholds and apply them live to the daemon."
 commands.allow = ["kws_thresholds_set"]
+
+[[permission]]
+identifier = "allow-free-speech-silence-snapshot"
+description = "Read free-speech end-of-utterance silence for Settings General."
+commands.allow = ["free_speech_silence_snapshot"]
+
+[[permission]]
+identifier = "allow-free-speech-silence-set"
+description = "Save free-speech end-of-utterance silence and apply it live to the daemon."
+commands.allow = ["free_speech_silence_set"]

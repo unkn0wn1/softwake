@@ -1029,6 +1029,65 @@ if (kwsGlobalInput && kwsShortInput) {
   refreshKwsThresholds();
 }
 
+const freeSpeechSilenceInput = document.querySelector("#free-speech-silence");
+const freeSpeechSilenceStatus = document.querySelector("#free-speech-silence-status");
+const freeSpeechSilenceError = document.querySelector("#free-speech-silence-error");
+let freeSpeechSilenceTimer = null;
+
+function showFreeSpeechSilenceError(error) {
+  if (!freeSpeechSilenceError) return;
+  freeSpeechSilenceError.textContent =
+    typeof error === "string" ? error : error && error.message ? error.message : "request failed";
+}
+
+function applyFreeSpeechSilenceSnapshot(snap) {
+  if (freeSpeechSilenceInput && typeof snap.seconds === "number") {
+    freeSpeechSilenceInput.value = snap.seconds.toFixed(1);
+  }
+  if (freeSpeechSilenceStatus) {
+    freeSpeechSilenceStatus.textContent = snap.message || "";
+  }
+}
+
+async function refreshFreeSpeechSilence() {
+  if (!freeSpeechSilenceInput) return;
+  try {
+    if (freeSpeechSilenceError) freeSpeechSilenceError.textContent = "";
+    const snap = await invoke("free_speech_silence_snapshot");
+    applyFreeSpeechSilenceSnapshot(snap);
+  } catch (error) {
+    showFreeSpeechSilenceError(error);
+  }
+}
+
+async function saveFreeSpeechSilence() {
+  if (!freeSpeechSilenceInput) return;
+  const seconds = Number(freeSpeechSilenceInput.value);
+  try {
+    if (freeSpeechSilenceError) freeSpeechSilenceError.textContent = "";
+    const snap = await invoke("free_speech_silence_set", { seconds });
+    applyFreeSpeechSilenceSnapshot(snap);
+  } catch (error) {
+    showFreeSpeechSilenceError(error);
+    refreshFreeSpeechSilence();
+  }
+}
+
+function scheduleFreeSpeechSilenceSave() {
+  // Debounce live ReloadUtterance the same way KWS debounces ReloadKws.
+  if (freeSpeechSilenceTimer) clearTimeout(freeSpeechSilenceTimer);
+  freeSpeechSilenceTimer = setTimeout(() => {
+    freeSpeechSilenceTimer = null;
+    saveFreeSpeechSilence();
+  }, 450);
+}
+
+if (freeSpeechSilenceInput) {
+  freeSpeechSilenceInput.addEventListener("input", scheduleFreeSpeechSilenceSave);
+  freeSpeechSilenceInput.addEventListener("change", scheduleFreeSpeechSilenceSave);
+  refreshFreeSpeechSilence();
+}
+
 function showPane(name) {
   for (const pane of panes) {
     const section = document.querySelector(`#pane-${pane}`);

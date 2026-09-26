@@ -21,7 +21,10 @@ mod sherpa_asr;
 mod sherpa_tts;
 mod xdg;
 
-pub use energy_utt::{EnergyUtterance, SILENCE_FRAMES_END, SILENCE_RMS, START_FRAMES, START_RMS};
+pub use energy_utt::{
+    CAPTURE_FRAME_MS, EnergyUtterance, SILENCE_FRAMES_END, SILENCE_FRAMES_END_MAX,
+    SILENCE_FRAMES_END_MIN, SILENCE_RMS, START_FRAMES, START_RMS, silence_frames_from_ms,
+};
 pub use mock::{MockStt, MockTts};
 pub use pcm_wav::{TALK_MAX_SAMPLES, TALK_MIN_SAMPLES, TalkBuffer, wav_from_pcm16};
 pub use playback::{

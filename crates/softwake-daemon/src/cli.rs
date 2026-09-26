@@ -190,6 +190,8 @@ Usage:
   softwaked ctl sleep       sleep from awake
   softwaked ctl reload-soul re-read the soul pack; it applies on the next awake
   softwaked ctl reload-kws  rebuild the keyword spotter from softwake.json thresholds
+  softwaked ctl reload-utterance
+                            re-read free-speech end silence without rebuilding KWS
   softwaked ctl voice-test [on|off]
                             show or set voice test mode (default off; not saved)
   softwaked ctl tool NAME [ARG...]
@@ -459,7 +461,7 @@ fn parse_ctl(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
 fn ctl_command(positional: &[String]) -> Result<CtlAction, String> {
     match positional {
         [] => Err(
-            "ctl needs a command: status, hibernate, resume, wake, sleep, reload-soul, reload-kws, voice-test, tool, confirm-tool, cancel-tool, ask, chat"
+            "ctl needs a command: status, hibernate, resume, wake, sleep, reload-soul, reload-kws, reload-utterance, voice-test, tool, confirm-tool, cancel-tool, ask, chat"
                 .to_owned(),
         ),
         [name] if name == "tool" => Err("ctl tool needs a tool name".to_owned()),
@@ -759,6 +761,13 @@ mod tests {
             Ok(Mode::Ctl {
                 socket: Some(PathBuf::from("/tmp/sw.sock")),
                 command: CtlAction::ReloadSoul
+            })
+        );
+        assert_eq!(
+            parse_args(["ctl".to_owned(), "reload-utterance".to_owned()]),
+            Ok(Mode::Ctl {
+                socket: None,
+                command: CtlAction::ReloadUtterance
             })
         );
         assert_eq!(

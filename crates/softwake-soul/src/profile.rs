@@ -3,7 +3,7 @@
 //! Layout under the Softwake config root:
 //!
 //! ```text
-//! softwake.json                 # { "version": 1, "active_profile": "<id>", optional kws_*_milli }
+//! softwake.json                 # { "version": 1, "active_profile": "<id>", optional kws_*_milli, free_speech_end_silence_ms }
 //! profiles/<id>/profile.json    # { "id": "<id>", "name": "<agent name>" }
 //! profiles/<id>/{soul,user,rules,glossary}.md
 //! soul/                         # legacy pack; migration source only
@@ -45,7 +45,7 @@ const MAX_CONFIG_BYTES: u64 = 256 * 1024;
 
 const PACK_FILES: [&str; 4] = ["soul.md", "user.md", "rules.md", "glossary.md"];
 
-/// Softwake app Settings: which profile is active, plus optional KWS knobs.
+/// Softwake app Settings: which profile is active, plus KWS and free-speech knobs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
     /// Document version.
@@ -65,6 +65,13 @@ pub struct AppConfig {
     /// Settings → General and `SOFTWAKE_KWS_SHORT_THRESHOLD` target this key.
     #[serde(default = "default_kws_short_threshold_milli")]
     pub kws_short_threshold_milli: u16,
+    /// Free-speech end-of-utterance silence in milliseconds (2000 = 2.0 s).
+    ///
+    /// Missing key → product default. Settings → General writes this key.
+    /// `SOFTWAKE_FREE_SPEECH_END_SILENCE_MS` wins over the file when the daemon
+    /// resolves the hangover. Press-to-talk and wake-word spotting ignore it.
+    #[serde(default = "default_free_speech_end_silence_ms")]
+    pub free_speech_end_silence_ms: u32,
 }
 
 fn app_config_version() -> u32 {
@@ -79,6 +86,10 @@ fn default_kws_short_threshold_milli() -> u16 {
     100
 }
 
+fn default_free_speech_end_silence_ms() -> u32 {
+    FREE_SPEECH_END_SILENCE_MS_DEFAULT
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -86,6 +97,7 @@ impl Default for AppConfig {
             active_profile: DEFAULT_PROFILE_ID.to_owned(),
             kws_threshold_milli: default_kws_threshold_milli(),
             kws_short_threshold_milli: default_kws_short_threshold_milli(),
+            free_speech_end_silence_ms: default_free_speech_end_silence_ms(),
         }
     }
 }
@@ -305,6 +317,13 @@ pub const KWS_THRESHOLD_MILLI_MIN: u16 = 50;
 /// Highest milli accepted by Settings / `set_kws_thresholds` (0.50).
 pub const KWS_THRESHOLD_MILLI_MAX: u16 = 500;
 
+/// Default free-speech end-of-utterance silence (2.0 s).
+pub const FREE_SPEECH_END_SILENCE_MS_DEFAULT: u32 = 2000;
+/// Lowest milliseconds accepted by Settings (0.5 s).
+pub const FREE_SPEECH_END_SILENCE_MS_MIN: u32 = 500;
+/// Highest milliseconds accepted by Settings (4.0 s).
+pub const FREE_SPEECH_END_SILENCE_MS_MAX: u32 = 4000;
+
 /// Clamp a milli threshold into [`KWS_THRESHOLD_MILLI_MIN`]..=[`KWS_THRESHOLD_MILLI_MAX`].
 #[must_use]
 pub fn clamp_kws_threshold_milli(value: u16) -> u16 {
@@ -329,6 +348,32 @@ pub fn set_kws_thresholds(
     config.version = APP_CONFIG_VERSION;
     config.kws_threshold_milli = clamp_kws_threshold_milli(global_milli);
     config.kws_short_threshold_milli = clamp_kws_threshold_milli(short_milli);
+    write_app_config(config_dir, &config)?;
+    Ok(config)
+}
+
+/// Clamp free-speech end silence into 500..=4000 ms.
+#[must_use]
+pub fn clamp_free_speech_end_silence_ms(value: u32) -> u32 {
+    value.clamp(
+        FREE_SPEECH_END_SILENCE_MS_MIN,
+        FREE_SPEECH_END_SILENCE_MS_MAX,
+    )
+}
+
+/// Write free-speech end silence into `softwake.json`, preserving other keys.
+///
+/// Values are clamped to 500..=4000 ms. The daemon applies
+/// `SOFTWAKE_FREE_SPEECH_END_SILENCE_MS` over this file on resolve.
+///
+/// # Errors
+///
+/// Config path or write failure.
+pub fn set_free_speech_end_silence_ms(config_dir: &Path, ms: u32) -> Result<AppConfig, SoulError> {
+    ensure_migrated(config_dir)?;
+    let mut config = load_app_config(config_dir).unwrap_or_default();
+    config.version = APP_CONFIG_VERSION;
+    config.free_speech_end_silence_ms = clamp_free_speech_end_silence_ms(ms);
     write_app_config(config_dir, &config)?;
     Ok(config)
 }
@@ -755,7 +800,15 @@ mod tests {
         let app: AppConfig = serde_json::from_slice(raw).expect("parse");
         assert_eq!(app.kws_threshold_milli, 150);
         assert_eq!(app.kws_short_threshold_milli, 100);
+        assert_eq!(
+            app.free_speech_end_silence_ms,
+            FREE_SPEECH_END_SILENCE_MS_DEFAULT
+        );
         assert_eq!(AppConfig::default().kws_threshold_milli, 150);
+        assert_eq!(
+            AppConfig::default().free_speech_end_silence_ms,
+            FREE_SPEECH_END_SILENCE_MS_DEFAULT
+        );
     }
 
     #[test]
@@ -773,5 +826,33 @@ mod tests {
         assert_eq!(clamped.kws_short_threshold_milli, KWS_THRESHOLD_MILLI_MAX);
         // active_profile preserved
         assert_eq!(clamped.active_profile, DEFAULT_PROFILE_ID);
+        assert_eq!(
+            clamped.free_speech_end_silence_ms,
+            FREE_SPEECH_END_SILENCE_MS_DEFAULT
+        );
+    }
+
+    #[test]
+    fn set_free_speech_end_silence_round_trips_and_clamps() {
+        let root = TempDir::new("fs-silence");
+        ensure_migrated(&root.path).expect("migrate");
+        let written = set_free_speech_end_silence_ms(&root.path, 1500).expect("write");
+        assert_eq!(written.free_speech_end_silence_ms, 1500);
+        assert_eq!(written.kws_threshold_milli, 150);
+        assert_eq!(written.kws_short_threshold_milli, 100);
+        let loaded = load_app_config(&root.path).expect("load");
+        assert_eq!(loaded.free_speech_end_silence_ms, 1500);
+        let low = set_free_speech_end_silence_ms(&root.path, 1).expect("clamp low");
+        assert_eq!(
+            low.free_speech_end_silence_ms,
+            FREE_SPEECH_END_SILENCE_MS_MIN
+        );
+        let high = set_free_speech_end_silence_ms(&root.path, 99_000).expect("clamp high");
+        assert_eq!(
+            high.free_speech_end_silence_ms,
+            FREE_SPEECH_END_SILENCE_MS_MAX
+        );
+        assert_eq!(high.active_profile, DEFAULT_PROFILE_ID);
+        assert_eq!(high.kws_threshold_milli, 150);
     }
 }

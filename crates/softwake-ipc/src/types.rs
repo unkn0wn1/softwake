@@ -642,6 +642,16 @@ pub enum ClientMessage {
         /// Client-chosen id. The daemon echoes it and does not interpret it.
         id: u64,
     },
+    /// Re-read free-speech end silence from `softwake.json` (then env) and
+    /// update the energy gate without rebuilding the keyword spotter.
+    ///
+    /// Additive on protocol generation 1. Settings → General writes the file
+    /// then sends this so the hangover applies live. Wake/sleep state is
+    /// unchanged. An in-flight utterance keeps its buffer.
+    ReloadUtterance {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+    },
 }
 
 /// Daemon messages after a client connects.
@@ -956,6 +966,10 @@ mod tests {
         assert_round_trip(&reload_kws);
         let reload_kws_json = serde_json::to_string(&reload_kws).expect("encode");
         assert!(reload_kws_json.contains("\"type\":\"reload_kws\""));
+        let reload_utterance = ClientMessage::ReloadUtterance { id: 16 };
+        assert_round_trip(&reload_utterance);
+        let reload_utterance_json = serde_json::to_string(&reload_utterance).expect("encode");
+        assert!(reload_utterance_json.contains("\"type\":\"reload_utterance\""));
         let talk_stop_json = serde_json::to_string(&talk_stop).expect("encode");
         assert!(talk_stop_json.contains("\"type\":\"talk_stop\""));
         let talk_rejected = IpcError::TalkRejected {
