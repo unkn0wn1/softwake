@@ -61,6 +61,17 @@ const toolsStatus = document.querySelector("#tools-status");
 const toolsError = document.querySelector("#tools-error");
 const emailClearPasswordBtn = document.querySelector("#email-clear-password");
 const emailTestBtn = document.querySelector("#email-test");
+const emailGoogleStatus = document.querySelector("#email-google-status");
+const emailMicrosoftStatus = document.querySelector("#email-microsoft-status");
+const emailOauthPending = document.querySelector("#email-oauth-pending");
+const emailOauthUrlLine = document.querySelector("#email-oauth-url-line");
+const emailOauthLink = document.querySelector("#email-oauth-link");
+const emailOauthCancelBtn = document.querySelector("#email-oauth-cancel");
+const emailOauthError = document.querySelector("#email-oauth-error");
+const emailGoogleConnectBtn = document.querySelector("#email-google-connect");
+const emailGoogleDisconnectBtn = document.querySelector("#email-google-disconnect");
+const emailMicrosoftConnectBtn = document.querySelector("#email-microsoft-connect");
+const emailMicrosoftDisconnectBtn = document.querySelector("#email-microsoft-disconnect");
 const plaintextWarning = document.querySelector("#plaintext-warning");
 const usePlaintextBtn = document.querySelector("#use-plaintext-file");
 
@@ -805,31 +816,41 @@ function renderEmail(snap) {
     emailTestStatus.textContent = "Test: not run";
   }
   emailStorage.textContent = snap.storage_message || "";
-  emailGoogleStatus.textContent = snap.google_connected
-    ? "Connected as " + (snap.google_email || "(no email)")
-    : "Not connected";
-  emailMicrosoftStatus.textContent = snap.microsoft_connected
-    ? "Connected as " + (snap.microsoft_email || "(no email)")
-    : "Not connected";
-  const pending = snap.oauth_pending || "none";
-  emailOauthPending.textContent =
-    pending !== "none"
-      ? (snap.oauth_message || "Connecting " + pending + "…")
-      : "";
-  if (pending !== "none" && snap.oauth_authorize_url) {
-    emailOauthUrlLine.classList.remove("hidden");
-    emailOauthLink.href = snap.oauth_authorize_url;
-    emailOauthLink.textContent = snap.oauth_authorize_url;
-  } else {
-    emailOauthUrlLine.classList.add("hidden");
-    emailOauthLink.removeAttribute("href");
-    emailOauthLink.textContent = "";
+  if (emailGoogleStatus) {
+    emailGoogleStatus.textContent = snap.google_connected
+      ? "Connected as " + (snap.google_email || "(no email)")
+      : "Not connected";
   }
-  emailOauthError.textContent = snap.oauth_error || "";
+  if (emailMicrosoftStatus) {
+    emailMicrosoftStatus.textContent = snap.microsoft_connected
+      ? "Connected as " + (snap.microsoft_email || "(no email)")
+      : "Not connected";
+  }
+  const pending = snap.oauth_pending || "none";
+  if (emailOauthPending) {
+    emailOauthPending.textContent =
+      pending !== "none"
+        ? (snap.oauth_message || "Connecting " + pending + "…")
+        : "";
+  }
+  if (emailOauthUrlLine && emailOauthLink) {
+    if (pending !== "none" && snap.oauth_authorize_url) {
+      emailOauthUrlLine.classList.remove("hidden");
+      emailOauthLink.href = snap.oauth_authorize_url;
+      emailOauthLink.textContent = snap.oauth_authorize_url;
+    } else {
+      emailOauthUrlLine.classList.add("hidden");
+      emailOauthLink.removeAttribute("href");
+      emailOauthLink.textContent = "";
+    }
+  }
+  if (emailOauthError) {
+    emailOauthError.textContent = snap.oauth_error || "";
+  }
   const busy = pending !== "none";
-  emailGoogleConnectBtn.disabled = busy;
-  emailMicrosoftConnectBtn.disabled = busy;
-  emailOauthCancelBtn.disabled = !busy;
+  if (emailGoogleConnectBtn) emailGoogleConnectBtn.disabled = busy;
+  if (emailMicrosoftConnectBtn) emailMicrosoftConnectBtn.disabled = busy;
+  if (emailOauthCancelBtn) emailOauthCancelBtn.disabled = !busy;
   if (busy) {
     ensureEmailOauthPoll();
   } else {
@@ -894,21 +915,31 @@ function ensureEmailOauthPoll() {
     refreshEmail().catch(() => {});
   }, 1000);
 }
-emailGoogleConnectBtn.addEventListener("click", () => {
-  emailAction("email_oauth_connect", { provider: "google" });
-});
-emailGoogleDisconnectBtn.addEventListener("click", () => {
-  emailAction("email_oauth_disconnect", { provider: "google" });
-});
-emailMicrosoftConnectBtn.addEventListener("click", () => {
-  emailAction("email_oauth_connect", { provider: "microsoft" });
-});
-emailMicrosoftDisconnectBtn.addEventListener("click", () => {
-  emailAction("email_oauth_disconnect", { provider: "microsoft" });
-});
-emailOauthCancelBtn.addEventListener("click", () => {
-  emailAction("email_oauth_cancel");
-});
+if (emailGoogleConnectBtn) {
+  emailGoogleConnectBtn.addEventListener("click", () => {
+    emailAction("email_oauth_connect", { provider: "google" });
+  });
+}
+if (emailGoogleDisconnectBtn) {
+  emailGoogleDisconnectBtn.addEventListener("click", () => {
+    emailAction("email_oauth_disconnect", { provider: "google" });
+  });
+}
+if (emailMicrosoftConnectBtn) {
+  emailMicrosoftConnectBtn.addEventListener("click", () => {
+    emailAction("email_oauth_connect", { provider: "microsoft" });
+  });
+}
+if (emailMicrosoftDisconnectBtn) {
+  emailMicrosoftDisconnectBtn.addEventListener("click", () => {
+    emailAction("email_oauth_disconnect", { provider: "microsoft" });
+  });
+}
+if (emailOauthCancelBtn) {
+  emailOauthCancelBtn.addEventListener("click", () => {
+    emailAction("email_oauth_cancel");
+  });
+}
 
 
 function showToolsError(error) {
