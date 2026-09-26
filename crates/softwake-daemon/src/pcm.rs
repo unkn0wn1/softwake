@@ -113,6 +113,20 @@ impl PcmEngine {
         }
     }
 
+    /// Feed the probe stream. No-op for null / scripted engines.
+    ///
+    /// The probe threshold is unchanged. Turning this on does not make a
+    /// near-miss into a fire hit.
+    #[allow(clippy::unused_self)] // Only the sherpa variant holds the flag.
+    pub(crate) fn set_near_miss_probe(&mut self, enabled: bool) {
+        #[cfg(feature = "sherpa-kws")]
+        if let Self::Sherpa(detector) = self {
+            detector.set_near_miss_probe(enabled);
+        }
+        #[cfg(not(feature = "sherpa-kws"))]
+        let _ = enabled;
+    }
+
     /// Stable backend label for startup / verbose logs.
     #[must_use]
     pub(crate) fn backend_name(&self) -> &'static str {
@@ -186,7 +200,7 @@ impl PcmEngine {
             Self::Sherpa(detector) => detector.push_samples_detailed(samples),
             #[cfg(test)]
             Self::Scripted(detector) => {
-                let (hit, keyword) = detector.pop_detailed();
+                let (hit, keyword, near_miss) = detector.pop_detailed();
                 let keyword = keyword.or_else(|| match hit {
                     PhraseHit::Wake => Some("scripted-wake".to_owned()),
                     PhraseHit::Sleep => Some("scripted-sleep".to_owned()),
@@ -196,7 +210,7 @@ impl PcmEngine {
                 SpotDetail {
                     hit,
                     keyword,
-                    near_miss: None,
+                    near_miss,
                 }
             }
         }
@@ -215,6 +229,15 @@ impl PcmEngine {
         S: Into<String>,
     {
         Self::Scripted(softwake_wake::ScriptedDetector::with_keywords(hits))
+    }
+
+    /// Install scripted probe near-misses (tests only). Each window is [`PhraseHit::None`].
+    #[cfg(test)]
+    pub(crate) fn scripted_near_misses<S>(keywords: impl IntoIterator<Item = S>) -> Self
+    where
+        S: Into<String>,
+    {
+        Self::Scripted(softwake_wake::ScriptedDetector::with_near_misses(keywords))
     }
 
     /// One-shot startup summary (profile phrases, backend, weights).

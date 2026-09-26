@@ -22,6 +22,8 @@ mod ctl;
 mod demo;
 mod dispatch;
 mod email_tool;
+mod mode_confirm;
+mod mode_intent;
 mod pcm;
 mod runtime;
 mod serve;

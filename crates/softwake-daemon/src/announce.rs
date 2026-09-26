@@ -91,31 +91,27 @@ pub(crate) fn spawn_announcement(
         });
 }
 
+/// Speak `line` as-is. Confirm prompts skip the one-shot completion so the
+/// 15s answer window is not spent waiting on a model.
+#[cfg(not(test))]
+pub(crate) fn spawn_fixed_line(line: String, profile: String, verbosity: u8) {
+    let _ = thread::Builder::new()
+        .name("softwake-state-voice".to_owned())
+        .spawn(move || {
+            let _guard = speak_lock()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(ready) = prepare_speaker(&profile, verbosity) {
+                playback(&ready, &line, &profile, verbosity);
+            }
+        });
+}
+
 #[cfg(not(test))]
 fn speak_now(system: &str, state: VoiceState, prompt: &str, profile: &str, verbosity: u8) {
-    let ready = match crate::chat::load_disk_chat() {
-        Ok(ready) => ready,
-        Err(message) => {
-            log_skip(
-                verbosity,
-                profile,
-                &format!("state voice skipped: {message}"),
-            );
-            return;
-        }
+    let Some(ready) = prepare_speaker(profile, verbosity) else {
+        return;
     };
-    if !family_speaks_xai(ready.prepared.provider) {
-        log_skip(
-            verbosity,
-            profile,
-            "state voice skipped: provider has no TTS",
-        );
-        return;
-    }
-    if resolve_tts_voice(ready.prepared.provider, ready.prepared_tts_voice()).is_none() {
-        log_skip(verbosity, profile, "state voice skipped: no TTS voice");
-        return;
-    }
     let line = if system.trim().is_empty() {
         fallback_line(state).to_owned()
     } else {
@@ -130,7 +126,41 @@ fn speak_now(system: &str, state: VoiceState, prompt: &str, profile: &str, verbo
             _ => fallback_line(state).to_owned(),
         }
     };
-    if let Err(message) = crate::talk::speak_reply(&ready, &line) {
+    playback(&ready, &line, profile, verbosity);
+}
+
+/// Load chat settings when this profile can speak. Logs and returns `None` otherwise.
+#[cfg(not(test))]
+fn prepare_speaker(profile: &str, verbosity: u8) -> Option<crate::chat::DiskChat> {
+    let ready = match crate::chat::load_disk_chat() {
+        Ok(ready) => ready,
+        Err(message) => {
+            log_skip(
+                verbosity,
+                profile,
+                &format!("state voice skipped: {message}"),
+            );
+            return None;
+        }
+    };
+    if !family_speaks_xai(ready.prepared.provider) {
+        log_skip(
+            verbosity,
+            profile,
+            "state voice skipped: provider has no TTS",
+        );
+        return None;
+    }
+    if resolve_tts_voice(ready.prepared.provider, ready.prepared_tts_voice()).is_none() {
+        log_skip(verbosity, profile, "state voice skipped: no TTS voice");
+        return None;
+    }
+    Some(ready)
+}
+
+#[cfg(not(test))]
+fn playback(ready: &crate::chat::DiskChat, line: &str, profile: &str, verbosity: u8) {
+    if let Err(message) = crate::talk::speak_reply(ready, line) {
         let hint = if message.contains("rejected the credentials") {
             format!(
                 "state voice skipped: {message} Re-run Providers Test or re-sign in (xAI OAuth)."

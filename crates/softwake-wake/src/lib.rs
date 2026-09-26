@@ -75,7 +75,8 @@ pub struct SpotDetail {
     /// Raw keyword tag from the spotter (`@sally`, `sally`, …), when any.
     pub keyword: Option<String>,
     /// Keyword seen on the low-threshold probe stream but not on the fire
-    /// stream. Used for `-vv` near-miss logs. Never drives a state change.
+    /// stream. Used for `-vv` near-miss logs and, while asleep, a fuzzy-wake
+    /// question. Never drives a state change by itself.
     pub near_miss: Option<String>,
 }
 
@@ -107,6 +108,8 @@ pub struct ScriptedDetector {
     hits: std::collections::VecDeque<PhraseHit>,
     /// Raw keyword queued with each hit. `None` lets the caller pick a tag.
     keywords: std::collections::VecDeque<Option<String>>,
+    /// Probe keyword queued with each hit. `None` when the window did not near-miss.
+    near_misses: std::collections::VecDeque<Option<String>>,
 }
 
 impl ScriptedDetector {
@@ -115,7 +118,12 @@ impl ScriptedDetector {
     pub fn new(hits: impl IntoIterator<Item = PhraseHit>) -> Self {
         let hits: std::collections::VecDeque<PhraseHit> = hits.into_iter().collect();
         let keywords = (0..hits.len()).map(|_| None).collect();
-        Self { hits, keywords }
+        let near_misses = (0..hits.len()).map(|_| None).collect();
+        Self {
+            hits,
+            keywords,
+            near_misses,
+        }
     }
 
     /// Queue hits with the raw keyword tag a spotter would report.
@@ -133,15 +141,45 @@ impl ScriptedDetector {
             hits.push_back(hit);
             keywords.push_back(Some(keyword.into()));
         }
-        Self { hits, keywords }
+        let near_misses = (0..hits.len()).map(|_| None).collect();
+        Self {
+            hits,
+            keywords,
+            near_misses,
+        }
     }
 
-    /// Pop the next hit and its keyword, if one was queued.
+    /// Queue probe near-misses that are not fire hits.
+    ///
+    /// Each window scores [`PhraseHit::None`] and reports `keyword` on
+    /// [`crate::SpotDetail::near_miss`].
     #[must_use]
-    pub fn pop_detailed(&mut self) -> (PhraseHit, Option<String>) {
+    pub fn with_near_misses<S>(keywords: impl IntoIterator<Item = S>) -> Self
+    where
+        S: Into<String>,
+    {
+        let mut hits = std::collections::VecDeque::new();
+        let mut keywords_q = std::collections::VecDeque::new();
+        let mut near_misses = std::collections::VecDeque::new();
+        for keyword in keywords {
+            hits.push_back(PhraseHit::None);
+            keywords_q.push_back(None);
+            near_misses.push_back(Some(keyword.into()));
+        }
+        Self {
+            hits,
+            keywords: keywords_q,
+            near_misses,
+        }
+    }
+
+    /// Pop the next hit, fire keyword, and near-miss keyword.
+    #[must_use]
+    pub fn pop_detailed(&mut self) -> (PhraseHit, Option<String>, Option<String>) {
         let hit = self.hits.pop_front().unwrap_or(PhraseHit::None);
         let keyword = self.keywords.pop_front().flatten();
-        (hit, keyword)
+        let near_miss = self.near_misses.pop_front().flatten();
+        (hit, keyword, near_miss)
     }
 }
 
@@ -177,6 +215,16 @@ mod tests {
         assert_eq!(detector.push_samples(&[]), PhraseHit::Wake);
         assert_eq!(detector.push_samples(&[0]), PhraseHit::None);
         assert_eq!(detector.push_samples(&[1, 2]), PhraseHit::Sleep);
+    }
+
+    #[test]
+    fn scripted_near_miss_is_separate_from_the_hit() {
+        let mut detector = ScriptedDetector::with_near_misses(["sally"]);
+        let (hit, keyword, near_miss) = detector.pop_detailed();
+        assert_eq!(hit, PhraseHit::None);
+        assert_eq!(keyword, None);
+        assert_eq!(near_miss.as_deref(), Some("sally"));
+        assert_eq!(detector.push_samples(&[0]), PhraseHit::None);
         assert_eq!(detector.push_samples(&[]), PhraseHit::None);
     }
 
@@ -185,8 +233,8 @@ mod tests {
         let mut detector = ScriptedDetector::with_keywords([(PhraseHit::Sleep, "sleep")]);
         assert_eq!(
             detector.pop_detailed(),
-            (PhraseHit::Sleep, Some("sleep".to_owned()))
+            (PhraseHit::Sleep, Some("sleep".to_owned()), None)
         );
-        assert_eq!(detector.pop_detailed(), (PhraseHit::None, None));
+        assert_eq!(detector.pop_detailed(), (PhraseHit::None, None, None));
     }
 }

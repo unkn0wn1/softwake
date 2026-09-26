@@ -151,6 +151,14 @@ impl Machine {
         }
     }
 
+    /// Whether `event` is still inside its phrase cooldown.
+    ///
+    /// Does not change the machine. UI events are never cooling.
+    #[must_use]
+    pub fn phrase_cooling(&self, event: Event) -> bool {
+        self.cooldown_remaining(event).is_some()
+    }
+
     // Each arm names the phrase that gate blocks. `let...else` hides that pairing.
     #[allow(clippy::manual_let_else)]
     fn cooldown_remaining(&self, event: Event) -> Option<Duration> {
@@ -224,6 +232,22 @@ mod tests {
         let config = CooldownConfig::default();
         assert_eq!(config.post_wake, Duration::from_millis(800));
         assert_eq!(config.post_sleep, Duration::from_millis(800));
+    }
+
+    #[test]
+    fn phrase_cooling_tracks_the_gate_without_applying() {
+        let mut machine = Machine::new(CooldownConfig::default());
+        assert!(!machine.phrase_cooling(Event::WakePhrase));
+        assert!(!machine.phrase_cooling(Event::SleepPhrase));
+        machine.apply(Event::WakePhrase).expect("wake");
+        assert!(machine.phrase_cooling(Event::SleepPhrase));
+        assert!(!machine.phrase_cooling(Event::WakePhrase));
+        assert!(!machine.phrase_cooling(Event::UiSleep));
+        machine.advance(Duration::from_millis(800));
+        assert!(!machine.phrase_cooling(Event::SleepPhrase));
+        machine.apply(Event::SleepPhrase).expect("sleep");
+        assert!(machine.phrase_cooling(Event::WakePhrase));
+        assert!(!machine.phrase_cooling(Event::UiResume));
     }
 
     #[test]
