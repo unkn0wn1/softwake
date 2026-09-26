@@ -36,7 +36,7 @@ jobs:
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install UI and PipeWire system libraries
+      - name: Install UI, PipeWire, and AppImage system libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -47,17 +47,30 @@ jobs:
             libxdo-dev \
             libssl-dev \
             libdbus-1-dev \
-            libpipewire-0.3-dev
+            libpipewire-0.3-dev \
+            libfuse2 \
+            desktop-file-utils
+
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "^2" --locked
 
       - name: Build release binaries
-        # PipeWire capture linked; sherpa-kws omitted here so Releases do not
-        # download ONNX weights in CI. Operators who need KWS build with
-        # --features sherpa-kws locally or we add a follow-up job.
+        # softwaked ctl is the same binary. sherpa-kws omitted so Releases do
+        # not download ONNX weights in CI.
         run: |
           cargo build --release -p softwake-daemon --features live-http,pipewire-capture
           cargo build --release -p softwake-ui --features live-http
 
-      - name: Stage archive
+      - name: Stage softwaked sidecar for Tauri
+        run: ./scripts/stage-sidecar.sh
+
+      - name: Build AppImage (softwake-ui + softwaked)
+        working-directory: crates/softwake-ui
+        env:
+          NO_STRIP: true
+        run: cargo tauri build --bundles appimage --features live-http --config tauri.release.conf.json
+
+      - name: Stage Linux assets
         run: |
           VERSION="${GITHUB_REF_NAME}"
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
@@ -65,16 +78,28 @@ jobs:
           fi
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
           STAGE="softwake-${VERSION}-linux-x86_64"
-          mkdir -p "${STAGE}"
+          mkdir -p "${STAGE}" dist-upload
           cp target/release/softwaked target/release/softwake-ui "${STAGE}/"
-          tar -czf "${STAGE}.tar.gz" "${STAGE}"
-          echo "ASSET=${STAGE}.tar.gz" >> "$GITHUB_ENV"
+          cp scripts/install-linux.sh "${STAGE}/"
+          cp packaging/softwaked.user.service packaging/softwake.desktop "${STAGE}/"
+          cp crates/softwake-ui/icons/icon.png "${STAGE}/softwake.png"
+          tar -czf "dist-upload/${STAGE}.tar.gz" "${STAGE}"
+          # Tauri writes under target/release/bundle/appimage/
+          APPIMAGE="$(find target/release/bundle/appimage -name '*.AppImage' -type f | head -n1)"
+          test -n "$APPIMAGE"
+          cp "$APPIMAGE" "dist-upload/softwake-${VERSION}-linux-x86_64.AppImage"
+          chmod +x "dist-upload/softwake-${VERSION}-linux-x86_64.AppImage"
+          ls -la dist-upload
+          echo "LINUX_TAR=dist-upload/${STAGE}.tar.gz" >> "$GITHUB_ENV"
+          echo "LINUX_APPIMAGE=dist-upload/softwake-${VERSION}-linux-x86_64.AppImage" >> "$GITHUB_ENV"
 
-      - name: Upload workflow artifact
+      - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
           name: softwake-linux-x86_64
-          path: ${{ env.ASSET }}
+          path: |
+            dist-upload/*.tar.gz
+            dist-upload/*.AppImage
 
       - name: Upload to GitHub Release
         if: github.event_name == 'push' || inputs.create_release == 'true'
@@ -83,7 +108,9 @@ jobs:
           tag_name: ${{ github.event_name == 'push' && github.ref_name || format('dispatch-{0}', github.sha) }}
           name: ${{ github.event_name == 'push' && github.ref_name || format('dispatch-{0}', github.sha) }}
           draft: ${{ github.event_name == 'workflow_dispatch' }}
-          files: ${{ env.ASSET }}
+          files: |
+            ${{ env.LINUX_TAR }}
+            ${{ env.LINUX_APPIMAGE }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -98,13 +125,26 @@ jobs:
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install tauri-cli
+        shell: bash
+        run: cargo install tauri-cli --version "^2" --locked
+
       - name: Build release binaries
         shell: bash
         run: |
           cargo build --release -p softwake-daemon --features live-http,wasapi-capture
           cargo build --release -p softwake-ui --features live-http
 
-      - name: Stage archive
+      - name: Stage softwaked sidecar for Tauri
+        shell: bash
+        run: ./scripts/stage-sidecar.sh
+
+      - name: Build NSIS setup.exe (softwake-ui + softwaked)
+        working-directory: crates/softwake-ui
+        shell: bash
+        run: cargo tauri build --bundles nsis --features live-http --config tauri.release.conf.json
+
+      - name: Stage Windows assets
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME}"
@@ -112,17 +152,26 @@ jobs:
             VERSION="dispatch-${GITHUB_SHA::7}"
           fi
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
-          STAGE="softwake-${VERSION}-windows-x86_64"
-          mkdir -p "${STAGE}"
-          cp target/release/softwaked.exe target/release/softwake-ui.exe "${STAGE}/"
-          powershell -Command "Compress-Archive -Path '${STAGE}' -DestinationPath '${STAGE}.zip'"
-          echo "ASSET=${STAGE}.zip" >> "$GITHUB_ENV"
+          mkdir -p dist-upload
+          PORTABLE="softwake-${VERSION}-windows-x86_64-portable"
+          mkdir -p "${PORTABLE}"
+          cp target/release/softwaked.exe target/release/softwake-ui.exe "${PORTABLE}/"
+          cp packaging/windows/start-softwake.bat "${PORTABLE}/"
+          powershell -Command "Compress-Archive -Path '${PORTABLE}' -DestinationPath 'dist-upload/${PORTABLE}.zip'"
+          SETUP="$(find target/release/bundle/nsis -name '*.exe' -type f | head -n1)"
+          test -n "$SETUP"
+          cp "$SETUP" "dist-upload/softwake-${VERSION}-windows-x86_64-setup.exe"
+          ls -la dist-upload
+          echo "WIN_PORTABLE=dist-upload/${PORTABLE}.zip" >> "$GITHUB_ENV"
+          echo "WIN_SETUP=dist-upload/softwake-${VERSION}-windows-x86_64-setup.exe" >> "$GITHUB_ENV"
 
-      - name: Upload workflow artifact
+      - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
           name: softwake-windows-x86_64
-          path: ${{ env.ASSET }}
+          path: |
+            dist-upload/*-portable.zip
+            dist-upload/*-setup.exe
 
       - name: Upload to GitHub Release
         if: github.event_name == 'push' || inputs.create_release == 'true'
@@ -131,7 +180,9 @@ jobs:
           tag_name: ${{ github.event_name == 'push' && github.ref_name || format('dispatch-{0}', github.sha) }}
           name: ${{ github.event_name == 'push' && github.ref_name || format('dispatch-{0}', github.sha) }}
           draft: ${{ github.event_name == 'workflow_dispatch' }}
-          files: ${{ env.ASSET }}
+          files: |
+            ${{ env.WIN_PORTABLE }}
+            ${{ env.WIN_SETUP }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

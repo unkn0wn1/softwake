@@ -1,14 +1,13 @@
-# Sample launcher for an installed softwake-ui binary.
-# Copy to ~/.local/share/applications/ once softwake-ui is on PATH.
-# Icon= is a theme name. Replace it with an icon you provide.
-# Start softwaked serve before opening the window.
 [Desktop Entry]
 Type=Application
 Version=1.0
 Name=Softwake
-Comment=Softwake settings window for the local daemon
+Comment=Softwake settings, tray, and HUD for the local softwaked daemon
 Exec=softwake-ui
 Icon=softwake
 Terminal=false
 Categories=Utility;
 StartupNotify=false
+# Prefer the systemd --user softwaked unit (see scripts/install-linux.sh).
+# The AppImage is portable and does not register that unit; softwake-ui
+# starts softwaked when nothing is listening.

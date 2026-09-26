@@ -1,0 +1,20 @@
+[Unit]
+Description=Softwake local daemon (softwaked serve)
+Documentation=https://github.com/unkn0wn1/softwake
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=@BINDIR@/softwaked serve
+Restart=on-failure
+RestartSec=2
+# Default capture is mock (no microphone). Linux releases built with
+# pipewire-capture can use a real mic after:
+#   systemctl --user edit softwaked
+# and set, for example:
+#   [Service]
+#   ExecStart=
+#   ExecStart=@BINDIR@/softwaked serve --capture pipewire
+
+[Install]
+WantedBy=default.target

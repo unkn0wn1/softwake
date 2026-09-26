@@ -8,6 +8,7 @@
 
 mod commands;
 mod email;
+mod ensure_daemon;
 mod hud_pos;
 mod oauth_open;
 mod pack;
@@ -74,6 +75,7 @@ pub fn run() {
             tools::tools_save,
         ])
         .setup(|app| {
+            ensure_daemon::ensure_daemon_running();
             tray::install(app.handle())?;
             open_hud(app.handle())?;
             Ok(())

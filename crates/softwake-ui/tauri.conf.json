@@ -22,6 +22,9 @@
   },
   "bundle": {
     "active": false,
-    "icon": ["icons/icon.png"]
+    "category": "Utility",
+    "shortDescription": "Softwake local assistant",
+    "longDescription": "Softwake settings window, system tray, and HUD. Release builds bundle softwaked beside the UI.",
+    "icon": ["icons/icon.png", "icons/icon.ico"]
   }
 }

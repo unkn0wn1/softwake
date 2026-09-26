@@ -1,0 +1,1 @@
+# Built sidecars (softwaked-$TARGET_TRIPLE) are staged by CI / scripts; not committed.
