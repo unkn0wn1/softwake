@@ -587,3 +587,13 @@ button.btn-primary.btn-compact {
   font-size: 0.95rem;
   font-weight: 600;
 }
+
+.chat-lock {
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--line, oklch(1 0 0 / 0.12));
+}
+.chat-lock .subhead {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+}

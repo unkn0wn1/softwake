@@ -93,6 +93,12 @@
 - [x] Keep `run` / `shell` / `ssh` ask heuristics; glossary expand on spawn
 - [x] Unit tests for schema + mock tool loop (no live ssh)
 
+## HUD chat history + UI unlock ([ADR-0026](ADR-0026-hud-chat-unlock.md))
+
+- [x] Per-profile `hud-chat.json` (display only, cap 40)
+- [x] Optional passphrase vault (Argon2id + ChaCha20-Poly1305) + keyring wrap
+- [x] HUD unlock overlay + Settings → General Chat lock
+
 ## Multi-platform releases
 
 Linux and Windows x86_64 GitHub Releases (AppImage, tar.gz + systemd --user install, Windows setup.exe + portable): [ADR 0019](ADR-0019-multiplatform-releases.md), [releases.md](releases.md).

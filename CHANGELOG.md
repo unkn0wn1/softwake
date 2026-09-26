@@ -4,6 +4,7 @@
 
 ### Added
 
+- Per-profile HUD chat history (`profiles/<id>/hud-chat.json`, display only) with optional softwake-ui passphrase unlock (Argon2id + ChaCha20-Poly1305) and OS keyring wrap (`softwake` / `ui-data-key`). See [ADR 0026](docs/ADR-0026-hud-chat-unlock.md).
 - Chat API tool-calling: non-deny Tools Settings tools are advertised on
   `/chat/completions`; the daemon runs a capped tool loop through Hands so
   natural asks can execute shell (and other tools) without saying `run …`

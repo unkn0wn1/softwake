@@ -17,6 +17,15 @@ const allowBar = document.querySelector("#hud-allow");
 const allowText = document.querySelector("#hud-allow-text");
 const allowYes = document.querySelector("#hud-allow-yes");
 const allowNo = document.querySelector("#hud-allow-no");
+const vaultGate = document.querySelector("#vault-gate");
+const vaultTitle = document.querySelector("#vault-title");
+const vaultHint = document.querySelector("#vault-hint");
+const vaultPassWrap = document.querySelector("#vault-pass-wrap");
+const vaultPass = document.querySelector("#vault-pass");
+const vaultError = document.querySelector("#vault-error");
+const vaultUnlockBtn = document.querySelector("#vault-unlock");
+const vaultSetBtn = document.querySelector("#vault-set");
+const vaultSkipBtn = document.querySelector("#vault-skip");
 
 const IDLE_MIN_MS = 1000;
 const IDLE_MAX_MS = 30000;
@@ -47,6 +56,10 @@ let allowOfferName = "";
 let viewW = 120;
 let viewH = 120;
 const turns = [];
+let profileId = "";
+let vaultUnlocked = false;
+let chatPersistReady = false;
+let chatSaveTimer = null;
 
 function invoke(command, args) {
   const core = window.__TAURI__ && window.__TAURI__.core;
@@ -332,9 +345,173 @@ function pushTurn(turn) {
   }
   if (overflow) {
     renderLog();
+  } else {
+    appendBubble(turn);
+  }
+  scheduleChatSave();
+}
+
+function scheduleChatSave() {
+  if (!chatPersistReady || !vaultUnlocked) {
     return;
   }
-  appendBubble(turn);
+  if (chatSaveTimer) {
+    window.clearTimeout(chatSaveTimer);
+  }
+  chatSaveTimer = window.setTimeout(() => {
+    chatSaveTimer = null;
+    void persistChat();
+  }, 250);
+}
+
+async function persistChat() {
+  if (!chatPersistReady || !vaultUnlocked) {
+    return;
+  }
+  try {
+    await invoke("hud_chat_save", {
+      profileId: profileId || null,
+      turns: turns.map((turn) => ({
+        role: turn.role,
+        name: turn.name,
+        text: turn.text,
+        ts: turn.ts,
+        error: !!turn.error,
+        note: turn.note || "",
+      })),
+    });
+  } catch (_error) {
+    // Keep the on-screen log; next successful save retries.
+  }
+}
+
+function replaceTurns(next) {
+  turns.length = 0;
+  for (const turn of next || []) {
+    turns.push({
+      role: turn.role || "assistant",
+      name: turn.name || "",
+      text: turn.text || "",
+      ts: Number(turn.ts) || Date.now(),
+      error: !!turn.error,
+      note: turn.note || "",
+    });
+  }
+  while (turns.length > MAX_TURNS) {
+    turns.shift();
+  }
+  renderLog();
+}
+
+function showVaultError(message) {
+  if (!vaultError) {
+    return;
+  }
+  const text = String(message || "").trim();
+  if (!text) {
+    vaultError.hidden = true;
+    vaultError.textContent = "";
+    return;
+  }
+  vaultError.hidden = false;
+  vaultError.textContent = text;
+}
+
+function setVaultGate(visible, mode) {
+  if (!vaultGate) {
+    return;
+  }
+  vaultGate.hidden = !visible;
+  if (!visible) {
+    return;
+  }
+  const unset = mode === "unset";
+  const locked = mode === "passphrase";
+  if (vaultTitle) {
+    vaultTitle.textContent = locked ? "Unlock chat history" : "Chat lock";
+  }
+  if (vaultHint) {
+    if (locked) {
+      vaultHint.textContent = "Enter your Softwake passphrase to show saved HUD chats for this profile.";
+    } else if (unset) {
+      vaultHint.textContent =
+        "Optional: set a passphrase to encrypt HUD chat history at rest. Skip keeps chats as plaintext on disk.";
+    } else {
+      vaultHint.textContent = "HUD chats are stored as plaintext. Set a passphrase anytime in Settings → General.";
+    }
+  }
+  if (vaultPassWrap) {
+    vaultPassWrap.hidden = !(locked || unset);
+  }
+  if (vaultUnlockBtn) {
+    vaultUnlockBtn.hidden = !locked;
+  }
+  if (vaultSetBtn) {
+    vaultSetBtn.hidden = !(unset || mode === "plaintext");
+  }
+  if (vaultSkipBtn) {
+    vaultSkipBtn.hidden = !unset;
+  }
+  showVaultError("");
+  if (visible) {
+    setExpanded(true);
+  }
+}
+
+async function loadChatForActiveProfile() {
+  if (!vaultUnlocked) {
+    return;
+  }
+  try {
+    const snap = await invoke("hud_chat_snapshot", { profileId: profileId || null });
+    if (snap && snap.profile_id) {
+      profileId = String(snap.profile_id);
+    }
+    replaceTurns((snap && snap.turns) || []);
+    chatPersistReady = true;
+  } catch (error) {
+    chatPersistReady = false;
+    const line = errorText(error, "could not load chat history");
+    if (String(line).includes("locked")) {
+      vaultUnlocked = false;
+      setVaultGate(true, "passphrase");
+    }
+  }
+}
+
+async function bootstrapVault() {
+  try {
+    await invoke("ui_vault_try_keyring");
+  } catch (_error) {
+    // Keyring missing is fine; fall through to status.
+  }
+  let status;
+  try {
+    status = await invoke("ui_vault_status");
+  } catch (_error) {
+    vaultUnlocked = true;
+    setVaultGate(false, "plaintext");
+    await loadChatForActiveProfile();
+    return;
+  }
+  const mode = (status && status.mode) || "unset";
+  const unlocked = !!(status && status.unlocked);
+  if (mode === "passphrase" && !unlocked) {
+    vaultUnlocked = false;
+    chatPersistReady = false;
+    setVaultGate(true, "passphrase");
+    return;
+  }
+  vaultUnlocked = true;
+  if (mode === "unset") {
+    setVaultGate(true, "unset");
+  } else if (mode === "plaintext" && status && status.plaintext_warning) {
+    // Soft one-line warning stays in Settings; HUD loads immediately.
+    setVaultGate(false, mode);
+  } else {
+    setVaultGate(false, mode);
+  }
+  await loadChatForActiveProfile();
 }
 
 function dropTrailingError() {
@@ -449,8 +626,21 @@ async function refreshProfileName(force) {
     const rows = (snap && snap.profiles) || [];
     const active = rows.find((row) => row && row.active);
     const name = active && active.name ? String(active.name).trim() : "";
+    const nextId = active && active.id ? String(active.id) : "";
     profileName = name || "Softwake";
     capsule.dataset.profile = profileName;
+    if (nextId && nextId !== profileId) {
+      const previous = profileId;
+      profileId = nextId;
+      if (previous && vaultUnlocked) {
+        await persistChat();
+        chatPersistReady = false;
+        replaceTurns([]);
+        await loadChatForActiveProfile();
+      }
+    } else if (nextId) {
+      profileId = nextId;
+    }
   } catch (_error) {
     capsule.dataset.profile = profileName;
   }
@@ -950,10 +1140,75 @@ if (allowNo) {
   });
 }
 
+if (vaultUnlockBtn) {
+  vaultUnlockBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const passphrase = vaultPass ? vaultPass.value : "";
+    invoke("ui_vault_unlock", { passphrase })
+      .then(async () => {
+        vaultUnlocked = true;
+        setVaultGate(false, "passphrase");
+        if (vaultPass) {
+          vaultPass.value = "";
+        }
+        await loadChatForActiveProfile();
+      })
+      .catch((error) => {
+        showVaultError(errorText(error, "unlock failed"));
+      });
+  });
+}
+if (vaultSetBtn) {
+  vaultSetBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const passphrase = vaultPass ? vaultPass.value : "";
+    invoke("ui_vault_set_passphrase", { passphrase, keyringWrap: true })
+      .then(async () => {
+        vaultUnlocked = true;
+        setVaultGate(false, "passphrase");
+        if (vaultPass) {
+          vaultPass.value = "";
+        }
+        await loadChatForActiveProfile();
+      })
+      .catch((error) => {
+        showVaultError(errorText(error, "could not set passphrase"));
+      });
+  });
+}
+if (vaultSkipBtn) {
+  vaultSkipBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    invoke("ui_vault_skip_plaintext")
+      .then(async () => {
+        vaultUnlocked = true;
+        setVaultGate(false, "plaintext");
+        await loadChatForActiveProfile();
+      })
+      .catch((error) => {
+        showVaultError(errorText(error, "could not skip"));
+      });
+  });
+}
+if (vaultPass) {
+  vaultPass.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (vaultUnlockBtn && !vaultUnlockBtn.hidden) {
+        vaultUnlockBtn.click();
+      } else if (vaultSetBtn && !vaultSetBtn.hidden) {
+        vaultSetBtn.click();
+      }
+    }
+  });
+}
+
 capsule.dataset.idleMs = String(configuredIdleMs);
 capsule.dataset.profile = profileName;
 updateHint();
-refresh();
-void refreshProfileName(true);
+void bootstrapVault().finally(() => {
+  refresh();
+  void refreshProfileName(true);
+});
 window.setInterval(refresh, 900);
 raf = requestAnimationFrame(tick);

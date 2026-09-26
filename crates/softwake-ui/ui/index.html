@@ -61,6 +61,32 @@
           </p>
           <p id="hud-idle-status" class="meta" role="status"></p>
           <p id="hud-idle-error" class="error" role="status"></p>
+          <div class="chat-lock" id="chat-lock">
+            <h3 class="subhead">Chat lock</h3>
+            <p id="chat-lock-status" class="meta" role="status">Status: …</p>
+            <p id="chat-lock-warning" class="meta" hidden>
+              HUD chat history is stored as plaintext on disk. Set a passphrase to encrypt it.
+            </p>
+            <label class="field">
+              <span>Passphrase</span>
+              <input id="chat-lock-pass" type="password" autocomplete="new-password" placeholder="At least 4 characters" />
+            </label>
+            <label class="field row-check">
+              <input id="chat-lock-keyring" type="checkbox" checked />
+              <span>Unlock with OS keyring</span>
+            </label>
+            <div class="row row-compact">
+              <button type="button" class="btn-primary btn-compact" id="chat-lock-set">Set / change passphrase</button>
+              <button type="button" class="btn-compact" id="chat-lock-lock">Lock now</button>
+            </div>
+            <p id="chat-lock-hint" class="meta">
+              Encrypts per-profile HUD chat history only (<code>profiles/&lt;id&gt;/hud-chat.json</code>).
+              This is display history for the HUD — it is not fed back into the model.
+              Softwaked never sees the passphrase. Optional OS keyring wrap stores the data key
+              as <code>softwake</code> / <code>ui-data-key</code> (not the provider secret bag).
+            </p>
+            <p id="chat-lock-error" class="error" role="status"></p>
+          </div>
           <label class="field">
             <span>Wake word sensitivity (global)</span>
             <input id="kws-global" type="number" min="0.05" max="0.50" step="0.01" value="0.15" aria-describedby="kws-hint" />
