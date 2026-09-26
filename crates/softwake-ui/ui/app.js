@@ -127,6 +127,15 @@ function showPending(status) {
   cancelBtn.disabled = false;
 }
 
+function statusBody(status) {
+  const message = (status && status.message) || "";
+  const detail = (status && status.detail) || "";
+  if (message && detail && detail !== message) {
+    return message + "\n" + detail;
+  }
+  return message || detail;
+}
+
 function show(status, keepError) {
   stateEl.textContent = status.state;
   captureEl.textContent = status.capture_running ? "capture: running" : "capture: stopped";
@@ -134,7 +143,7 @@ function show(status, keepError) {
   reloadEl.textContent = status.soul_reload_pending
     ? "soul reload: pending — applies on next awake"
     : "soul reload: not pending";
-  detailEl.textContent = status.detail || status.message || "";
+  detailEl.textContent = statusBody(status);
   if (contextLineEl) {
     if (status.state === "awake" && status.context_limit != null && status.context_used != null) {
       const pct = status.context_limit
@@ -887,10 +896,52 @@ toolsSaveBtn.addEventListener("click", async () => {
 const uiTextSizeSelect = document.querySelector("#ui-text-size");
 const uiPrefsStatus = document.querySelector("#ui-prefs-status");
 const uiPrefsError = document.querySelector("#ui-prefs-error");
+const hudIdleRange = document.querySelector("#hud-idle-range");
+const hudIdleNumber = document.querySelector("#hud-idle-seconds");
+const hudIdleStatus = document.querySelector("#hud-idle-status");
+const hudIdleError = document.querySelector("#hud-idle-error");
 const voiceTestBox = document.querySelector("#voice-test");
 let voiceTestEditing = false;
+let hudIdleDirty = false;
+let hudIdleTimer = null;
 
 const TEXT_SIZES = ["xx-small", "x-small", "small", "medium", "large"];
+const HUD_IDLE_MIN_S = 1;
+const HUD_IDLE_MAX_S = 30;
+const HUD_IDLE_DEFAULT_S = 3;
+
+function clampIdleSeconds(value) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) {
+    return HUD_IDLE_DEFAULT_S;
+  }
+  return Math.min(HUD_IDLE_MAX_S, Math.max(HUD_IDLE_MIN_S, n));
+}
+
+function applyHudIdleMs(ms) {
+  if (hudIdleDirty) {
+    return;
+  }
+  const seconds = clampIdleSeconds(Number(ms) / 1000);
+  if (hudIdleRange) {
+    hudIdleRange.value = String(seconds);
+  }
+  if (hudIdleNumber) {
+    hudIdleNumber.value = String(seconds);
+  }
+  if (hudIdleStatus && !hudIdleStatus.textContent) {
+    hudIdleStatus.textContent =
+      "HUD collapses after " + seconds + " s idle (hud_idle_collapse_ms=" + seconds * 1000 + ").";
+  }
+}
+
+function showHudIdleError(error) {
+  if (!hudIdleError) {
+    return;
+  }
+  hudIdleError.textContent =
+    typeof error === "string" ? error : error && error.message ? error.message : "request failed";
+}
 
 function applyTextSize(size) {
   const value = TEXT_SIZES.includes(size) ? size : "x-small";
@@ -933,13 +984,77 @@ async function refreshUiPrefs() {
     if (uiPrefsError) uiPrefsError.textContent = "";
     const snap = await invoke("ui_prefs_snapshot");
     applyTextSize(snap.text_size || "x-small");
+    applyHudIdleMs(
+      typeof snap.hud_idle_collapse_ms === "number" ? snap.hud_idle_collapse_ms : 3000,
+    );
     if (uiPrefsStatus) {
       uiPrefsStatus.textContent = "UI text size: " + (snap.text_size || "x-small");
     }
   } catch (error) {
     applyTextSize("x-small");
+    applyHudIdleMs(3000);
     showUiPrefsError(error);
   }
+}
+
+async function saveHudIdleSeconds(seconds) {
+  const clamped = clampIdleSeconds(seconds);
+  if (hudIdleRange) {
+    hudIdleRange.value = String(clamped);
+  }
+  if (hudIdleNumber) {
+    hudIdleNumber.value = String(clamped);
+  }
+  try {
+    if (hudIdleError) {
+      hudIdleError.textContent = "";
+    }
+    const snap = await invoke("ui_prefs_set_hud_idle_collapse_ms", { ms: clamped * 1000 });
+    hudIdleDirty = false;
+    applyHudIdleMs(snap.hud_idle_collapse_ms);
+    if (hudIdleStatus) {
+      const saved = clampIdleSeconds(Number(snap.hud_idle_collapse_ms) / 1000);
+      hudIdleStatus.textContent =
+        "HUD collapses after " +
+        saved +
+        " s idle (hud_idle_collapse_ms=" +
+        snap.hud_idle_collapse_ms +
+        ").";
+    }
+  } catch (error) {
+    hudIdleDirty = false;
+    showHudIdleError(error);
+    refreshUiPrefs();
+  }
+}
+
+function scheduleHudIdleSave(seconds) {
+  hudIdleDirty = true;
+  if (hudIdleTimer) {
+    clearTimeout(hudIdleTimer);
+  }
+  hudIdleTimer = setTimeout(() => {
+    hudIdleTimer = null;
+    saveHudIdleSeconds(seconds);
+  }, 300);
+}
+
+if (hudIdleRange && hudIdleNumber) {
+  hudIdleRange.addEventListener("input", () => {
+    hudIdleNumber.value = hudIdleRange.value;
+    scheduleHudIdleSave(hudIdleRange.value);
+  });
+  hudIdleNumber.addEventListener("input", () => {
+    const seconds = clampIdleSeconds(hudIdleNumber.value);
+    hudIdleRange.value = String(seconds);
+    scheduleHudIdleSave(seconds);
+  });
+  hudIdleNumber.addEventListener("change", () => {
+    const seconds = clampIdleSeconds(hudIdleNumber.value);
+    hudIdleNumber.value = String(seconds);
+    hudIdleRange.value = String(seconds);
+    scheduleHudIdleSave(seconds);
+  });
 }
 
 if (uiTextSizeSelect) {

@@ -55,6 +55,7 @@
     "allow-tools-save",
     "allow-ui-prefs-snapshot",
     "allow-ui-prefs-set-text-size",
+    "allow-ui-prefs-set-hud-idle",
     "allow-kws-thresholds-snapshot",
     "allow-kws-thresholds-set",
     "allow-free-speech-silence-snapshot",

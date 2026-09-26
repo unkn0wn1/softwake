@@ -45,6 +45,21 @@
           <p id="ui-prefs-status" class="meta" role="status"></p>
           <p id="ui-prefs-error" class="error" role="status"></p>
           <label class="field">
+            <span>HUD idle collapse (seconds)</span>
+            <span class="idle-controls">
+              <input id="hud-idle-range" type="range" min="1" max="30" step="1" value="3" aria-describedby="hud-idle-hint" />
+              <input id="hud-idle-seconds" type="number" min="1" max="30" step="1" value="3" inputmode="numeric" aria-label="HUD idle collapse seconds" />
+            </span>
+          </label>
+          <p id="hud-idle-hint" class="meta">
+            After the pointer leaves the expanded HUD, it collapses back to the square bloom.
+            A non-empty ask draft keeps it open. Range 1–30 seconds, default 3.
+            Saved in ui-prefs.json as <code>hud_idle_collapse_ms</code> (1000–30000).
+            The HUD re-reads that file; softwaked does not restart.
+          </p>
+          <p id="hud-idle-status" class="meta" role="status"></p>
+          <p id="hud-idle-error" class="error" role="status"></p>
+          <label class="field">
             <span>Wake word sensitivity (global)</span>
             <input id="kws-global" type="number" min="0.05" max="0.50" step="0.01" value="0.15" aria-describedby="kws-hint" />
           </label>

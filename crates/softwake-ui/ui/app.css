@@ -156,6 +156,20 @@ h1 {
 .detail {
   min-height: 1.4em;
   color: var(--faint);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.idle-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 4.5rem;
+  gap: 8px;
+  align-items: center;
+}
+
+.idle-controls input[type="range"] {
+  width: 100%;
+  accent-color: var(--cyan);
 }
 
 .error {
