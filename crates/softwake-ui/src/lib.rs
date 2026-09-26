@@ -38,6 +38,7 @@ use tauri::{
 /// not a voice-state error.
 #[allow(clippy::too_many_lines)] // generate_handler list grows with each Settings/HUD command.
 pub fn run() {
+    softwake_providers::apply_publisher_oauth_from_config();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(ui_vault::VaultState::default())
@@ -109,6 +110,10 @@ pub fn run() {
             ui_prefs::ui_prefs_snapshot,
             ui_prefs::ui_prefs_set_text_size,
             ui_prefs::ui_prefs_set_hud_idle_collapse_ms,
+            ui_prefs::ui_prefs_set_hud_pinned,
+            ui_prefs::ui_prefs_set_hud_expanded_size,
+            commands::hud_save_size,
+            commands::hud_seed_session,
             kws_prefs::kws_thresholds_snapshot,
             kws_prefs::kws_thresholds_set,
             utterance_prefs::free_speech_silence_snapshot,
@@ -153,14 +158,15 @@ pub fn run() {
 /// Collapsed HUD: square bloom only. Particles are centered in this window.
 const HUD_COLLAPSED_W: f64 = 120.0;
 const HUD_COLLAPSED_H: f64 = 120.0;
-/// Expanded HUD: bloom strip, chat bubbles, and the composer.
-const HUD_EXPANDED_W: f64 = 400.0;
-const HUD_EXPANDED_H: f64 = 480.0;
 const HUD_MARGIN: f64 = 16.0;
 
 fn hud_logical_size(expanded: bool) -> (f64, f64) {
     if expanded {
-        (HUD_EXPANDED_W, HUD_EXPANDED_H)
+        let prefs = ui_prefs::load();
+        (
+            f64::from(prefs.hud_expanded_w),
+            f64::from(prefs.hud_expanded_h),
+        )
     } else {
         (HUD_COLLAPSED_W, HUD_COLLAPSED_H)
     }
@@ -232,6 +238,20 @@ pub(crate) fn set_hud_layout<R: tauri::Runtime>(
     window
         .set_size(LogicalSize::new(width, height))
         .map_err(|error| error.to_string())?;
+    let _ = window.set_resizable(expanded);
+    if expanded {
+        let _ = window.set_min_size(Some(LogicalSize::new(
+            f64::from(ui_prefs::HUD_EXPANDED_W_MIN),
+            f64::from(ui_prefs::HUD_EXPANDED_H_MIN),
+        )));
+        let _ = window.set_max_size(Some(LogicalSize::new(
+            f64::from(ui_prefs::HUD_EXPANDED_W_MAX),
+            f64::from(ui_prefs::HUD_EXPANDED_H_MAX),
+        )));
+    } else {
+        let _ = window.set_min_size(None::<LogicalSize<f64>>);
+        let _ = window.set_max_size(None::<LogicalSize<f64>>);
+    }
     let saved = hud_pos::load();
     let (x, y) = if saved.is_some() {
         let (Some(pos), Some(size)) = (old_pos, old_size) else {
@@ -306,6 +326,45 @@ fn clamp_hud_origin<R: tauri::Runtime>(
         width,
         height,
     )
+}
+
+fn logical_px_to_u32(value: f64) -> u32 {
+    if !value.is_finite() || value <= 0.0 {
+        return 0;
+    }
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "value is clamped to 0..=u32::MAX before cast"
+    )]
+    {
+        value.round().min(f64::from(u32::MAX)) as u32
+    }
+}
+
+/// Persist the current expanded HUD size into ui-prefs.json.
+pub(crate) fn save_hud_size<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let window = app
+        .get_webview_window("hud")
+        .ok_or_else(|| "HUD window is not open".to_owned())?;
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let size = window
+        .inner_size()
+        .map_err(|error| error.to_string())?
+        .to_logical::<f64>(scale);
+    // Ignore collapsed bloom; only remember large sizes.
+    if size.width < f64::from(ui_prefs::HUD_EXPANDED_W_MIN)
+        || size.height < f64::from(ui_prefs::HUD_EXPANDED_H_MIN)
+    {
+        return Ok(());
+    }
+    let width = ui_prefs::clamp_hud_expanded_w(logical_px_to_u32(size.width));
+    let height = ui_prefs::clamp_hud_expanded_h(logical_px_to_u32(size.height));
+    let mut prefs = ui_prefs::load();
+    prefs.hud_expanded_w = width;
+    prefs.hud_expanded_h = height;
+    ui_prefs::save(&prefs)?;
+    Ok(())
 }
 
 fn open_hud<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
@@ -438,6 +497,10 @@ mod tests {
         "ui_prefs_snapshot",
         "ui_prefs_set_text_size",
         "ui_prefs_set_hud_idle_collapse_ms",
+        "ui_prefs_set_hud_pinned",
+        "ui_prefs_set_hud_expanded_size",
+        "hud_save_size",
+        "hud_seed_session",
         "kws_thresholds_snapshot",
         "kws_thresholds_set",
         "free_speech_silence_snapshot",
@@ -508,6 +571,10 @@ mod tests {
         "allow-ui-prefs-snapshot",
         "allow-ui-prefs-set-text-size",
         "allow-ui-prefs-set-hud-idle",
+        "allow-ui-prefs-set-hud-pinned",
+        "allow-ui-prefs-set-hud-size",
+        "allow-hud-save-size",
+        "allow-hud-seed-session",
         "allow-kws-thresholds-snapshot",
         "allow-kws-thresholds-set",
         "allow-free-speech-silence-snapshot",

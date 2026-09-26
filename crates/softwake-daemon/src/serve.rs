@@ -474,6 +474,10 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
             let outcome = lock(&shared.runtime).reload_playback();
             reply(shared, tx, id, outcome)
         }
+        Ok(ClientMessage::SeedChat { id, turns }) => {
+            let outcome = lock(&shared.runtime).seed_chat_from_ui(turns);
+            reply(shared, tx, id, outcome)
+        }
         Ok(ClientMessage::Hello { .. }) => false,
         Err(error) if error.is_disconnect() => false,
         Err(error) => {

@@ -401,3 +401,35 @@ pub fn hud_reset_position(app: tauri::AppHandle) -> Result<(), String> {
     crate::hud_pos::clear()?;
     crate::set_hud_layout(&app, false)
 }
+
+/// Persist the current expanded HUD size into ui-prefs.json.
+///
+/// # Errors
+///
+/// Returns a sentence when the window or config write fails.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri injects an owned AppHandle into commands that touch windows"
+)]
+pub fn hud_save_size(app: tauri::AppHandle) -> Result<(), String> {
+    crate::save_hud_size(&app)
+}
+
+/// Push HUD turns into the awake model session (encrypted-history path).
+///
+/// No-op on the daemon when the session already has messages. Softwaked also
+/// loads plaintext `hud-chat.json` itself on wake.
+///
+/// # Errors
+///
+/// Daemon refusal or IPC failure.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri owns JSON args.
+pub fn hud_seed_session(turns: Vec<softwake_ipc::SeedChatTurn>) -> Result<String, String> {
+    let mut client = connect()?;
+    let status = client
+        .call_seed_chat(turns)
+        .map_err(|error| error.to_string())?;
+    Ok(status.message.unwrap_or_else(|| "seeded".to_owned()))
+}

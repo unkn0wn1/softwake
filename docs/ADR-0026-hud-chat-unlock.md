@@ -44,3 +44,15 @@ the model, and without involving softwaked.
 - Encrypted blobs in v1 are HUD chat history only (not `ui-prefs.json`,
   schedules, skills, or the secret bag).
 - Operators who Skip see a plaintext warning until they set a passphrase.
+
+## Amendment — seed model session on wake (2026-09-27)
+
+Operators need the acting model to see prior HUD turns after sleep → awake.
+Softwaked loads **plaintext** `hud-chat.json` for the active profile inside
+`OpenSession`, under a 12 000-character newest-first budget (error bubbles
+skipped). Encrypted vault files are not readable by the daemon; softwake-ui
+sends additive `SeedChat` with decrypted turns after unlock / on wake. Seeding
+is no-op when the session already has messages. `/clear`, `/halve`, and
+`/compact` still manage the model session only; the next wake may re-seed from
+HUD history. PROTOCOL stays 1.
+

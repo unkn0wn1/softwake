@@ -30,6 +30,8 @@ const contextMeter = document.querySelector("#context-meter");
 const contextMeterFill = document.querySelector("#context-meter-fill");
 const contextMeterMark = document.querySelector("#context-meter-mark");
 const contextMeterLabel = document.querySelector("#context-meter-label");
+const pinBtn = document.querySelector("#pin");
+const resizeGrip = document.querySelector("#resize-grip");
 
 const IDLE_MIN_MS = 1000;
 const IDLE_MAX_MS = 30000;
@@ -39,10 +41,12 @@ const MAX_TURNS = 40;
 const particles = [];
 let level = 0.02;
 let state = "sleep";
+let previousVoiceState = "sleep";
 let captureRunning = false;
 let expanded = false;
 let idleTimer = null;
 let configuredIdleMs = IDLE_DEFAULT_MS;
+let hudPinned = false;
 let lastActivity = Date.now();
 let pointerOver = false;
 let raf = 0;
@@ -201,7 +205,7 @@ async function applyWindowLayout(next) {
 }
 
 function idleBlocked() {
-  if (pointerOver || holding || talkPending || pendingToolId) {
+  if (hudPinned || pointerOver || holding || talkPending || pendingToolId) {
     return true;
   }
   return !!input.value.trim();
@@ -212,7 +216,7 @@ function armIdle() {
     window.clearTimeout(idleTimer);
     idleTimer = null;
   }
-  if (!expanded) {
+  if (!expanded || hudPinned) {
     return;
   }
   idleTimer = window.setTimeout(() => {
@@ -264,11 +268,23 @@ function setExpanded(next) {
   void applyWindowLayout(next);
   if (next) {
     strip.hidden = false;
+    if (pinBtn) {
+      pinBtn.hidden = false;
+    }
+    if (resizeGrip) {
+      resizeGrip.hidden = false;
+    }
     input.focus();
     markActivity();
   } else {
     strip.hidden = true;
     liveEl.hidden = true;
+    if (pinBtn) {
+      pinBtn.hidden = true;
+    }
+    if (resizeGrip) {
+      resizeGrip.hidden = true;
+    }
     input.blur();
     if (idleTimer) {
       window.clearTimeout(idleTimer);
@@ -300,6 +316,11 @@ function setLive(text, isError) {
   liveEl.classList.toggle("error", !!isError);
   liveEl.textContent = line;
   liveEl.hidden = !line;
+  capsule.classList.toggle("thinking", !!line && !isError);
+  // Keep the last bubble above the thinking / live status line.
+  if (line && logEl.lastElementChild) {
+    logEl.lastElementChild.scrollIntoView({ block: "end", behavior: "smooth" });
+  }
 }
 
 function formatClock(ts) {
@@ -608,14 +629,80 @@ function considerStatus(message, detail) {
   setExpanded(true);
 }
 
-async function refreshIdlePref() {
+function applyPinned(next) {
+  hudPinned = !!next;
+  capsule.dataset.pinned = hudPinned ? "1" : "0";
+  if (pinBtn) {
+    pinBtn.setAttribute("aria-pressed", hudPinned ? "true" : "false");
+    pinBtn.setAttribute("aria-label", hudPinned ? "Unpin chat" : "Pin chat open");
+    pinBtn.title = hudPinned ? "Unpin chat" : "Pin chat open";
+  }
+  if (hudPinned) {
+    if (idleTimer) {
+      window.clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+    if (!expanded) {
+      setExpanded(true);
+    }
+  } else if (expanded) {
+    armIdle();
+  }
+}
+
+async function refreshHudPrefs() {
   try {
     const snap = await invoke("ui_prefs_snapshot");
     if (snap && typeof snap.hud_idle_collapse_ms === "number") {
       setConfiguredIdle(snap.hud_idle_collapse_ms);
     }
+    if (snap && typeof snap.hud_pinned === "boolean") {
+      applyPinned(snap.hud_pinned);
+    }
   } catch (_error) {
-    capsule.dataset.idleMs = String(configuredIdleMs);
+    
+if (pinBtn) {
+  pinBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const next = !hudPinned;
+    applyPinned(next);
+    invoke("ui_prefs_set_hud_pinned", { pinned: next }).catch(() => {
+      applyPinned(!next);
+    });
+  });
+}
+
+async function startHudResize() {
+  try {
+    const api = window.__TAURI__ && window.__TAURI__.window;
+    const current = api && api.getCurrentWindow && api.getCurrentWindow();
+    if (current && typeof current.startResizeDragging === "function") {
+      await current.startResizeDragging("SouthEast");
+      return;
+    }
+  } catch (_error) {
+    // Fall through to manual size drag below when the plugin refuses.
+  }
+}
+
+if (resizeGrip) {
+  resizeGrip.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void startHudResize();
+  });
+}
+
+window.addEventListener("pointerup", () => {
+  if (!expanded) {
+    return;
+  }
+  invoke("hud_save_size").catch(() => {
+    // Persist is best-effort.
+  });
+});
+
+capsule.dataset.idleMs = String(configuredIdleMs);
   }
 }
 
@@ -834,6 +921,26 @@ function applyContextMeter(snap) {
   contextMeterLabel.textContent = line;
 }
 
+
+function seedSessionFromHud() {
+  if (!vaultUnlocked || !turns.length) {
+    return;
+  }
+  const payload = turns
+    .filter((turn) => turn && !turn.error && (turn.role === "user" || turn.role === "assistant"))
+    .map((turn) => ({
+      role: turn.role,
+      text: turn.text || "",
+      error: false,
+    }));
+  if (!payload.length) {
+    return;
+  }
+  invoke("hud_seed_session", { turns: payload }).catch(() => {
+    // Seed is best-effort; plaintext softwaked path may already have filled the session.
+  });
+}
+
 async function refresh() {
   if (refreshInFlight) {
     return;
@@ -841,7 +948,13 @@ async function refresh() {
   refreshInFlight = true;
   try {
     const snap = await invoke("hud_snapshot");
-    state = snap.state || "sleep";
+    const nextState = snap.state || "sleep";
+    const woke = nextState === "awake" && previousVoiceState !== "awake";
+    state = nextState;
+    previousVoiceState = nextState;
+    if (woke) {
+      seedSessionFromHud();
+    }
     captureRunning = !!snap.capture_running;
     level = typeof snap.level === "number" ? snap.level : 0.02;
     autoListening = !!snap.auto_listening;
@@ -853,6 +966,7 @@ async function refresh() {
     applyContextMeter(snap);
   } catch (_error) {
     state = "sleep";
+    previousVoiceState = "sleep";
     captureRunning = false;
     level = 0.02;
     autoListening = false;
@@ -861,7 +975,7 @@ async function refresh() {
     refreshInFlight = false;
   }
   updateHint();
-  void refreshIdlePref();
+  void refreshHudPrefs();
   void refreshProfileName(false);
 }
 
@@ -1019,7 +1133,7 @@ function isInteractiveTarget(target) {
     return false;
   }
   return !!target.closest(
-    "#ask-form, #talk, #ask-send, #ask-input, #log, #live, #hud-pending, #hud-allow, button, input, a, .bubble",
+    "#ask-form, #talk, #ask-send, #ask-input, #log, #live, #hud-pending, #hud-allow, #pin, #resize-grip, button, input, textarea, a, .bubble",
   );
 }
 
@@ -1074,7 +1188,9 @@ capsule.addEventListener("click", (event) => {
     event.target.closest("#live") ||
     event.target.closest("#talk") ||
     event.target.closest("#hud-pending") ||
-    event.target.closest("#hud-allow")
+    event.target.closest("#hud-allow") ||
+    event.target.closest("#pin") ||
+    event.target.closest("#resize-grip")
   ) {
     return;
   }
@@ -1108,12 +1224,25 @@ capsule.addEventListener("pointermove", () => {
   markActivity();
 });
 
-input.addEventListener("input", () => markActivity());
+input.addEventListener("input", () => {
+  markActivity();
+  // Grow the textarea with content up to CSS max-height.
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 120) + "px";
+});
 input.addEventListener("focus", () => markActivity());
 input.addEventListener("keydown", (event) => {
   // Stop capsule handlers from seeing Space/Enter while typing.
   event.stopPropagation();
   markActivity();
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    if (typeof form.requestSubmit === "function") {
+      form.requestSubmit();
+    } else {
+      form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+    }
+  }
 });
 
 form.addEventListener("submit", (event) => {
@@ -1199,6 +1328,9 @@ if (vaultUnlockBtn) {
           vaultPass.value = "";
         }
         await loadChatForActiveProfile();
+        if (state === "awake") {
+          seedSessionFromHud();
+        }
       })
       .catch((error) => {
         showVaultError(errorText(error, "unlock failed"));
@@ -1217,6 +1349,9 @@ if (vaultSetBtn) {
           vaultPass.value = "";
         }
         await loadChatForActiveProfile();
+        if (state === "awake") {
+          seedSessionFromHud();
+        }
       })
       .catch((error) => {
         showVaultError(errorText(error, "could not set passphrase"));
@@ -1231,6 +1366,9 @@ if (vaultSkipBtn) {
         vaultUnlocked = true;
         setVaultGate(false, "plaintext");
         await loadChatForActiveProfile();
+        if (state === "awake") {
+          seedSessionFromHud();
+        }
       })
       .catch((error) => {
         showVaultError(errorText(error, "could not skip"));

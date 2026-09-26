@@ -23,5 +23,5 @@ pub use socket::{
 };
 pub use types::{
     ClientMessage, Command, Event, IpcError, PROTOCOL_VERSION, PendingTool, ResponseBody,
-    ServerMessage, SoulReport, Status, VoiceState,
+    SeedChatTurn, ServerMessage, SoulReport, Status, VoiceState,
 };

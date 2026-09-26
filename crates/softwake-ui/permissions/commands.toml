@@ -362,3 +362,26 @@ commands.allow = ["ui_vault_lock"]
 identifier = "allow-ui-vault-set-keyring-wrap"
 description = "Enable or disable OS keyring wrap for the chat vault data key."
 commands.allow = ["ui_vault_set_keyring_wrap"]
+
+
+
+[[permission]]
+identifier = "allow-hud-save-size"
+description = "Persist the expanded HUD size into ui-prefs.json."
+commands.allow = ["hud_save_size"]
+
+[[permission]]
+identifier = "allow-ui-prefs-set-hud-pinned"
+description = "Save whether the expanded HUD is pinned open (ui-prefs.json hud_pinned)."
+commands.allow = ["ui_prefs_set_hud_pinned"]
+
+[[permission]]
+identifier = "allow-ui-prefs-set-hud-size"
+description = "Save expanded HUD size (ui-prefs.json hud_expanded_w / hud_expanded_h)."
+commands.allow = ["ui_prefs_set_hud_expanded_size"]
+
+
+[[permission]]
+identifier = "allow-hud-seed-session"
+description = "Seed the awake model session with prior HUD turns."
+commands.allow = ["hud_seed_session"]

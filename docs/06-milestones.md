@@ -110,5 +110,5 @@ Linux and Windows x86_64 GitHub Releases (AppImage, tar.gz + systemd --user inst
 - [x] Status `context_compact_at`; GetStatus refreshes usage while awake
 - [x] `/clear`, `/halve`/`/reduce`, `/compact` (and clear-typed forms) manage model session context
 - [x] Default `compact_at_percent` **80**; auto-compact still runs before ask over threshold
-- [x] No seed-on-wake (HUD history remains display-only)
+- [x] Seed-on-wake: budgeted HUD history into the model session (plaintext daemon + UI SeedChat)
 

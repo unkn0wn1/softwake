@@ -58,3 +58,20 @@ cargo test -p softwake-ui
 ```
 
 Manual Connect requires publisher env vars and a browser.
+
+## Amendment — publisher client file + MeetRec aliases (2026-09-27)
+
+Maintainers may place publisher client ids in
+`$XDG_CONFIG_HOME/softwake/oauth-clients.env` (mode `0600`, never committed).
+`publisher_*_client_id` helpers read that file when process env is unset.
+Process env still wins. `softwake-ui` warms the lookup once at startup. Allowed keys:
+
+- `SOFTWAKE_GOOGLE_CLIENT_ID`
+- `SOFTWAKE_GOOGLE_CLIENT_SECRET` (optional)
+- `SOFTWAKE_MICROSOFT_CLIENT_ID`
+- MeetRec aliases on a shared maintainer machine: `MEETREC_GOOGLE_CLIENT_ID`,
+  `MEETREC_GOOGLE_CLIENT_SECRET`, `MEETREC_MICROSOFT_CLIENT_ID`
+
+Missing Softwake and MeetRec ids still surfaces
+`This build has no OAuth client configured`. Never log or paste client secrets.
+

@@ -86,3 +86,11 @@ After playback and HUD fire-and-forget ([ADR 0007](ADR-0007-awake-stt-tts.md)), 
 ## Amendment — pending tool holds the panel (2026-09-26)
 
 A pending tool auto-expands the panel. `idleBlocked` includes that pending id, and a manual collapse (capsule click, Space or Enter on the capsule, idle timer) waits until Approve or Deny. The idle duration knob is unchanged. After Approve, an optional “Always allow this tool?” bar does not block idle collapse.
+
+## Amendment — pin, resize, larger default (2026-09-27)
+
+- Default expanded size is **520×620** logical pixels (was 400×480). Operators may **resize** the expanded undecorated panel via a corner grip; Softwake persists `hud_expanded_w` / `hud_expanded_h` in `ui-prefs.json` (clamped). Collapse still uses the 120×120 bloom.
+- A **pin** control (top-right while expanded) keeps the panel open at large size and skips idle collapse. Pin state is `hud_pinned` in `ui-prefs.json`.
+- The chat composer is a **multiline** textarea with larger type. Enter sends; Shift+Enter inserts a newline.
+- The chat log keeps bottom padding so the last bubble clears the **thinking…** live status line.
+

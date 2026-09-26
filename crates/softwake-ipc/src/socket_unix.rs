@@ -482,7 +482,8 @@ impl ServerConnection {
             | ClientMessage::SetVoiceTest { .. }
             | ClientMessage::ReloadKws { .. }
             | ClientMessage::ReloadUtterance { .. }
-            | ClientMessage::ReloadPlayback { .. } => {
+            | ClientMessage::ReloadPlayback { .. }
+            | ClientMessage::SeedChat { .. } => {
                 let message = "expected a hello message".to_owned();
                 endpoint.write(&ServerMessage::HelloRejected {
                     protocol_version: PROTOCOL_VERSION,
@@ -705,6 +706,16 @@ impl Client {
             },
             id,
         )
+    }
+
+    /// Seed the awake session with prior HUD turns (no-op if already seeded).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] on transport failure or a rejected seed.
+    pub fn call_seed_chat(&mut self, turns: Vec<crate::SeedChatTurn>) -> Result<Status, CallError> {
+        let id = self.allocate_id();
+        self.round_trip(&ClientMessage::SeedChat { id, turns }, id)
     }
 
     /// Arm press-to-talk on the daemon.
