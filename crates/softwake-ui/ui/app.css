@@ -581,3 +581,9 @@ button.btn-primary.btn-compact {
   gap: 6px;
   margin: 4px 0 8px;
 }
+
+.section-title {
+  margin: 1rem 0 0.35rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}

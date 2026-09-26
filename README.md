@@ -320,7 +320,7 @@ The soul directory is the first match of `--soul-dir PATH` (on `serve` and `demo
 
 **General** edits `soul.md`, `user.md`, `rules.md`, and `glossary.md` in the resolved soul directory (`SOFTWAKE_SOUL_DIR`, or the XDG default). Save writes the four files. Reload soul applies a valid pack on the next awake.
 
-**Email** is an opt-in live scaffold (off by default). Save SMTP fields and a password into the secret bag, press Test (no socket), and keep mode on draft-only unless you accept the not-wired send scaffold. The pane does not send mail; confirm-gated `email_send` on Status still owns send/draft after awake confirm.
+**Email** can Connect / Disconnect Google or Microsoft ([ADR 0023](docs/ADR-0023-email-oauth.md)): PKCE loopback, tokens in the secret bag / keyring, scopes for mail + calendar + drive. Status shows the connected account. Live send/list stay draft-gated. Optional SMTP fields and password remain for non-OAuth setups. Publisher client ids are env-only (`SOFTWAKE_GOOGLE_CLIENT_ID`, optional `SOFTWAKE_GOOGLE_CLIENT_SECRET`, `SOFTWAKE_MICROSOFT_CLIENT_ID`). The pane does not send mail; confirm-gated `email_send` on Status still owns send/draft after awake confirm.
 
 ```bash
 cargo run -p softwake-ui
@@ -409,3 +409,4 @@ cargo test -p softwake-daemon --features pipewire-capture
 | [docs/ADR-0014-skills-hub.md](docs/ADR-0014-skills-hub.md) | Skills hub (Settings page + skill_save); refine/webhook later |
 | [docs/ADR-0015-tray-hud.md](docs/ADR-0015-tray-hud.md) | System tray and always-on-top HUD |
 | [docs/ADR-0016-capture-level-hud.md](docs/ADR-0016-capture-level-hud.md) | Capture level on Status → HUD particles |
+| [docs/ADR-0023-email-oauth.md](docs/ADR-0023-email-oauth.md) | Email OAuth: Google / Microsoft Connect on Settings → Email; PKCE + secret bag |

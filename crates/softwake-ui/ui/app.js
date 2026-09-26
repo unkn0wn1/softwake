@@ -805,6 +805,36 @@ function renderEmail(snap) {
     emailTestStatus.textContent = "Test: not run";
   }
   emailStorage.textContent = snap.storage_message || "";
+  emailGoogleStatus.textContent = snap.google_connected
+    ? "Connected as " + (snap.google_email || "(no email)")
+    : "Not connected";
+  emailMicrosoftStatus.textContent = snap.microsoft_connected
+    ? "Connected as " + (snap.microsoft_email || "(no email)")
+    : "Not connected";
+  const pending = snap.oauth_pending || "none";
+  emailOauthPending.textContent =
+    pending !== "none"
+      ? (snap.oauth_message || "Connecting " + pending + "…")
+      : "";
+  if (pending !== "none" && snap.oauth_authorize_url) {
+    emailOauthUrlLine.classList.remove("hidden");
+    emailOauthLink.href = snap.oauth_authorize_url;
+    emailOauthLink.textContent = snap.oauth_authorize_url;
+  } else {
+    emailOauthUrlLine.classList.add("hidden");
+    emailOauthLink.removeAttribute("href");
+    emailOauthLink.textContent = "";
+  }
+  emailOauthError.textContent = snap.oauth_error || "";
+  const busy = pending !== "none";
+  emailGoogleConnectBtn.disabled = busy;
+  emailMicrosoftConnectBtn.disabled = busy;
+  emailOauthCancelBtn.disabled = !busy;
+  if (busy) {
+    ensureEmailOauthPoll();
+  } else {
+    stopEmailOauthPoll();
+  }
 }
 
 async function refreshEmail() {
@@ -849,6 +879,35 @@ emailClearPasswordBtn.addEventListener("click", () => {
 
 emailTestBtn.addEventListener("click", () => {
   emailAction("email_test");
+});
+
+let emailOauthPollTimer = null;
+function stopEmailOauthPoll() {
+  if (emailOauthPollTimer != null) {
+    clearInterval(emailOauthPollTimer);
+    emailOauthPollTimer = null;
+  }
+}
+function ensureEmailOauthPoll() {
+  if (emailOauthPollTimer != null) return;
+  emailOauthPollTimer = setInterval(() => {
+    refreshEmail().catch(() => {});
+  }, 1000);
+}
+emailGoogleConnectBtn.addEventListener("click", () => {
+  emailAction("email_oauth_connect", { provider: "google" });
+});
+emailGoogleDisconnectBtn.addEventListener("click", () => {
+  emailAction("email_oauth_disconnect", { provider: "google" });
+});
+emailMicrosoftConnectBtn.addEventListener("click", () => {
+  emailAction("email_oauth_connect", { provider: "microsoft" });
+});
+emailMicrosoftDisconnectBtn.addEventListener("click", () => {
+  emailAction("email_oauth_disconnect", { provider: "microsoft" });
+});
+emailOauthCancelBtn.addEventListener("click", () => {
+  emailAction("email_oauth_cancel");
 });
 
 
