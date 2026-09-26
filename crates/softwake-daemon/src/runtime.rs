@@ -1791,7 +1791,7 @@ mod talk_tests {
             runtime.drain_pcm();
         }
         let quiet = vec![0_i16; 320];
-        for _ in 0..30 {
+        for _ in 0..(softwake_voice::SILENCE_FRAMES_END + 10) {
             assert!(runtime.capture_mock().push_frame(&quiet));
             runtime.drain_pcm();
             if runtime.pending_auto_pcm.is_some() {
@@ -2176,7 +2176,7 @@ mod tests {
             runtime.drain_pcm();
         }
         let quiet = vec![0_i16; 320];
-        for _ in 0..30 {
+        for _ in 0..(softwake_voice::SILENCE_FRAMES_END + 10) {
             assert!(runtime.capture_mock().push_frame(&quiet));
             runtime.drain_pcm();
             if runtime.pending_auto_pcm.is_some() {
@@ -3240,6 +3240,33 @@ mod tests {
                 .last()
                 .is_some_and(|line| line.contains("asleep"))
         );
+    }
+
+    #[test]
+    fn longer_nl_sleep_phrase_confirms_before_the_model() {
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        install_fixture(&mut runtime);
+        let asked = runtime.ask("go to sleep for a little while");
+        let status = asked.body.status().expect("confirm");
+        assert_eq!(status.state, VoiceState::Awake);
+        assert_eq!(status.message.as_deref(), Some("Sleep now?"));
+        assert!(runtime.chat_posts().is_empty());
+        assert!(runtime.session_turns().is_empty());
+        assert!(
+            runtime
+                .announced_prompts()
+                .iter()
+                .any(|line| line == "Sleep now?")
+        );
+
+        let _ = runtime.ask("no");
+        let going = runtime.ask("I'm going to sleep");
+        let again = going.body.status().expect("confirm again");
+        assert_eq!(again.state, VoiceState::Awake);
+        assert_eq!(again.message.as_deref(), Some("Sleep now?"));
+        assert!(runtime.chat_posts().is_empty());
+        assert!(runtime.session_turns().is_empty());
     }
 
     #[test]

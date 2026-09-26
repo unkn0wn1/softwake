@@ -10,8 +10,11 @@ use crate::{TALK_MAX_SAMPLES, TALK_MIN_SAMPLES};
 pub const START_RMS: f32 = 0.04;
 /// RMS below which a frame counts as silence while buffering.
 pub const SILENCE_RMS: f32 = 0.02;
-/// Contiguous silence frames that end an utterance (~400 ms at 20 ms frames).
-pub const SILENCE_FRAMES_END: u32 = 20;
+/// Contiguous silence frames that end an utterance (~2.0 s at 10 ms live capture frames).
+///
+/// PipeWire/WASAPI wake capture queues 160 samples @ 16 kHz (10 ms). Free speech
+/// needs a longer hangover so a mid-thought pause does not cut the utterance.
+pub const SILENCE_FRAMES_END: u32 = 200;
 /// Contiguous speech frames that start an utterance (~100 ms).
 pub const START_FRAMES: u32 = 5;
 
@@ -164,15 +167,13 @@ mod tests {
     #[test]
     fn short_burst_is_discarded() {
         let mut gate = EnergyUtterance::new();
-        let loud = tone(160, 0.2);
+        // Tiny frames so even a long silence hangover stays under TALK_MIN_SAMPLES.
+        let loud = tone(10, 0.2);
         for _ in 0..START_FRAMES {
             let _ = gate.push_frame(&loud, START_RMS + 0.01);
         }
         for _ in 0..SILENCE_FRAMES_END {
-            assert!(
-                gate.push_frame(&tone(160, 0.0), SILENCE_RMS / 2.0)
-                    .is_none()
-            );
+            assert!(gate.push_frame(&tone(10, 0.0), SILENCE_RMS / 2.0).is_none());
         }
         assert!(!gate.is_buffering());
     }

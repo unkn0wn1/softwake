@@ -58,7 +58,7 @@ Entering awake, sleep, or hibernate speaks one short line through the profile vo
 
 Hard keyword hits stay immediate. A clean `hi`, profile name, `sleep`, `go to sleep`, or `deep sleep` from the spotter changes state with no question.
 
-Text that arrives on the ask path (typed chat, free speech, or press-to-talk) and clearly means sleep or hibernate does not change state until the profile voice asks `Sleep now?` or `Hibernate now?`. The wait is 15 seconds from the question. Yes applies the transition and then the normal state line. No speaks `Okay, staying awake.` Timeout stays awake and says nothing. An unclear reply drops the question and is a normal ask.
+Text that arrives on the ask path (typed chat, free speech, or press-to-talk) and clearly means sleep or hibernate — including soft closers like “go to sleep for a little while” or “I’m going to sleep” — does not change state until the profile voice asks `Sleep now?` or `Hibernate now?`. The wait is 15 seconds from the question. Yes applies the transition and then the normal state line. No speaks `Okay, staying awake.` Timeout stays awake and says nothing. An unclear reply drops the question and is a normal ask.
 
 While asleep, a probe near-miss of a wake phrase other than bare `hi` asks `Were you trying to wake me?` at most once every 45 seconds. Typed text that looks like a wake attempt asks the same question. Yes, or a wake phrase in the reply, wakes. No speaks `Okay, staying asleep.` Timeout and unclear speech stay asleep and do not ask again until the cooldown ends. Ordinary chat while asleep is still refused. Hibernate still ignores voice.
 
