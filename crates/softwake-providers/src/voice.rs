@@ -399,6 +399,28 @@ mod tests {
     }
 
     #[test]
+    fn tts_maps_http_403_to_rejected_not_unreachable() {
+        let transport = MockTransport::new().with_post_bytes(
+            "https://api.x.ai/v1/tts",
+            HttpBytes {
+                status: 403,
+                body: b"forbidden".to_vec(),
+            },
+        );
+        let error = tts_synthesize(
+            &transport,
+            ProviderId::XaiOauth,
+            "https://api.x.ai/v1",
+            "expired-token",
+            "I'm awake.",
+            "eve",
+        )
+        .expect_err("403");
+        assert_eq!(error, VoiceHttpError::Rejected);
+        assert_ne!(error, VoiceHttpError::Unreachable);
+    }
+
+    #[test]
     fn tts_clips_long_text_and_maps_no_audio() {
         let transport = MockTransport::new().with_post_bytes(
             "https://api.x.ai/v1/tts",

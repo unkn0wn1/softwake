@@ -309,6 +309,10 @@ pub(crate) fn load_disk_chat() -> Result<DiskChat, String> {
         env_openai_compatible.as_deref(),
     )
     .map_err(|error| error.to_string())?;
+    // OAuth access tokens expire. prepare_chat only reads the bag; refresh here
+    // so state-voice TTS and STT do not 403 as a fake "unreachable" skip.
+    #[cfg(feature = "live-http")]
+    let bearer = refresh_oauth_bearer_if_needed(&secrets, &prepared, bearer)?;
     let budget = ContextBudget::from_settings(&prepared.model, handle.settings());
     Ok(DiskChat {
         tts_voice: handle.selected_tts_voice().unwrap_or("").to_owned(),
@@ -317,6 +321,41 @@ pub(crate) fn load_disk_chat() -> Result<DiskChat, String> {
         bearer,
         budget,
     })
+}
+
+/// Refresh xAI OAuth when near expiry; persist the new tokens. Other providers
+/// return `bearer` unchanged.
+#[cfg(feature = "live-http")]
+fn refresh_oauth_bearer_if_needed(
+    secrets_path: &std::path::Path,
+    prepared: &PreparedChat,
+    bearer: String,
+) -> Result<String, String> {
+    use softwake_providers::{ProviderId, ensure_fresh_access, open_store, update_bag};
+    if prepared.provider != ProviderId::XaiOauth {
+        return Ok(bearer);
+    }
+    let store = open_store(secrets_path).map_err(|error| error.to_string())?;
+    let bag = store.load().map_err(|error| error.to_string())?;
+    let Some(tokens) = bag.xai_oauth.as_ref() else {
+        return Ok(bearer);
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+    let transport = softwake_providers::live::LiveTransport::bounded(CHAT_TIMEOUT);
+    let fresh = ensure_fresh_access(&transport, tokens, now_ms).map_err(|error| {
+        format!("Voice credentials need refresh (re-run Providers Test or re-sign in): {error}")
+    })?;
+    if fresh.access_token != tokens.access_token || fresh.expires_at_ms != tokens.expires_at_ms {
+        let access = fresh.access_token.clone();
+        update_bag(store.as_ref(), |bag| {
+            bag.xai_oauth = Some(fresh);
+        })
+        .map_err(|error| error.to_string())?;
+        return Ok(access);
+    }
+    Ok(fresh.access_token)
 }
 
 impl DiskChat {

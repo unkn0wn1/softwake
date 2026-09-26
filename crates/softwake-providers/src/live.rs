@@ -51,26 +51,22 @@ impl LiveTransport {
 
 impl Transport for LiveTransport {
     fn post_form(&self, url: &str, body: &str) -> Result<HttpResponse, TransportError> {
-        let response = self
-            .agent
-            .post(url)
-            .set("Content-Type", "application/x-www-form-urlencoded")
-            .send_string(body)
-            .map_err(|error| TransportError::Failed {
-                message: safe_ureq_message(&error),
-            })?;
+        let response = take_response(
+            self.agent
+                .post(url)
+                .set("Content-Type", "application/x-www-form-urlencoded")
+                .send_string(body),
+        )?;
         read_response(response)
     }
 
     fn get_bearer(&self, url: &str, bearer: &str) -> Result<HttpResponse, TransportError> {
-        let response = self
-            .agent
-            .get(url)
-            .set("Authorization", &format!("Bearer {bearer}"))
-            .call()
-            .map_err(|error| TransportError::Failed {
-                message: safe_ureq_message(&error),
-            })?;
+        let response = take_response(
+            self.agent
+                .get(url)
+                .set("Authorization", &format!("Bearer {bearer}"))
+                .call(),
+        )?;
         read_response(response)
     }
 
@@ -80,15 +76,13 @@ impl Transport for LiveTransport {
         bearer: &str,
         body: &str,
     ) -> Result<HttpResponse, TransportError> {
-        let response = self
-            .agent
-            .post(url)
-            .set("Authorization", &format!("Bearer {bearer}"))
-            .set("Content-Type", "application/json")
-            .send_string(body)
-            .map_err(|error| TransportError::Failed {
-                message: safe_ureq_message(&error),
-            })?;
+        let response = take_response(
+            self.agent
+                .post(url)
+                .set("Authorization", &format!("Bearer {bearer}"))
+                .set("Content-Type", "application/json")
+                .send_string(body),
+        )?;
         read_response(response)
     }
 
@@ -121,15 +115,13 @@ impl Transport for LiveTransport {
         bearer: &str,
         body: &str,
     ) -> Result<HttpBytes, TransportError> {
-        let response = self
-            .agent
-            .post(url)
-            .set("Authorization", &format!("Bearer {bearer}"))
-            .set("Content-Type", "application/json")
-            .send_string(body)
-            .map_err(|error| TransportError::Failed {
-                message: safe_ureq_message(&error),
-            })?;
+        let response = take_response(
+            self.agent
+                .post(url)
+                .set("Authorization", &format!("Bearer {bearer}"))
+                .set("Content-Type", "application/json")
+                .send_string(body),
+        )?;
         read_bytes(response)
     }
 }
@@ -164,18 +156,17 @@ fn send_multipart(
     );
     body.extend_from_slice(file_bytes);
     body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-    transport
-        .agent
-        .post(url)
-        .set("Authorization", &format!("Bearer {bearer}"))
-        .set(
-            "Content-Type",
-            &format!("multipart/form-data; boundary={boundary}"),
-        )
-        .send_bytes(&body)
-        .map_err(|error| TransportError::Failed {
-            message: safe_ureq_message(&error),
-        })
+    take_response(
+        transport
+            .agent
+            .post(url)
+            .set("Authorization", &format!("Bearer {bearer}"))
+            .set(
+                "Content-Type",
+                &format!("multipart/form-data; boundary={boundary}"),
+            )
+            .send_bytes(&body),
+    )
 }
 
 fn read_bytes(response: ureq::Response) -> Result<HttpBytes, TransportError> {
@@ -198,6 +189,21 @@ fn read_response(response: ureq::Response) -> Result<HttpResponse, TransportErro
             message: format!("failed to read response body: {error}"),
         })?;
     Ok(HttpResponse { status, body })
+}
+
+/// Prefer returning the HTTP response (including 4xx/5xx) over collapsing every
+/// non-2xx into [`TransportError`]. Voice/TTS maps status via parse helpers;
+/// treating 401/403 as "unreachable" hid expired OAuth for state announcements.
+fn take_response(
+    result: Result<ureq::Response, ureq::Error>,
+) -> Result<ureq::Response, TransportError> {
+    match result {
+        Ok(response) => Ok(response),
+        Err(ureq::Error::Status(_code, response)) => Ok(response),
+        Err(error) => Err(TransportError::Failed {
+            message: safe_ureq_message(&error),
+        }),
+    }
 }
 
 fn safe_ureq_message(error: &ureq::Error) -> String {

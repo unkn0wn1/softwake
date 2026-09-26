@@ -100,6 +100,19 @@ impl PcmEngine {
         }
     }
 
+    /// Force-reset the sherpa online streams after a mode transition or unmute.
+    ///
+    /// No-op for null / scripted engines.
+    #[allow(clippy::unused_self)] // Only the sherpa variant holds resettable state.
+    pub(crate) fn rearm(&mut self) {
+        #[cfg(feature = "sherpa-kws")]
+        {
+            if let Self::Sherpa(detector) = self {
+                detector.rearm();
+            }
+        }
+    }
+
     /// Stable backend label for startup / verbose logs.
     #[must_use]
     pub(crate) fn backend_name(&self) -> &'static str {
@@ -362,6 +375,13 @@ mod tests {
         let engine = PcmEngine::for_agent("Ada");
         assert!(!engine.weights_loaded());
         assert_eq!(engine.backend_name(), "null");
+    }
+
+    #[test]
+    fn rearm_is_noop_on_null() {
+        let mut engine = PcmEngine::for_agent("Sally");
+        engine.rearm();
+        engine.rearm();
     }
 
     #[test]

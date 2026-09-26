@@ -225,6 +225,20 @@ impl SherpaKwsDetector {
         self.near_miss_probe
     }
 
+    /// Force-reset both online streams and the sample budget.
+    ///
+    /// Call after an applied wake/sleep/hibernate transition and when
+    /// half-duplex mute lifts. Mute drops mic frames without feeding the
+    /// spotter; without a rearm the OnlineStream can stay silent across gaps
+    /// (no main hit and no near-miss) until a hard budget lucks through.
+    pub fn rearm(&mut self) {
+        if let Some(engine) = self.engine.as_mut() {
+            engine.spotter.reset(&engine.stream);
+            engine.spotter.reset(&engine.probe_stream);
+        }
+        self.stream_budget.reset();
+    }
+
     /// `true` when ONNX + tokens loaded and a stream is open.
     #[must_use]
     pub fn weights_loaded(&self) -> bool {
@@ -727,6 +741,21 @@ mod tests {
         assert!((t.global - 0.15).abs() < 0.000_1);
         assert!((t.short - 0.10).abs() < 0.000_1);
         assert!((t.probe - 0.05).abs() < 0.000_1);
+    }
+
+    #[test]
+    fn rearm_is_safe_without_weights() {
+        let mut detector = SherpaKwsDetector::with_thresholds(
+            "/tmp/softwake-no-such-kws-dir",
+            ["hey softwake"],
+            ["sleep"],
+            ["deep sleep"],
+            crate::KwsThresholds::default(),
+        );
+        assert!(!detector.weights_loaded());
+        detector.rearm();
+        // Second call also fine.
+        detector.rearm();
     }
 
     #[test]

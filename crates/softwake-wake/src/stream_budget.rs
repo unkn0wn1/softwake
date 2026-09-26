@@ -40,10 +40,9 @@ impl StreamBudget {
 
     /// Drop the count directly.
     ///
-    /// Production clears the budget in [`Self::begin_window`] and on a keyword
-    /// hit. Silence used to call this and was removed. The unit test still
-    /// locks a dropped partial count.
-    #[cfg(test)]
+    /// Production clears the budget in [`Self::begin_window`], on a keyword
+    /// hit, and on [`crate::SherpaKwsDetector::rearm`] after a mode transition
+    /// or unmute. Unit tests also lock a dropped partial count.
     pub(crate) const fn reset(&mut self) {
         self.samples_since_reset = 0;
     }

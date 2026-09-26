@@ -55,6 +55,9 @@ pub(crate) struct Runtime {
     /// Rate-limit for verbose KWS hear lines (`-v` / `-vv`).
     last_kws_log: Option<Instant>,
     last_near_miss_log: Option<Instant>,
+
+    /// Previous [`softwake_voice::input_muted`] sample. Unmute edge rearms KWS.
+    was_input_muted: bool,
     /// `0` quiet, `1` (`-v`) keyword hear/match, `2` (`-vv`) also mic energy.
     verbosity: u8,
     soul: LoadedSoul,
@@ -146,6 +149,7 @@ impl Runtime {
             last_energy_log: None,
             last_kws_log: None,
             last_near_miss_log: None,
+            was_input_muted: false,
             verbosity,
             soul,
             session: TextStubSession::default(),
@@ -780,6 +784,7 @@ impl Runtime {
         // Half-duplex: while Eve TTS plays (and a short grace after), drop mic
         // frames so speakers do not feed free-speech / KWS / PTT.
         let muted = softwake_voice::input_muted();
+        self.rearm_kws_after_unmute(muted);
         let auto_ok = awake
             && !self.voice_test
             && !self.talk.is_armed()
@@ -877,6 +882,15 @@ impl Runtime {
             self.last_capture_level = None;
         }
         self.apply_pcm_hit(hit)
+    }
+
+    /// When half-duplex mute lifts, reset sherpa so the next phrase is not scored
+    /// on a stream that sat idle through dropped frames.
+    fn rearm_kws_after_unmute(&mut self, muted: bool) {
+        if self.was_input_muted && !muted {
+            self.pcm.rearm();
+        }
+        self.was_input_muted = muted;
     }
 
     /// Score one frame and return the spotter hit unchanged.
@@ -1140,6 +1154,9 @@ impl Runtime {
                     );
                 }
                 self.announce_transition(applied.to);
+                // Mode change (and the mute gap that often follows state voice)
+                // must not leave sherpa OnlineStream silent for the next cycle.
+                self.pcm.rearm();
                 let state = wire_state(self.machine.state());
                 let capture_running = self.capture.is_running();
                 let detail = Some(format!("{previous} -> {state}"));
