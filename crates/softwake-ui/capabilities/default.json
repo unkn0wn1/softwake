@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "The Settings and HUD windows may read daemon status, send voice-state and ask commands, confirm tools, manage profiles and the soul pack, use provider Settings, email Settings, and Tools Settings.",
+  "description": "The Settings and HUD windows may read daemon status, send voice-state and ask commands, confirm tools, manage profiles and the soul pack, use provider Settings, email Settings, Tools Settings, and UI prefs (text size).",
   "windows": [
     "main",
     "hud"
@@ -50,6 +50,8 @@
     "allow-pack-save",
     "allow-tools-snapshot",
     "allow-tools-save",
+    "allow-ui-prefs-snapshot",
+    "allow-ui-prefs-set-text-size",
     {
       "identifier": "opener:allow-open-url",
       "allow": [

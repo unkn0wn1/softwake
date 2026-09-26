@@ -841,6 +841,59 @@ toolsSaveBtn.addEventListener("click", async () => {
   }
 });
 
+const uiTextSizeSelect = document.querySelector("#ui-text-size");
+const uiPrefsStatus = document.querySelector("#ui-prefs-status");
+const uiPrefsError = document.querySelector("#ui-prefs-error");
+
+const TEXT_SIZES = ["xx-small", "x-small", "small", "medium", "large"];
+
+function applyTextSize(size) {
+  const value = TEXT_SIZES.includes(size) ? size : "x-small";
+  document.documentElement.setAttribute("data-text-size", value);
+  if (uiTextSizeSelect) {
+    uiTextSizeSelect.value = value;
+  }
+}
+
+function showUiPrefsError(error) {
+  if (!uiPrefsError) return;
+  uiPrefsError.textContent =
+    typeof error === "string" ? error : error && error.message ? error.message : "request failed";
+}
+
+async function refreshUiPrefs() {
+  if (!uiTextSizeSelect) return;
+  try {
+    if (uiPrefsError) uiPrefsError.textContent = "";
+    const snap = await invoke("ui_prefs_snapshot");
+    applyTextSize(snap.text_size || "x-small");
+    if (uiPrefsStatus) {
+      uiPrefsStatus.textContent = "UI text size: " + (snap.text_size || "x-small");
+    }
+  } catch (error) {
+    applyTextSize("x-small");
+    showUiPrefsError(error);
+  }
+}
+
+if (uiTextSizeSelect) {
+  uiTextSizeSelect.addEventListener("change", async () => {
+    const textSize = uiTextSizeSelect.value;
+    applyTextSize(textSize);
+    try {
+      if (uiPrefsError) uiPrefsError.textContent = "";
+      const snap = await invoke("ui_prefs_set_text_size", { textSize });
+      applyTextSize(snap.text_size || textSize);
+      if (uiPrefsStatus) {
+        uiPrefsStatus.textContent = "Saved UI text size: " + (snap.text_size || textSize);
+      }
+    } catch (error) {
+      showUiPrefsError(error);
+      refreshUiPrefs();
+    }
+  });
+}
+
 function showPane(name) {
   for (const pane of panes) {
     const section = document.querySelector(`#pane-${pane}`);
@@ -878,6 +931,8 @@ for (const pane of panes) {
   });
 }
 
+applyTextSize("x-small");
+refreshUiPrefs();
 showPane("status");
 refresh();
 setInterval(refresh, 1000);

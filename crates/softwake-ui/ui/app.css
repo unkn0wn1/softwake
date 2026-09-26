@@ -8,11 +8,49 @@
   --cyan: oklch(0.78 0.13 200);
   --cyan-ink: oklch(0.22 0.04 230);
   --danger: oklch(0.80 0.12 25);
-  --radius-xl: 0.75rem;
-  --nav-width: 12.5rem;
+  --radius-xl: 0.55rem;
+  --nav-width: 10.5rem;
+  /* Text scale (General → UI text size). Labels scale; button chrome stays compact. */
+  --ui-text: 12px;
+  --btn-pad-y: 5px;
+  --btn-pad-x: 10px;
+  --field-pad: 7px 9px;
+  --pane-pad: 14px 16px 16px;
+  --shell-gap: 12px;
+  --shell-pad: 12px;
   font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: var(--ui-text);
   background: var(--ink);
   color: var(--text);
+}
+
+html[data-text-size="xx-small"] {
+  --ui-text: 11px;
+  --nav-width: 9.75rem;
+}
+
+html[data-text-size="x-small"] {
+  --ui-text: 12px;
+  --nav-width: 10.5rem;
+}
+
+html[data-text-size="small"] {
+  --ui-text: 13px;
+  --nav-width: 11.25rem;
+}
+
+html[data-text-size="medium"] {
+  --ui-text: 14px;
+  --nav-width: 12rem;
+}
+
+html[data-text-size="large"] {
+  --ui-text: 16px;
+  --nav-width: 13rem;
+  --btn-pad-y: 6px;
+  --btn-pad-x: 12px;
+  --field-pad: 8px 10px;
+  --pane-pad: 16px 18px 18px;
 }
 
 body {
@@ -31,11 +69,11 @@ body {
 .shell {
   display: grid;
   grid-template-columns: var(--nav-width) minmax(0, 1fr);
-  gap: 16px;
+  gap: var(--shell-gap);
   box-sizing: border-box;
   min-height: 100vh;
   height: 100vh;
-  padding: 16px;
+  padding: var(--shell-pad);
 }
 
 .glass {
@@ -48,9 +86,9 @@ body {
 .rail {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   align-self: start;
-  padding: 16px 12px;
+  padding: 12px 8px;
 }
 
 .content {
@@ -63,17 +101,17 @@ body {
 .pane {
   box-sizing: border-box;
   min-width: 0;
-  max-height: calc(100vh - 32px);
+  max-height: calc(100vh - 2 * var(--shell-pad));
   overflow: auto;
-  padding: 20px 22px 24px;
+  padding: var(--pane-pad);
 }
 
 .pane.pane-fill:not(.hidden):not([hidden]) {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
-  height: calc(100vh - 32px);
-  max-height: calc(100vh - 32px);
+  height: calc(100vh - 2 * var(--shell-pad));
+  max-height: calc(100vh - 2 * var(--shell-pad));
   overflow: hidden;
 }
 
@@ -92,14 +130,14 @@ body {
 }
 
 .pane h2 {
-  margin: 0 0 12px;
-  font-size: 1.15rem;
+  margin: 0 0 8px;
+  font-size: 1.05rem;
   font-weight: 560;
 }
 
 h1 {
-  margin: 0 0 16px;
-  font-size: 2.5rem;
+  margin: 0 0 10px;
+  font-size: 1.75rem;
   font-weight: 560;
   letter-spacing: -0.03em;
 }
@@ -128,8 +166,8 @@ h1 {
 .actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-top: 16px;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 button {
@@ -139,7 +177,9 @@ button {
   background: oklch(1 0 0 / 0.04);
   color: inherit;
   font: inherit;
-  padding: 12px 14px;
+  font-size: inherit;
+  line-height: 1.25;
+  padding: var(--btn-pad-y) var(--btn-pad-x);
   cursor: pointer;
 }
 
@@ -196,7 +236,7 @@ button.btn-primary {
   border-color: transparent;
   background: var(--cyan);
   color: var(--cyan-ink);
-  box-shadow: 0 0 24px oklch(0.78 0.13 200 / 0.35);
+  box-shadow: 0 0 14px oklch(0.78 0.13 200 / 0.28);
 }
 
 button.btn-primary:hover {
@@ -205,18 +245,20 @@ button.btn-primary:hover {
 
 .field {
   display: grid;
-  gap: 6px;
-  margin: 12px 0;
+  gap: 4px;
+  margin: 8px 0;
 }
 
 .field span {
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: 0.9em;
 }
 
 select,
 input[type="password"],
 input[type="url"],
+input[type="text"],
+input[type="number"],
 textarea {
   box-sizing: border-box;
   width: 100%;
@@ -226,14 +268,15 @@ textarea {
   background: oklch(0.16 0.03 273 / 0.72);
   color: inherit;
   font: inherit;
-  padding: 12px;
+  font-size: inherit;
+  padding: var(--field-pad);
 }
 
 textarea {
-  min-height: 12rem;
-  resize: vertical;
+  min-height: 0;
+  resize: none;
   font-family: ui-monospace, "Cascadia Code", "Segoe UI Mono", monospace;
-  font-size: 0.9rem;
+  font-size: 0.95em;
   line-height: 1.45;
 }
 
@@ -272,7 +315,7 @@ a.oauth-open {
   background: oklch(1 0 0 / 0.04);
   color: var(--text);
   font: inherit;
-  padding: 12px 14px;
+  padding: var(--btn-pad-y) var(--btn-pad-x);
   cursor: pointer;
   text-decoration: none;
   white-space: nowrap;
@@ -425,20 +468,28 @@ button.btn-primary.btn-compact {
   margin-top: 2px;
 }
 
-/* Profiles detail: editors grow with the window */
+/* Profiles detail: scrollable editors + pinned action footer */
 .profiles-detail-panel {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
   height: 100%;
+  overflow: hidden;
 }
 
-.profiles-detail-panel > h2,
-.profiles-detail-panel > .meta,
-.profiles-detail-panel > .field,
-.profiles-detail-panel > .row,
-.profiles-detail-panel > .pack-tabs {
+.profiles-chrome {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  min-height: 0;
+}
+
+.profiles-chrome > h2,
+.profiles-chrome > .meta,
+.profiles-chrome > .field,
+.profiles-chrome > .row,
+.profiles-chrome > .pack-tabs {
   flex: none;
 }
 
@@ -446,28 +497,49 @@ button.btn-primary.btn-compact {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
-  min-height: 12rem;
-  margin-bottom: 8px;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
 }
 
 .pack-editor {
   box-sizing: border-box;
   width: 100%;
   flex: 1 1 auto;
-  min-height: 12rem;
+  min-height: 0;
   height: 100%;
-  resize: vertical;
+  overflow: auto;
+  resize: none;
 }
 
 .pack-editor.hidden {
   display: none;
 }
 
+.profiles-footer {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  gap: 2px;
+  padding-top: 8px;
+  margin-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.profiles-footer > .row {
+  margin: 0;
+}
+
+.profiles-footer > .meta,
+.profiles-footer > .error {
+  margin: 2px 0 0;
+}
+
 #profile-name {
   flex: 1;
   min-width: 0;
-  padding: 8px 10px;
-  font-size: 0.9rem;
+  padding: var(--field-pad);
+  font-size: inherit;
 }
 
 .pack-tabs {
