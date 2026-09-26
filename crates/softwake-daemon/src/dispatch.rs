@@ -1,15 +1,18 @@
-//! Gate a tool call on the voice state, then on the policy engine.
+//! Gate a tool call on the voice state, then on the operator permission.
 //!
 //! [`softwake_state::Machine::permit_tool_dispatch`] runs first. Sleep and
-//! hibernate never reach the engine. While awake, [`PolicyEngine::evaluate`]
-//! classifies the name. [`PolicyDecision::Safe`] runs immediately,
+//! hibernate never reach the permission map. While awake,
+//! [`effective_tool_decision`](softwake_policy::effective_tool_decision) combines
+//! the registry floor, the Tools Settings grant, and a tighten-only soul
+//! request. [`PolicyDecision::Safe`] runs immediately,
 //! [`PolicyDecision::Confirm`] becomes one pending confirmation, and
-//! [`PolicyDecision::Deny`] is refused. A denied name that is not registered
-//! is reported as unknown. The confirm-gated tool does not run, and the
-//! notification sink does not change, until [`Hands::confirm`]. `email_send`
-//! uses that same confirmation. The outbox changes only after the engine
-//! allows `email` / `send` and [`crate::email_tool::commit_email_send`]
-//! accepts the message.
+//! [`PolicyDecision::Deny`] is refused. A name that is not registered is
+//! reported as unknown and does not read the permission map. The confirm-gated
+//! tool does not run, and the notification sink does not change, until
+//! [`Hands::confirm`]. `email_send` uses that same confirmation. The outbox
+//! changes only after the engine allows `email` / `send` and
+//! [`crate::email_tool::commit_email_send`] accepts the message. Always allow
+//! uses that same commit path with no pending record.
 //!
 //! One pending confirmation at a time. A second confirm-gated request is
 //! rejected and leaves the first in place. [`Hands::cancel`] clears it in any
@@ -25,12 +28,14 @@ use softwake_connectors::{
     ConnectorRegistry, EMAIL, EMAIL_SEND, EmailBackend, EmailSettings, FileEmailSettings,
     OutboundEmail, resolve_email_file,
 };
-use softwake_policy::{PolicyDecision, PolicyEngine, Subject, permits_confirmed_connector};
+use softwake_policy::{
+    PolicyDecision, PolicyEngine, Subject, effective_tool_decision, permits_confirmed_connector,
+};
 use softwake_soul::Glossary;
 use softwake_state::{Machine, StateError, VoiceState};
 use softwake_tools::{
-    EMAIL_SEND_TOOL, FileToolsSettings, NOTIFY_TOOL, SHELL_TOOL, ToolError, ToolRegistry,
-    ToolResult, ToolRisk, ToolsSettings, format_shell_output, parse_email_send_args,
+    EMAIL_SEND_TOOL, FileToolsSettings, NOTIFY_TOOL, SHELL_TOOL, ToolError, ToolPermission,
+    ToolRegistry, ToolResult, ToolRisk, ToolsSettings, format_shell_output, parse_email_send_args,
     resolve_tools_file, run_shell,
 };
 
@@ -260,12 +265,15 @@ pub(crate) struct Hands {
 impl Hands {
     /// Empty sink, mock outbox, empty log, the builtin policy engine, and the builtin registries.
     ///
-    /// Tests and default construction stay on [`EmailBackend::Mock`]. Serve and
-    /// the typed demo call [`Hands::from_disk`] so an opted-in live Settings
-    /// file can select the live scaffold.
+    /// Tests and default construction stay on [`EmailBackend::Mock`] and pin
+    /// in-memory Tools Settings so a developer `tools.json` cannot change CI.
+    /// Serve and the typed demo call [`Hands::from_disk`] so an opted-in live
+    /// Settings file can select the live scaffold and the operator tool modes.
     #[must_use]
     pub(crate) fn new() -> Self {
-        Self::with_email(EmailBackend::default())
+        let mut hands = Self::with_email(EmailBackend::default());
+        hands.tools_settings_override = Some(ToolsSettings::default());
+        hands
     }
 
     /// Like [`Hands::new`], using `email` as the backend.
@@ -310,6 +318,17 @@ impl Hands {
     #[cfg(test)]
     pub(crate) fn set_tools_settings_for_test(&mut self, settings: Option<ToolsSettings>) {
         self.tools_settings_override = settings;
+    }
+
+    /// Install a policy engine (tests), including a non-empty override map.
+    #[cfg(test)]
+    pub(crate) fn set_policy_engine_for_test(&mut self, policy: PolicyEngine) {
+        self.policy = policy;
+    }
+
+    /// Tools Settings for this process. Tests may pin an override; production reads the file.
+    pub(crate) fn tools_settings(&self) -> ToolsSettings {
+        load_tools_settings(self.tools_settings_override.as_ref())
     }
 
     /// The confirmation that is waiting, if any.
@@ -358,10 +377,12 @@ impl Hands {
         })
     }
 
-    /// Run a safe tool, or stage a confirm-gated tool.
+    /// Run a tool, stage a confirmation, or refuse it.
     ///
-    /// Classification comes from [`PolicyEngine::evaluate`]. A confirm-gated
-    /// tool does not run. The sink and the outbox stay as they are.
+    /// Voice state runs first. An unknown name does not read Tools Settings.
+    /// The effective decision is the registry floor, then the operator grant,
+    /// then a tighten-only soul request. A confirm-gated call does not run.
+    /// The sink and the outbox stay as they are until a safe run or a confirm.
     pub(crate) fn request(
         &mut self,
         machine: &Machine,
@@ -375,74 +396,19 @@ impl Hands {
                 state,
             });
         }
-        match self.policy.evaluate(&Subject::Tool { name }) {
+        if self.registry.lookup(name).is_none() {
+            return Err(self.unknown_tool(name));
+        }
+        match self.decision_now(name) {
             PolicyDecision::Deny => {
-                if self.registry.lookup(name).is_none() {
-                    return Err(self.unknown_tool(name));
-                }
-                self.record(name, Some(ToolRisk::Deny), ToolOutcome::Denied, None);
+                let detail = self.deny_detail(name);
+                self.record(name, Some(ToolRisk::Deny), ToolOutcome::Denied, detail);
                 Err(DispatchError::Denied {
                     name: name.to_owned(),
                 })
             }
-            PolicyDecision::Safe => {
-                if self.registry.lookup(name).is_none() {
-                    return Err(self.unknown_tool(name));
-                }
-                match self.registry.invoke(name, args) {
-                    Ok(ToolResult { detail }) => {
-                        self.record(
-                            name,
-                            Some(ToolRisk::Safe),
-                            ToolOutcome::Ran,
-                            Some(detail.clone()),
-                        );
-                        Ok(RequestOutcome::Ran(RanTool {
-                            name: name.to_owned(),
-                            detail,
-                        }))
-                    }
-                    Err(error) => Err(self.fail_tool(error)),
-                }
-            }
-            PolicyDecision::Confirm => {
-                let Some(meta) = self.registry.lookup(name) else {
-                    return Err(self.unknown_tool(name));
-                };
-                if let Some(pending_id) = self.pending.as_ref().map(|pending| pending.id.clone()) {
-                    self.record(
-                        name,
-                        Some(ToolRisk::Confirm),
-                        ToolOutcome::Pending,
-                        Some(format!("busy: {pending_id}")),
-                    );
-                    return Err(DispatchError::Busy { pending_id });
-                }
-                if name == SHELL_TOOL {
-                    return self.request_shell(args);
-                }
-                if name == EMAIL_SEND_TOOL {
-                    if let Err(error) = parse_email_send_args(args) {
-                        return Err(self.fail_tool(error));
-                    }
-                }
-                let description = meta.description.to_owned();
-                self.next_pending = self.next_pending.saturating_add(1);
-                let pending_id = self.next_pending.to_string();
-                self.pending = Some(Pending {
-                    id: pending_id.clone(),
-                    name: name.to_owned(),
-                    args: args.to_vec(),
-                    description: description.clone(),
-                });
-                self.record(name, Some(ToolRisk::Confirm), ToolOutcome::Pending, None);
-                Ok(RequestOutcome::Pending(PendingToolCall {
-                    pending_id,
-                    name: name.to_owned(),
-                    args: args.to_vec(),
-                    description,
-                }))
-            }
+            PolicyDecision::Safe => self.run_now(name, args),
+            PolicyDecision::Confirm => self.stage_confirm(name, args),
         }
     }
 
@@ -504,6 +470,16 @@ impl Hands {
                 pending_id: pending.id,
                 state,
             });
+        }
+        if self.decision_now(&pending.name) == PolicyDecision::Deny {
+            let detail = self.deny_detail(&pending.name);
+            self.record(
+                &pending.name,
+                Some(ToolRisk::Deny),
+                ToolOutcome::Denied,
+                detail,
+            );
+            return Err(DispatchError::Denied { name: pending.name });
         }
         let detail = self.confirmed_detail(&pending)?;
         self.pending = None;
@@ -596,16 +572,177 @@ impl Hands {
 
     /// Result text for a confirmation that already passed the awake check.
     ///
-    /// A failure leaves `self.pending` in place. `email_send` appends only
-    /// after the policy engine allows `email` / `send`, `invoke_confirmed`
-    /// succeeds, and `authorize_confirmed` succeeds.
+    /// A failure leaves `self.pending` in place. The runner follows the registry
+    /// row: safe names use `invoke`, confirm names use the confirmed side effect.
+    /// `email_send` appends only after the policy engine allows `email` / `send`.
     fn confirmed_detail(&mut self, pending: &Pending) -> Result<String, DispatchError> {
-        if pending.name == EMAIL_SEND_TOOL {
-            let parsed = match parse_email_send_args(&pending.args) {
+        self.execute_registry(&pending.name, &pending.args)
+    }
+
+    /// Registry floor, operator grant, then soul tighten.
+    fn decision_now(&self, name: &str) -> PolicyDecision {
+        let Some(risk) = self.registry.risk(name) else {
+            return PolicyDecision::Deny;
+        };
+        let grant = self.tools_settings().permission(name);
+        effective_tool_decision(
+            policy_floor(risk),
+            grant,
+            self.policy.tool_tighten_request(name),
+        )
+    }
+
+    /// Operator-facing deny detail. Shell's default off switch names Tools Settings.
+    fn deny_detail(&self, name: &str) -> Option<String> {
+        (name == SHELL_TOOL && self.tools_settings().permission(name) == ToolPermission::Deny)
+            .then(|| "shell disabled in Tools Settings".to_owned())
+    }
+
+    /// Always allow: run now. Shell expands the glossary and does not consult confirm policy.
+    fn run_now(&mut self, name: &str, args: &[String]) -> Result<RequestOutcome, DispatchError> {
+        if name == SHELL_TOOL {
+            return self.run_shell_expanded(args, true);
+        }
+        let detail = self.execute_registry(name, args)?;
+        self.record(
+            name,
+            Some(ToolRisk::Safe),
+            ToolOutcome::Ran,
+            Some(detail.clone()),
+        );
+        Ok(RequestOutcome::Ran(RanTool {
+            name: name.to_owned(),
+            detail,
+        }))
+    }
+
+    /// Ask: one pending record, or a quiet shell run when confirm policy allows it.
+    fn stage_confirm(
+        &mut self,
+        name: &str,
+        args: &[String],
+    ) -> Result<RequestOutcome, DispatchError> {
+        if let Some(pending) = &self.pending {
+            let pending_id = pending.id.clone();
+            self.record(
+                name,
+                Some(ToolRisk::Confirm),
+                ToolOutcome::Pending,
+                Some(format!("busy: {pending_id}")),
+            );
+            return Err(DispatchError::Busy { pending_id });
+        }
+        if name == SHELL_TOOL {
+            return self.run_shell_expanded(args, false);
+        }
+        if name == EMAIL_SEND_TOOL {
+            if let Err(error) = parse_email_send_args(args) {
+                return Err(self.fail_tool(error));
+            }
+        }
+        let description = self
+            .registry
+            .lookup(name)
+            .map(|meta| meta.description.to_owned())
+            .unwrap_or_default();
+        Ok(self.store_pending(name, args.to_vec(), description))
+    }
+
+    fn store_pending(
+        &mut self,
+        name: &str,
+        args: Vec<String>,
+        description: String,
+    ) -> RequestOutcome {
+        self.next_pending = self.next_pending.saturating_add(1);
+        let pending_id = self.next_pending.to_string();
+        self.pending = Some(Pending {
+            id: pending_id.clone(),
+            name: name.to_owned(),
+            args: args.clone(),
+            description: description.clone(),
+        });
+        self.record(name, Some(ToolRisk::Confirm), ToolOutcome::Pending, None);
+        RequestOutcome::Pending(PendingToolCall {
+            pending_id,
+            name: name.to_owned(),
+            args,
+            description,
+        })
+    }
+
+    /// Glossary expand, then either stage (Ask + confirm policy) or spawn.
+    ///
+    /// `always_allow` skips confirm policy. The command line is not written to the tool log.
+    fn run_shell_expanded(
+        &mut self,
+        args: &[String],
+        always_allow: bool,
+    ) -> Result<RequestOutcome, DispatchError> {
+        let original = args.join(" ");
+        if original.trim().is_empty() {
+            return Err(DispatchError::InvalidArgs {
+                name: SHELL_TOOL.to_owned(),
+            });
+        }
+        let echo = self.glossary.confirm_echo(&original);
+        if !always_allow
+            && self
+                .tools_settings()
+                .confirm_policy
+                .must_confirm(echo.requires_readback)
+        {
+            let description = echo.readback.trim_end().to_owned();
+            return Ok(self.store_pending(SHELL_TOOL, vec![echo.expanded], description));
+        }
+        let risk = if always_allow {
+            ToolRisk::Safe
+        } else {
+            ToolRisk::Confirm
+        };
+        let detail = self.spawn_shell(&echo.expanded)?;
+        self.record(
+            SHELL_TOOL,
+            Some(risk),
+            ToolOutcome::Ran,
+            Some(detail.clone()),
+        );
+        Ok(RequestOutcome::Ran(RanTool {
+            name: SHELL_TOOL.to_owned(),
+            detail,
+        }))
+    }
+
+    /// Run the registry side effect. Safe rows use `invoke`. Confirm rows use the confirmed path.
+    fn execute_registry(&mut self, name: &str, args: &[String]) -> Result<String, DispatchError> {
+        match self.registry.risk(name) {
+            Some(ToolRisk::Safe) => match self.registry.invoke(name, args) {
+                Ok(ToolResult { detail }) => Ok(detail),
+                Err(error) => Err(self.fail_tool(error)),
+            },
+            Some(ToolRisk::Confirm) => self.execute_confirm_row(name, args),
+            Some(ToolRisk::Deny) => {
+                self.record(name, Some(ToolRisk::Deny), ToolOutcome::Denied, None);
+                Err(DispatchError::Denied {
+                    name: name.to_owned(),
+                })
+            }
+            None => Err(self.unknown_tool(name)),
+        }
+    }
+
+    /// Confirmed side effect for a registry confirm row. Does not clear a pending record.
+    fn execute_confirm_row(
+        &mut self,
+        name: &str,
+        args: &[String],
+    ) -> Result<String, DispatchError> {
+        if name == EMAIL_SEND_TOOL {
+            let parsed = match parse_email_send_args(args) {
                 Ok(parsed) => parsed,
                 Err(error) => return Err(self.fail_tool(error)),
             };
-            if let Err(error) = self.registry.invoke_confirmed(&pending.name, &pending.args) {
+            if let Err(error) = self.registry.invoke_confirmed(name, args) {
                 return Err(self.fail_tool(error));
             }
             let message = OutboundEmail {
@@ -620,7 +757,7 @@ impl Hands {
             if !permits_confirmed_connector(decision) {
                 let denied = format!("connector action denied: {EMAIL}/{EMAIL_SEND}");
                 self.record(
-                    &pending.name,
+                    name,
                     Some(ToolRisk::Confirm),
                     ToolOutcome::Unknown,
                     Some(denied.clone()),
@@ -638,7 +775,7 @@ impl Hands {
                 Err(error) => {
                     let message = error.to_string();
                     self.record(
-                        &pending.name,
+                        name,
                         Some(ToolRisk::Confirm),
                         ToolOutcome::Unknown,
                         Some(message.clone()),
@@ -648,98 +785,26 @@ impl Hands {
             };
             return Ok(commit_detail(&self.email, receipt));
         }
-        if pending.name == SHELL_TOOL {
-            return self.run_confirmed_shell(pending);
+        if name == SHELL_TOOL {
+            return self.spawn_shell(&args.join(" "));
         }
-        let detail = match self.registry.invoke_confirmed(&pending.name, &pending.args) {
+        let detail = match self.registry.invoke_confirmed(name, args) {
             Ok(ToolResult { detail }) => detail,
             Err(error) => return Err(self.fail_tool(error)),
         };
-        if pending.name == NOTIFY_TOOL {
+        if name == NOTIFY_TOOL {
             self.push_notification(detail.clone());
         }
         Ok(detail)
     }
 
-    /// Stage or auto-run shell after Tools Settings + glossary expand + confirm policy.
-    fn request_shell(&mut self, args: &[String]) -> Result<RequestOutcome, DispatchError> {
-        let settings = load_tools_settings(self.tools_settings_override.as_ref());
-        if !settings.shell_enabled {
-            self.record(
-                SHELL_TOOL,
-                Some(ToolRisk::Deny),
-                ToolOutcome::Denied,
-                Some("shell disabled in Tools Settings".to_owned()),
-            );
-            return Err(DispatchError::Denied {
-                name: SHELL_TOOL.to_owned(),
-            });
-        }
-        let original = args.join(" ");
-        if original.trim().is_empty() {
-            return Err(DispatchError::InvalidArgs {
-                name: SHELL_TOOL.to_owned(),
-            });
-        }
-        let echo = self.glossary.confirm_echo(&original);
-        let expanded_args = vec![echo.expanded.clone()];
-        if settings.confirm_policy.must_confirm(echo.requires_readback) {
-            let description = echo.readback.trim_end().to_owned();
-            self.next_pending = self.next_pending.saturating_add(1);
-            let pending_id = self.next_pending.to_string();
-            self.pending = Some(Pending {
-                id: pending_id.clone(),
-                name: SHELL_TOOL.to_owned(),
-                args: expanded_args.clone(),
-                description: description.clone(),
-            });
-            self.record(
-                SHELL_TOOL,
-                Some(ToolRisk::Confirm),
-                ToolOutcome::Pending,
-                Some(echo.expanded),
-            );
-            return Ok(RequestOutcome::Pending(PendingToolCall {
-                pending_id,
-                name: SHELL_TOOL.to_owned(),
-                args: expanded_args,
-                description,
-            }));
-        }
-        // Quiet path (mutating_only / allowlisted_quiet with no readback).
-        match run_shell(&echo.expanded) {
-            Ok(output) => {
-                let detail = format_shell_output(&output);
-                self.record(
-                    SHELL_TOOL,
-                    Some(ToolRisk::Confirm),
-                    ToolOutcome::Ran,
-                    Some(detail.clone()),
-                );
-                Ok(RequestOutcome::Ran(RanTool {
-                    name: SHELL_TOOL.to_owned(),
-                    detail,
-                }))
-            }
-            Err(error) => {
-                let message = error.to_string();
-                self.record(
-                    SHELL_TOOL,
-                    Some(ToolRisk::Confirm),
-                    ToolOutcome::Unknown,
-                    Some(message.clone()),
-                );
-                Err(DispatchError::Shell { message })
-            }
-        }
-    }
-
-    fn run_confirmed_shell(&mut self, pending: &Pending) -> Result<String, DispatchError> {
-        if let Err(error) = self.registry.invoke_confirmed(&pending.name, &pending.args) {
+    /// Spawn `/bin/sh -c` on an already expanded command. Does not log the command line.
+    fn spawn_shell(&mut self, command: &str) -> Result<String, DispatchError> {
+        let args = vec![command.to_owned()];
+        if let Err(error) = self.registry.invoke_confirmed(SHELL_TOOL, &args) {
             return Err(self.fail_tool(error));
         }
-        let command = pending.args.join(" ");
-        match run_shell(&command) {
+        match run_shell(command) {
             Ok(output) => Ok(format_shell_output(&output)),
             Err(error) => {
                 let message = error.to_string();
@@ -879,6 +944,14 @@ fn email_smtp_password_present() -> bool {
 impl Default for Hands {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn policy_floor(risk: ToolRisk) -> PolicyDecision {
+    match risk {
+        ToolRisk::Safe => PolicyDecision::Safe,
+        ToolRisk::Confirm => PolicyDecision::Confirm,
+        ToolRisk::Deny => PolicyDecision::Deny,
     }
 }
 
@@ -1101,6 +1174,10 @@ mod tests {
         assert!(hands.notifications().is_empty());
         assert!(hands.outbox().is_empty());
         assert_eq!(hands.last_tool_line().as_deref(), Some("shell deny denied"));
+        assert_eq!(
+            hands.log().back().expect("log").detail.as_deref(),
+            Some("shell disabled in Tools Settings")
+        );
         hands.confirm(&machine, "1", None).expect_err("no pending");
         assert!(hands.notifications().is_empty());
         assert!(hands.outbox().is_empty());
@@ -1129,11 +1206,15 @@ mod tests {
     #[test]
     fn shell_enabled_expands_glossary_and_stages_confirm() {
         let mut hands = Hands::new();
-        let settings = softwake_tools::ToolsSettings {
-            shell_enabled: true,
+        let mut settings = softwake_tools::ToolsSettings {
             confirm_policy: softwake_tools::ConfirmPolicy::Always,
+            shell_enabled: true,
             ..softwake_tools::ToolsSettings::default()
         };
+        settings.permissions.insert(
+            softwake_tools::SHELL_TOOL.to_owned(),
+            softwake_tools::ToolPermission::Ask,
+        );
         hands.set_tools_settings_for_test(Some(settings));
         hands.set_glossary(
             softwake_soul::Glossary::parse("aau → echo hello-tools\n").expect("glossary"),
@@ -1408,5 +1489,221 @@ mod tests {
         assert_eq!(hands.outbox()[0].subject, "hello there");
         assert_eq!(hands.outbox()[0].body, "line one");
         assert!(hands.notifications().is_empty());
+    }
+
+    fn set_permission(hands: &mut Hands, name: &str, permission: softwake_tools::ToolPermission) {
+        let mut settings = hands.tools_settings();
+        settings.permissions.insert(name.to_owned(), permission);
+        if name == softwake_tools::SHELL_TOOL {
+            settings.shell_enabled = permission != softwake_tools::ToolPermission::Deny;
+        }
+        hands.set_tools_settings_for_test(Some(settings));
+    }
+
+    #[test]
+    fn shell_ask_mutating_only_runs_quiet_reads_and_stages_rm() {
+        let mut hands = Hands::new();
+        let mut settings = softwake_tools::ToolsSettings {
+            confirm_policy: softwake_tools::ConfirmPolicy::MutatingOnly,
+            shell_enabled: true,
+            ..softwake_tools::ToolsSettings::default()
+        };
+        settings.permissions.insert(
+            softwake_tools::SHELL_TOOL.to_owned(),
+            softwake_tools::ToolPermission::Ask,
+        );
+        hands.set_tools_settings_for_test(Some(settings));
+        let machine = awake();
+        let quiet = hands
+            .request(&machine, "shell", &["status".to_owned()])
+            .expect("quiet");
+        assert!(matches!(quiet, RequestOutcome::Ran(_)));
+        assert!(hands.pending().is_none());
+        assert_eq!(hands.last_tool_line().as_deref(), Some("shell confirm ran"));
+        let staged = hands
+            .request(&machine, "shell", &["rm notes".to_owned()])
+            .expect("stage");
+        let RequestOutcome::Pending(pending) = staged else {
+            panic!("rm must stage");
+        };
+        assert_eq!(pending.name, "shell");
+        assert!(pending.description.contains("rm notes"));
+        assert!(hands.pending().is_some());
+    }
+
+    #[test]
+    fn shell_always_allow_expands_glossary_and_runs_without_a_prompt() {
+        let mut hands = Hands::new();
+        set_permission(
+            &mut hands,
+            softwake_tools::SHELL_TOOL,
+            softwake_tools::ToolPermission::AlwaysAllow,
+        );
+        hands.set_glossary(
+            softwake_soul::Glossary::parse("aau → echo hello-tools\n").expect("glossary"),
+        );
+        let machine = awake();
+        let outcome = hands
+            .request(&machine, "shell", &["aau".to_owned()])
+            .expect("run");
+        let RequestOutcome::Ran(ran) = outcome else {
+            panic!("always allow does not stage");
+        };
+        assert!(hands.pending().is_none());
+        assert!(ran.detail.contains("hello-tools"));
+        assert_eq!(hands.last_tool_line().as_deref(), Some("shell safe ran"));
+    }
+
+    #[test]
+    fn notify_always_allow_appends_once_and_deny_appends_nothing() {
+        let mut hands = Hands::new();
+        let machine = awake();
+        set_permission(
+            &mut hands,
+            "notify",
+            softwake_tools::ToolPermission::AlwaysAllow,
+        );
+        let ran = hands
+            .request(&machine, "notify", &["hello".to_owned()])
+            .expect("run");
+        assert!(matches!(ran, RequestOutcome::Ran(_)));
+        assert!(hands.pending().is_none());
+        assert_eq!(hands.notifications().iter().collect::<Vec<_>>(), ["hello"]);
+        assert_eq!(hands.last_tool_line().as_deref(), Some("notify safe ran"));
+
+        set_permission(&mut hands, "notify", softwake_tools::ToolPermission::Deny);
+        let denied = hands
+            .request(&machine, "notify", &["nope".to_owned()])
+            .expect_err("deny");
+        assert_eq!(
+            denied,
+            DispatchError::Denied {
+                name: "notify".to_owned()
+            }
+        );
+        assert_eq!(hands.notifications().len(), 1);
+        assert!(hands.pending().is_none());
+        assert_eq!(
+            hands.last_tool_line().as_deref(),
+            Some("notify deny denied")
+        );
+    }
+
+    #[test]
+    fn echo_ask_confirms_with_invoke_and_deny_refuses() {
+        let mut hands = Hands::new();
+        let machine = awake();
+        set_permission(&mut hands, "echo", softwake_tools::ToolPermission::Ask);
+        let staged = hands
+            .request(&machine, "echo", &["hello".to_owned()])
+            .expect("stage");
+        let RequestOutcome::Pending(pending) = staged else {
+            panic!("echo ask stages");
+        };
+        let confirmed = hands
+            .confirm(&machine, &pending.pending_id, Some("echo"))
+            .expect("confirm");
+        assert_eq!(confirmed.detail, "echo: hello");
+        assert!(hands.pending().is_none());
+
+        set_permission(&mut hands, "echo", softwake_tools::ToolPermission::Deny);
+        let denied = hands
+            .request(&machine, "echo", &["hello".to_owned()])
+            .expect_err("deny");
+        assert_eq!(
+            denied,
+            DispatchError::Denied {
+                name: "echo".to_owned()
+            }
+        );
+        assert_eq!(hands.last_tool_line().as_deref(), Some("echo deny denied"));
+    }
+
+    #[test]
+    fn email_send_always_allow_appends_and_deny_appends_nothing() {
+        let mut hands = Hands::new();
+        let machine = awake();
+        set_permission(
+            &mut hands,
+            "email_send",
+            softwake_tools::ToolPermission::AlwaysAllow,
+        );
+        let ran = hands
+            .request(&machine, "email_send", &email_args(&["note"]))
+            .expect("run");
+        assert!(matches!(ran, RequestOutcome::Ran(_)));
+        assert!(hands.pending().is_none());
+        assert_eq!(hands.outbox().len(), 1);
+        assert_eq!(hands.outbox()[0].body, "note");
+        assert_eq!(
+            hands.last_tool_line().as_deref(),
+            Some("email_send safe ran")
+        );
+
+        set_permission(
+            &mut hands,
+            "email_send",
+            softwake_tools::ToolPermission::Deny,
+        );
+        let denied = hands
+            .request(&machine, "email_send", &email_args(&["nope"]))
+            .expect_err("deny");
+        assert!(matches!(denied, DispatchError::Denied { .. }));
+        assert_eq!(hands.outbox().len(), 1);
+        assert!(hands.pending().is_none());
+    }
+
+    #[test]
+    fn confirm_after_operator_flips_to_deny_leaves_the_record() {
+        let mut hands = Hands::new();
+        let machine = awake();
+        hands
+            .request(&machine, "notify", &["hello".to_owned()])
+            .expect("pending");
+        set_permission(&mut hands, "notify", softwake_tools::ToolPermission::Deny);
+        let denied = hands.confirm(&machine, "1", None).expect_err("deny");
+        assert_eq!(
+            denied,
+            DispatchError::Denied {
+                name: "notify".to_owned()
+            }
+        );
+        assert!(hands.pending().is_some());
+        assert!(hands.notifications().is_empty());
+        hands.cancel("1", None).expect("cancel");
+        assert!(hands.notifications().is_empty());
+        assert!(hands.pending().is_none());
+    }
+
+    #[test]
+    fn soul_deny_beats_operator_always_allow_on_notify() {
+        let mut hands = Hands::new();
+        hands.set_policy_engine_for_test(softwake_policy::PolicyEngine::with_overrides(
+            softwake_policy::PolicyOverrides::new(
+                vec![("notify".to_owned(), softwake_policy::PolicyDecision::Deny)],
+                Vec::new(),
+            ),
+        ));
+        set_permission(
+            &mut hands,
+            "notify",
+            softwake_tools::ToolPermission::AlwaysAllow,
+        );
+        let machine = awake();
+        let denied = hands
+            .request(&machine, "notify", &["hello".to_owned()])
+            .expect_err("soul deny");
+        assert_eq!(
+            denied,
+            DispatchError::Denied {
+                name: "notify".to_owned()
+            }
+        );
+        assert!(hands.notifications().is_empty());
+        assert!(hands.pending().is_none());
+        assert_eq!(
+            hands.last_tool_line().as_deref(),
+            Some("notify deny denied")
+        );
     }
 }

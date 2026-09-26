@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "The Settings and HUD windows may read daemon status, send voice-state and ask commands, confirm tools, manage profiles and the soul pack, use provider Settings, email Settings, Tools Settings, UI prefs (text size), and KWS threshold controls. General may set the TTS playback reaper deadline.",
+  "description": "The Settings and HUD windows may read daemon status, send voice-state and ask commands, confirm tools, manage profiles and the soul pack, use provider Settings, email Settings, Tools Settings (per-tool Always allow, Ask, or Deny), UI prefs (text size), and KWS threshold controls. General may set the TTS playback reaper deadline.",
   "windows": [
     "main",
     "hud"
@@ -53,6 +53,7 @@
     "allow-pack-save",
     "allow-tools-snapshot",
     "allow-tools-save",
+    "allow-tools-set-permission",
     "allow-ui-prefs-snapshot",
     "allow-ui-prefs-set-text-size",
     "allow-ui-prefs-set-hud-idle",

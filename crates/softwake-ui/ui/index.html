@@ -253,25 +253,26 @@
         <section id="pane-tools" class="pane glass hidden" hidden aria-labelledby="tools-title">
           <h2 id="tools-title">Tools</h2>
           <p class="meta">
-            Softwake is not full machine access. Tools stay off until you enable them here.
-            Shell (including ssh via a glossary alias) always confirm-echoes by default.
-            Add host aliases in the active profile <strong>glossary.md</strong>, then Reload soul.
+            Each registered tool is Always allow, Ask, or Deny.
+            Defaults: echo always allow, notify and email send ask, shell deny.
+            Shell confirm policy applies when shell is Ask.
+            Glossary aliases still expand before a shell command runs.
+            This page does not enable email sign-in.
           </p>
-          <label class="field row-check">
-            <input id="tools-shell-enabled" type="checkbox" />
-            <span>Enable shell (ssh-capable, confirm-gated)</span>
-          </label>
+          <div id="tools-list"></div>
           <label class="field">
             <span>Confirm policy</span>
-            <select id="tools-confirm-policy">
+            <select id="tools-confirm-policy" disabled>
               <option value="always">Always confirm (default)</option>
               <option value="mutating_only">Mutating / remote only</option>
               <option value="allowlisted_quiet">Allowlisted quiet (same as mutating-only in v1)</option>
             </select>
           </label>
+          <p id="tools-policy-note" class="meta">Confirm policy applies when shell is Ask.</p>
           <p class="meta">
             Glossary format: <code>aau → ssh -l root aau</code> (or ASCII <code>-&gt;</code>).
-            Spoken: “ssh to aau and check swap” expands, then waits for Confirm on Status.
+            Spoken: “ssh to aau and check swap” expands, then waits for Approve on the HUD or Confirm on Status.
+            Add host aliases in the active profile <strong>glossary.md</strong>, then Reload soul.
           </p>
           <div class="row">
             <button type="button" class="btn" id="tools-save">Save Tools</button>

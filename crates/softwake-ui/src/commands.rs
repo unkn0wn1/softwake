@@ -177,6 +177,9 @@ pub struct HudSnapshot {
     pub talking: bool,
     /// Awake energy-gated listen without holding PTT.
     pub auto_listening: bool,
+    /// Confirm-gated tool waiting for Approve or Deny. Omitted when nothing is waiting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_tool: Option<softwake_ipc::PendingTool>,
 }
 
 /// Status plus a listening level for the HUD capsule.
@@ -204,6 +207,7 @@ pub async fn hud_snapshot() -> Result<HudSnapshot, String> {
             detail: status.detail,
             talking: status.talking,
             auto_listening: status.auto_listening,
+            pending_tool: status.pending_tool,
         })
     })
     .await

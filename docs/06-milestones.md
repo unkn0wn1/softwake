@@ -78,11 +78,12 @@
 - Boring coding-agent harness (separate repo)
 - Multi-conductor / named worker routing (out of scope for Softwake)
 
-## Tools Settings + gated shell ([ADR-0018 / ADR-0019](ADR-0018 / ADR-0019-tools-settings-shell.md))
+## Tools Settings + gated shell ([ADR-0018](ADR-0018-tools-settings-shell.md))
 
 - [x] Settings → Tools pane; `tools.json` enable flags + confirm policy (default shell off, always confirm)
 - [x] `shell` confirm-gated when enabled; glossary expand + confirm-echo; `/bin/sh -c` with timeout/caps
 - [x] Ask heuristic for `run` / `ssh to …`; Status confirm; unit tests without live ssh
+- [x] Per-tool Always allow / Ask / Deny in `tools.json` version 2, and HUD Approve / Deny that holds the panel open while a tool is pending
 
 ## Multi-platform releases
 

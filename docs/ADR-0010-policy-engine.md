@@ -73,3 +73,7 @@ The typed demo is unchanged. `echo` runs while awake. `notify` and `email_send` 
 - Wiring a non-empty map into the daemon is a follow-up. It must keep an unknown tool distinct from a denied tool, and it must run a confirmed tool whose registry row is still safe through `invoke`.
 - Clients that speak protocol generation 1 see no new message kinds.
 - The stricter-policy milestone line is closed. Live connectors stay open. The durable memory store is the opt-in file in [ADR 0009](ADR-0009-long-term-memory.md).
+
+## Amendment — operator grant (2026-09-26)
+
+`effective_tool_decision` is how operator Always allow loosens a confirm floor. It is not `tighten(floor, operator)`. A registry deny stays deny. `PolicyOverrides` and `evaluate` still only tighten. `PolicyEngine::tool_tighten_request` returns the override request, not the evaluated floor. The builtin override map stays empty. Connector evaluation is unchanged and is still never safe. `Hands::request` uses `effective_tool_decision` for tools and `evaluate` for connector subjects.

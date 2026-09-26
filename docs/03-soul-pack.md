@@ -22,7 +22,7 @@ Check order is `soul.md`, then `user.md`, then `rules.md`, then `glossary.md`. T
 | Long-term memory | Separate crate `softwake-memory` ([ADR 0009](ADR-0009-long-term-memory.md)). Thin local store behind a trait. Off until the operator enables a backend. The durable backend is an opt-in JSON file. Honcho is not the default |
 | `tools.md` or policy TOML | Human-readable tool policy mirroring allowlists. A later file may only raise a known row's risk, or be refused ([ADR 0010](ADR-0010-policy-engine.md)) |
 
-The runtime policy stub names `echo` (safe), `notify` (confirm), `email_send` (confirm), and `shell` (confirm, off until Tools Settings). `email_send` runs only after `confirm_tool` ([ADR 0008](ADR-0008-connector-boundary.md)). `rules.md` does not feed `PolicyEngine`. A sentence that allows `shell` does not make `shell` runnable.
+The runtime policy stub names `echo` (safe) unless Tools Settings deny or ask, `notify` (confirm), `email_send` (confirm), and `shell` (deny) until Tools Settings set ask or always allow. Ask runs only after `confirm_tool`. Always allow runs without a prompt. Deny does not run. `email_send` still uses the connector confirm path when it runs ([ADR 0008](ADR-0008-connector-boundary.md)). `rules.md` does not feed `PolicyEngine` and cannot loosen a tool. A sentence that allows `shell` does not make `shell` runnable.
 
 Memory is a **separate module** ([ADR 0009](ADR-0009-long-term-memory.md)) with `remember`, `recall`, and `forget`. Do not stuff memory retrieval into `softwake-soul` parsing. Soul pack renders instructions. The session layer attaches retrieved snippets, and it does not attach them yet. The durable backend is `FileMemory`. This pack does not load `memory.json`.
 

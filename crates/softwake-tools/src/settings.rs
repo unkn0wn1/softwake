@@ -1,8 +1,9 @@
 //! Non-secret Tools Settings on disk.
 //!
 //! `$XDG_CONFIG_HOME/softwake/tools.json` (else `~/.config/softwake/tools.json`).
-//! Tools stay off until the operator enables them. This file holds no secrets.
+//! Each registered tool is Always allow, Ask, or Deny. This file holds no secrets.
 
+use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
@@ -18,7 +19,7 @@ pub const TOOLS_FILE_NAME: &str = "tools.json";
 /// Largest tools Settings file this backend will read, in bytes.
 pub const MAX_TOOLS_SETTINGS_BYTES: usize = 64 * 1024;
 
-const DOCUMENT_VERSION: u32 = 1;
+const DOCUMENT_VERSION: u32 = 2;
 
 /// When the shell tool must show a confirm-echo readback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -77,18 +78,83 @@ pub fn parse_confirm_policy(value: &str) -> Result<ConfirmPolicy, ToolsSettingsE
     }
 }
 
-/// Non-secret Tools Settings. Default: every tool off.
+/// Operator choice for one registered tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolPermission {
+    /// Run while awake with no pending card.
+    AlwaysAllow,
+    /// Stage one pending confirmation.
+    Ask,
+    /// Refuse the call. Nothing runs.
+    Deny,
+}
+
+impl ToolPermission {
+    /// Stable spelling for `tools.json` and the Tools page.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AlwaysAllow => "always_allow",
+            Self::Ask => "ask",
+            Self::Deny => "deny",
+        }
+    }
+}
+
+impl std::fmt::Display for ToolPermission {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Parse an operator permission spelling.
+///
+/// # Errors
+///
+/// Unknown spelling. `always`, `safe`, `confirm`, and `allow` are rejected.
+pub fn parse_tool_permission(value: &str) -> Result<ToolPermission, ToolsSettingsError> {
+    match value {
+        "always_allow" => Ok(ToolPermission::AlwaysAllow),
+        "ask" => Ok(ToolPermission::Ask),
+        "deny" => Ok(ToolPermission::Deny),
+        _ => Err(ToolsSettingsError::InvalidPermission {
+            value: value.to_owned(),
+        }),
+    }
+}
+
+/// Default operator mode for a registered tool name.
+///
+/// `None` means `name` is not one of the phase-2 tools. Callers treat that as deny.
+#[must_use]
+pub fn default_permission(name: &str) -> Option<ToolPermission> {
+    match name {
+        crate::ECHO_TOOL => Some(ToolPermission::AlwaysAllow),
+        crate::NOTIFY_TOOL | crate::EMAIL_SEND_TOOL => Some(ToolPermission::Ask),
+        crate::SHELL_TOOL => Some(ToolPermission::Deny),
+        _ => None,
+    }
+}
+
+/// Non-secret Tools Settings.
+///
+/// Defaults: `echo` always allow, `notify` and `email_send` ask, `shell` deny.
+/// [`ToolsSettings::shell_enabled`] mirrors shell: true when shell is ask or always allow.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolsSettings {
-    /// Document version.
+    /// Document version. Loads of version 1 are normalized to 2 in memory.
     #[serde(default = "one")]
     pub version: u32,
-    /// Operator opt-in for the shell tool. Default `false`.
+    /// Mirror of shell permission. True when shell is not deny.
     #[serde(default)]
     pub shell_enabled: bool,
-    /// Confirm gate for shell. Default [`ConfirmPolicy::Always`].
+    /// Confirm gate for shell when the operator mode is Ask. Default [`ConfirmPolicy::Always`].
     #[serde(default)]
     pub confirm_policy: ConfirmPolicy,
+    /// Operator mode for each registered tool. Unknown keys are dropped on normalize.
+    #[serde(default)]
+    pub permissions: BTreeMap<String, ToolPermission>,
 }
 
 fn one() -> u32 {
@@ -97,11 +163,63 @@ fn one() -> u32 {
 
 impl Default for ToolsSettings {
     fn default() -> Self {
-        Self {
+        let mut settings = Self {
             version: DOCUMENT_VERSION,
             shell_enabled: false,
             confirm_policy: ConfirmPolicy::Always,
+            permissions: BTreeMap::new(),
+        };
+        settings.normalize();
+        settings
+    }
+}
+
+impl ToolsSettings {
+    /// Stored mode, or [`default_permission`] for a registered name with no key.
+    ///
+    /// A name that is not registered is deny.
+    #[must_use]
+    pub fn permission(&self, name: &str) -> ToolPermission {
+        if crate::ToolRegistry::phase2().lookup(name).is_none() {
+            return ToolPermission::Deny;
         }
+        self.permissions
+            .get(name)
+            .copied()
+            .unwrap_or_else(|| default_permission(name).unwrap_or(ToolPermission::Deny))
+    }
+
+    /// Fill defaults, drop unknown keys, and sync the shell mirror.
+    ///
+    /// A missing `permissions.shell` follows `shell_enabled` (ask when true, deny when false).
+    /// When `permissions.shell` is present, that value wins and `shell_enabled` is rewritten.
+    /// Load stamps version 2 in memory and does not write the file.
+    pub fn normalize(&mut self) {
+        if !self.permissions.contains_key(crate::SHELL_TOOL) {
+            let shell = if self.shell_enabled {
+                ToolPermission::Ask
+            } else {
+                ToolPermission::Deny
+            };
+            self.permissions.insert(crate::SHELL_TOOL.to_owned(), shell);
+        }
+        for name in [crate::ECHO_TOOL, crate::NOTIFY_TOOL, crate::EMAIL_SEND_TOOL] {
+            if !self.permissions.contains_key(name) {
+                if let Some(permission) = default_permission(name) {
+                    self.permissions.insert(name.to_owned(), permission);
+                }
+            }
+        }
+        let registry = crate::ToolRegistry::phase2();
+        self.permissions
+            .retain(|name, _| registry.lookup(name).is_some());
+        let shell = self
+            .permissions
+            .get(crate::SHELL_TOOL)
+            .copied()
+            .unwrap_or(ToolPermission::Deny);
+        self.shell_enabled = shell != ToolPermission::Deny;
+        self.version = DOCUMENT_VERSION;
     }
 }
 
@@ -117,6 +235,12 @@ pub enum ToolsSettingsError {
     /// Policy string was not recognised.
     #[error("unknown confirm policy: {value}")]
     InvalidPolicy {
+        /// Rejected spelling.
+        value: String,
+    },
+    /// Permission string was not recognised.
+    #[error("unknown tool permission: {value}")]
+    InvalidPermission {
         /// Rejected spelling.
         value: String,
     },
@@ -196,7 +320,7 @@ impl FileToolsSettings {
     /// I/O or serialize errors.
     pub fn save(&self, settings: &ToolsSettings) -> Result<(), ToolsSettingsError> {
         let mut document = settings.clone();
-        document.version = DOCUMENT_VERSION;
+        document.normalize();
         let body =
             serde_json::to_vec_pretty(&document).map_err(|source| ToolsSettingsError::Invalid {
                 path: self.path.clone(),
@@ -266,7 +390,7 @@ fn decode(path: &Path, bytes: &[u8]) -> Result<ToolsSettings, ToolsSettingsError
             path: path.to_owned(),
             source: Box::new(source),
         })?;
-    settings.version = DOCUMENT_VERSION;
+    settings.normalize();
     Ok(settings)
 }
 
@@ -339,22 +463,55 @@ fn io_err(path: &Path, source: io::Error) -> ToolsSettingsError {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfirmPolicy, FileToolsSettings, ToolsSettings, parse_confirm_policy,
-        resolve_tools_file_from,
+        ConfirmPolicy, FileToolsSettings, ToolPermission, ToolsSettings, ToolsSettingsError,
+        default_permission, parse_confirm_policy, parse_tool_permission, resolve_tools_file_from,
     };
+    use crate::{ECHO_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL, SHELL_TOOL, ToolRegistry};
+
+    fn temp_store(label: &str) -> (std::path::PathBuf, FileToolsSettings) {
+        let dir = std::env::temp_dir().join(format!(
+            "softwake-tools-settings-{}-{label}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("tools.json");
+        let store = FileToolsSettings::new(&path).expect("store");
+        (dir, store)
+    }
 
     #[test]
-    fn default_keeps_shell_off_and_always_confirms() {
+    fn default_is_version_2_with_documented_modes() {
         let settings = ToolsSettings::default();
+        assert_eq!(settings.version, 2);
         assert!(!settings.shell_enabled);
         assert_eq!(settings.confirm_policy, ConfirmPolicy::Always);
         assert!(settings.confirm_policy.must_confirm(false));
         assert!(ConfirmPolicy::MutatingOnly.must_confirm(true));
         assert!(!ConfirmPolicy::MutatingOnly.must_confirm(false));
+        assert!(ConfirmPolicy::AllowlistedQuiet.must_confirm(true));
+        assert!(!ConfirmPolicy::AllowlistedQuiet.must_confirm(false));
         assert_eq!(
             ConfirmPolicy::AllowlistedQuiet.as_str(),
             "allowlisted_quiet"
         );
+        assert_eq!(settings.permission(ECHO_TOOL), ToolPermission::AlwaysAllow);
+        assert_eq!(settings.permission(NOTIFY_TOOL), ToolPermission::Ask);
+        assert_eq!(settings.permission(EMAIL_SEND_TOOL), ToolPermission::Ask);
+        assert_eq!(settings.permission(SHELL_TOOL), ToolPermission::Deny);
+        assert_eq!(settings.permission("volume"), ToolPermission::Deny);
+        assert!(!settings.permissions.contains_key("volume"));
+    }
+
+    #[test]
+    fn every_registered_tool_has_an_explicit_default() {
+        for tool in ToolRegistry::phase2().entries() {
+            let permission = default_permission(tool.name).unwrap_or_else(|| {
+                panic!("{} has no explicit default", tool.name);
+            });
+            assert_eq!(ToolsSettings::default().permission(tool.name), permission);
+        }
+        assert!(default_permission("volume").is_none());
     }
 
     #[test]
@@ -371,30 +528,131 @@ mod tests {
     }
 
     #[test]
+    fn parse_permission_rejects_policy_spellings() {
+        assert_eq!(
+            parse_tool_permission("always_allow").expect("always allow"),
+            ToolPermission::AlwaysAllow
+        );
+        assert_eq!(
+            parse_tool_permission("ask").expect("ask"),
+            ToolPermission::Ask
+        );
+        assert_eq!(
+            parse_tool_permission("deny").expect("deny"),
+            ToolPermission::Deny
+        );
+        for spelling in ["safe", "always", "confirm", "allow"] {
+            match parse_tool_permission(spelling) {
+                Err(ToolsSettingsError::InvalidPermission { value }) => {
+                    assert_eq!(value, spelling);
+                }
+                other => panic!("expected InvalidPermission for {spelling}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn resolve_prefers_xdg_config() {
         let path = resolve_tools_file_from(Some("/cfg"), Some("/home")).expect("path");
         assert_eq!(path, std::path::PathBuf::from("/cfg/softwake/tools.json"));
     }
 
     #[test]
-    fn round_trip_save_load() {
-        let dir =
-            std::env::temp_dir().join(format!("softwake-tools-settings-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("dir");
-        let path = dir.join("tools.json");
-        let store = FileToolsSettings::new(&path).expect("store");
+    fn version1_shell_enabled_loads_ask_and_keeps_policy() {
+        let (dir, store) = temp_store("v1-on");
+        std::fs::write(
+            store.path(),
+            r#"{"version":1,"shell_enabled":true,"confirm_policy":"mutating_only"}"#,
+        )
+        .expect("write");
+        let settings = store.load().expect("load");
+        assert_eq!(settings.version, 2);
+        assert_eq!(settings.permission(SHELL_TOOL), ToolPermission::Ask);
+        assert!(settings.shell_enabled);
+        assert_eq!(settings.confirm_policy, ConfirmPolicy::MutatingOnly);
+        assert_eq!(settings.permission(ECHO_TOOL), ToolPermission::AlwaysAllow);
+        assert_eq!(settings.permission(NOTIFY_TOOL), ToolPermission::Ask);
+        assert_eq!(settings.permission(EMAIL_SEND_TOOL), ToolPermission::Ask);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn version1_shell_disabled_loads_deny() {
+        let (dir, store) = temp_store("v1-off");
+        std::fs::write(
+            store.path(),
+            r#"{"version":1,"shell_enabled":false,"confirm_policy":"always"}"#,
+        )
+        .expect("write");
+        let settings = store.load().expect("load");
+        assert_eq!(settings.permission(SHELL_TOOL), ToolPermission::Deny);
+        assert!(!settings.shell_enabled);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn present_shell_permission_wins_over_the_bool() {
+        let (dir, store) = temp_store("v2-disagree");
+        std::fs::write(
+            store.path(),
+            r#"{"version":2,"shell_enabled":false,"confirm_policy":"always","permissions":{"shell":"always_allow"}}"#,
+        )
+        .expect("write");
+        let settings = store.load().expect("load");
+        assert_eq!(settings.permission(SHELL_TOOL), ToolPermission::AlwaysAllow);
+        assert!(settings.shell_enabled);
+        assert_eq!(settings.version, 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn round_trip_drops_unknown_keys_and_rejects_bad_spellings() {
+        let (dir, store) = temp_store("round");
         assert_eq!(
             store.load().expect("missing default"),
             ToolsSettings::default()
         );
-        let settings = ToolsSettings {
-            shell_enabled: true,
+        let mut settings = ToolsSettings {
             confirm_policy: ConfirmPolicy::MutatingOnly,
+            shell_enabled: false,
             ..ToolsSettings::default()
         };
+        settings
+            .permissions
+            .insert(ECHO_TOOL.to_owned(), ToolPermission::Ask);
+        settings
+            .permissions
+            .insert(NOTIFY_TOOL.to_owned(), ToolPermission::AlwaysAllow);
+        settings
+            .permissions
+            .insert(EMAIL_SEND_TOOL.to_owned(), ToolPermission::Deny);
+        settings
+            .permissions
+            .insert(SHELL_TOOL.to_owned(), ToolPermission::AlwaysAllow);
+        settings
+            .permissions
+            .insert("volume".to_owned(), ToolPermission::Ask);
+        settings.normalize();
+        assert!(settings.shell_enabled);
+        assert!(!settings.permissions.contains_key("volume"));
         store.save(&settings).expect("save");
-        assert_eq!(store.load().expect("load"), settings);
-        let _ = std::fs::remove_dir_all(&dir);
+        let loaded = store.load().expect("load");
+        assert_eq!(loaded, settings);
+        let body = std::fs::read_to_string(store.path()).expect("body");
+        assert!(!body.contains("volume"));
+        assert!(body.contains("\"version\": 2"));
+        std::fs::write(
+            store.path(),
+            r#"{"version":2,"permissions":{"echo":"safe"}}"#,
+        )
+        .expect("bad");
+        assert!(store.load().is_err());
+        std::fs::write(
+            store.path(),
+            r#"{"version":2,"permissions":{"echo":"always"}}"#,
+        )
+        .expect("bad always");
+        assert!(store.load().is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
