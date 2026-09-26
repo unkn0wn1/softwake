@@ -671,10 +671,16 @@ fn ctl_ask_is_refused_until_awake_then_returns_the_fixture_reply() {
     assert_eq!(posts.len(), 1);
     assert_eq!(posts[0].url, "https://api.x.ai/v1/chat/completions");
     let body: serde_json::Value = serde_json::from_str(&posts[0].body).expect("json");
+    let pack = server.session_instructions_for_test().expect("pack");
+    let expected = softwake_session::assemble_system(
+        &pack,
+        &crate::chat::system_appendix("", &softwake_tools::ToolsSettings::default()),
+    );
     assert_eq!(
         body["messages"][0]["content"].as_str(),
-        server.session_instructions_for_test().as_deref()
+        Some(expected.as_str())
     );
+    assert!(expected.contains(softwake_tools::TOOLS_PERMISSIONS_LEAD));
     assert_eq!(body["messages"][1]["content"].as_str(), Some("hello"));
     assert!(!posts[0].body.contains("sk-test-secret"));
 

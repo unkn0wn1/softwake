@@ -526,7 +526,8 @@ impl Demo {
         let fixture = self.memory_fixture.as_ref();
         #[cfg(not(test))]
         let fixture = Option::<&softwake_memory::MockMemory>::None;
-        let appendix = crate::chat::appendix_for_ask(text, fixture);
+        let memory = crate::chat::appendix_for_ask(text, fixture);
+        let appendix = crate::chat::system_appendix(&memory, &self.hands.tools_settings());
         match crate::chat::perform_ask(
             &mut self.session,
             text,

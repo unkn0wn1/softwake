@@ -58,6 +58,13 @@ fn xai_handle(
     ProviderHandle::from_parts(settings, bag)
 }
 
+fn expected_system(pack: &str, memory: &str) -> String {
+    softwake_session::assemble_system(
+        pack,
+        &crate::chat::system_appendix(memory, &softwake_tools::ToolsSettings::default()),
+    )
+}
+
 fn pong_body() -> HttpResponse {
     HttpResponse {
         status: 200,
@@ -158,10 +165,13 @@ fn ask_while_awake_returns_the_fixture_reply() {
     assert_eq!(posts.len(), 1);
     assert_eq!(posts[0].url, "https://api.x.ai/v1/chat/completions");
     let body: serde_json::Value = serde_json::from_str(&posts[0].body).expect("json");
+    let pack = demo.session_instructions().expect("pack");
+    let expected = expected_system(pack, "");
     assert_eq!(
         body["messages"][0]["content"].as_str(),
-        demo.session_instructions()
+        Some(expected.as_str())
     );
+    assert!(expected.contains(softwake_tools::TOOLS_PERMISSIONS_LEAD));
     assert_eq!(body["messages"][1]["content"].as_str(), Some("hello"));
     assert_eq!(body["messages"][0]["role"], "system");
     assert!(!result.lines.join("\n").contains("sk-test-secret"));
@@ -358,7 +368,13 @@ fn ask_with_mock_memory_appends_budgeted_hits_after_the_pack() {
     let system = body["messages"][0]["content"].as_str().expect("system");
     let pack = demo.session_instructions().expect("pack");
     assert!(system.starts_with(pack));
+    assert!(system.contains(softwake_tools::TOOLS_PERMISSIONS_LEAD));
     assert!(system.contains(softwake_memory::RECALL_LEAD));
+    let tools_at = system
+        .find(softwake_tools::TOOLS_PERMISSIONS_LEAD)
+        .expect("tools");
+    let memory_at = system.find(softwake_memory::RECALL_LEAD).expect("memory");
+    assert!(tools_at < memory_at);
     assert!(system.contains("garage code is on the hook"));
     assert!(system.contains("garage door opens at dusk"));
     assert!(!system.contains("wifi password"));
@@ -366,7 +382,7 @@ fn ask_with_mock_memory_appends_budgeted_hits_after_the_pack() {
 }
 
 #[test]
-fn ask_with_empty_query_hits_or_disabled_memory_leaves_pack_alone() {
+fn ask_with_empty_query_hits_or_disabled_memory_keeps_tools_appendix_without_memory() {
     let (mut demo, _soul) = demo_with(no_cooldown());
     install(
         &mut demo,
@@ -378,16 +394,17 @@ fn ask_with_empty_query_hits_or_disabled_memory_leaves_pack_alone() {
         ),
         pong_body(),
     );
-    // Disabled memory: fail-open, pack unchanged.
+    // Disabled memory: fail-open. Live Tools appendix still attaches; no recall lead.
     demo.install_memory_fixture(softwake_memory::MockMemory::default());
     wake(&mut demo);
     let result = demo.handle_line("ask hello", Duration::ZERO);
     assert_eq!(result.lines[0], "assistant: pong");
     let body: serde_json::Value = serde_json::from_str(&demo.chat_posts()[0].body).expect("json");
-    assert_eq!(
-        body["messages"][0]["content"].as_str(),
-        demo.session_instructions()
-    );
+    let pack = demo.session_instructions().expect("pack");
+    let system = body["messages"][0]["content"].as_str().expect("system");
+    assert_eq!(system, expected_system(pack, ""));
+    assert!(system.contains(softwake_tools::TOOLS_PERMISSIONS_LEAD));
+    assert!(!system.contains(softwake_memory::RECALL_LEAD));
 }
 
 #[test]
@@ -437,10 +454,11 @@ fn ask_with_file_memory_temp_dir_attaches_substring_hits() {
     let _ = demo.handle_line("ask alpha", Duration::ZERO);
     let body: serde_json::Value = serde_json::from_str(&demo.chat_posts()[0].body).expect("json");
     let system = body["messages"][0]["content"].as_str().expect("system");
-    assert_eq!(
-        system,
-        &softwake_session::assemble_system(demo.session_instructions().expect("pack"), &appendix,)
+    let expected = softwake_session::assemble_system(
+        demo.session_instructions().expect("pack"),
+        &crate::chat::system_appendix(&appendix, &softwake_tools::ToolsSettings::default()),
     );
+    assert_eq!(system, &expected);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

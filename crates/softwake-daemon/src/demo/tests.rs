@@ -572,9 +572,9 @@ fn missing_soul_refuses_wake_until_reload() {
     assert!(applied.contains("Fresh user"));
     assert!(applied.contains("# Runtime policy"));
     assert!(applied.contains("State: awake."));
-    assert!(applied.contains("echo (safe)"));
-    assert!(applied.contains("notify (confirm)"));
-    assert!(applied.contains("email_send (confirm)"));
+    assert!(applied.contains("Live Tools permissions appendix"));
+    assert!(applied.contains("shell deny"));
+    assert!(applied.contains("always_allow, ask, or deny"));
     assert_eq!(demo.session_phase(), SessionPhase::Open);
     assert_eq!(demo.session_instructions(), Some(applied));
 }
@@ -608,9 +608,9 @@ fn tool_echo_requires_awake_and_the_session_opens_and_closes() {
     let instructions = demo.session_instructions().expect("open").to_owned();
     assert!(instructions.contains("test soul"));
     assert!(instructions.contains("test user"));
-    assert!(instructions.contains("echo (safe)"));
-    assert!(instructions.contains("notify (confirm)"));
-    assert!(instructions.contains("email_send (confirm)"));
+    assert!(instructions.contains("Live Tools permissions appendix"));
+    assert!(instructions.contains("shell deny"));
+    assert!(instructions.contains("always_allow, ask, or deny"));
 
     let ran = demo.handle_line("tool echo Hello", Duration::ZERO);
     assert!(
