@@ -164,8 +164,7 @@ mod tests {
     fn temp_store() -> (std::path::PathBuf, FileToolsSettings) {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
+            .map_or(0, |duration| duration.as_nanos());
         let dir =
             std::env::temp_dir().join(format!("softwake-ui-tools-{}-{nanos}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
