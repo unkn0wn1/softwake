@@ -207,3 +207,13 @@ commands.allow = ["tools_snapshot"]
 identifier = "allow-tools-save"
 description = "Save Tools Settings."
 commands.allow = ["tools_save"]
+
+[[permission]]
+identifier = "allow-ui-prefs-snapshot"
+description = "Read Settings UI prefs (text size)."
+commands.allow = ["ui_prefs_snapshot"]
+
+[[permission]]
+identifier = "allow-ui-prefs-set-text-size"
+description = "Save Settings UI text size."
+commands.allow = ["ui_prefs_set_text_size"]

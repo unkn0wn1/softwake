@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-text-size="x-small">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -29,33 +29,50 @@
             Each profile has its own name plus soul.md, user.md, rules.md, and glossary.md.
             Switch the active profile there; Reload soul applies a valid pack on the next awake.
           </p>
+          <label class="field">
+            <span>UI text size</span>
+            <select id="ui-text-size" aria-describedby="ui-text-size-hint">
+              <option value="xx-small">XX-small</option>
+              <option value="x-small" selected>X-small (default)</option>
+              <option value="small">Small</option>
+              <option value="medium">Medium</option>
+              <option value="large">Large</option>
+            </select>
+          </label>
+          <p id="ui-text-size-hint" class="meta">
+            Scales labels across every Settings pane. Buttons stay compact. Saved under the Softwake config root.
+          </p>
+          <p id="ui-prefs-status" class="meta" role="status"></p>
+          <p id="ui-prefs-error" class="error" role="status"></p>
         </section>
 
         <section id="pane-profiles" class="pane glass pane-fill hidden" hidden aria-labelledby="profiles-title">
           <div class="profiles-detail-panel">
-            <h2 id="profiles-title">Profiles</h2>
-            <p class="meta">
-              Each profile has an agent name and its own soul pack. The active profile is what the
-              daemon loads when Softwake wakes (unless SOFTWAKE_SOUL_DIR / --soul-dir overrides).
-              Edit the selected profile below; Set active updates softwake.json and reloads soul
-              when the pack is valid. Create a blank profile from the left sub-menu.
-            </p>
-            <p id="profiles-config-dir" class="meta">Config: …</p>
-            <label class="field field-compact">
-              <span>Agent name</span>
-              <input id="profile-name" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="Name this profile" />
-            </label>
-            <div class="row row-compact">
-              <button type="button" class="btn-primary btn-compact" id="profile-save-name">Save name</button>
-              <button type="button" class="btn-compact" id="profile-set-active">Set active</button>
-            </div>
-            <p id="pack-dir" class="meta">Directory: …</p>
-            <p id="pack-validity" class="meta">Pack: …</p>
-            <div class="pack-tabs" role="tablist" aria-label="Pack files">
-              <button type="button" class="pack-tab btn-compact" id="pack-tab-soul" role="tab" aria-selected="true" aria-controls="pack-soul">Soul</button>
-              <button type="button" class="pack-tab btn-compact" id="pack-tab-user" role="tab" aria-selected="false" aria-controls="pack-user">User</button>
-              <button type="button" class="pack-tab btn-compact" id="pack-tab-rules" role="tab" aria-selected="false" aria-controls="pack-rules">Rules</button>
-              <button type="button" class="pack-tab btn-compact" id="pack-tab-glossary" role="tab" aria-selected="false" aria-controls="pack-glossary">Glossary</button>
+            <div class="profiles-chrome">
+              <h2 id="profiles-title">Profiles</h2>
+              <p class="meta">
+                Each profile has an agent name and its own soul pack. The active profile is what the
+                daemon loads when Softwake wakes (unless SOFTWAKE_SOUL_DIR / --soul-dir overrides).
+                Edit the selected profile below; Set active updates softwake.json and reloads soul
+                when the pack is valid. Create a blank profile from the left sub-menu.
+              </p>
+              <p id="profiles-config-dir" class="meta">Config: …</p>
+              <label class="field field-compact">
+                <span>Agent name</span>
+                <input id="profile-name" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="Name this profile" />
+              </label>
+              <div class="row row-compact">
+                <button type="button" class="btn-primary btn-compact" id="profile-save-name">Save name</button>
+                <button type="button" class="btn-compact" id="profile-set-active">Set active</button>
+              </div>
+              <p id="pack-dir" class="meta">Directory: …</p>
+              <p id="pack-validity" class="meta">Pack: …</p>
+              <div class="pack-tabs" role="tablist" aria-label="Pack files">
+                <button type="button" class="pack-tab btn-compact" id="pack-tab-soul" role="tab" aria-selected="true" aria-controls="pack-soul">Soul</button>
+                <button type="button" class="pack-tab btn-compact" id="pack-tab-user" role="tab" aria-selected="false" aria-controls="pack-user">User</button>
+                <button type="button" class="pack-tab btn-compact" id="pack-tab-rules" role="tab" aria-selected="false" aria-controls="pack-rules">Rules</button>
+                <button type="button" class="pack-tab btn-compact" id="pack-tab-glossary" role="tab" aria-selected="false" aria-controls="pack-glossary">Glossary</button>
+              </div>
             </div>
             <div class="pack-editors">
               <textarea id="pack-soul" class="pack-editor" role="tabpanel" spellcheck="false" aria-label="soul.md" disabled></textarea>
@@ -63,13 +80,15 @@
               <textarea id="pack-rules" class="pack-editor hidden" role="tabpanel" hidden spellcheck="false" aria-label="rules.md" disabled></textarea>
               <textarea id="pack-glossary" class="pack-editor hidden" role="tabpanel" hidden spellcheck="false" aria-label="glossary.md" disabled></textarea>
             </div>
-            <div class="row row-compact">
-              <button type="button" class="btn-primary btn-compact" id="pack-save" disabled>Save pack</button>
-              <button type="button" class="btn-compact" id="pack-reload-disk">Reload from disk</button>
-              <button type="button" class="btn-compact" id="pack-reload-soul">Reload soul</button>
+            <div class="profiles-footer">
+              <div class="row row-compact">
+                <button type="button" class="btn-primary btn-compact" id="pack-save" disabled>Save pack</button>
+                <button type="button" class="btn-compact" id="pack-reload-disk">Reload from disk</button>
+                <button type="button" class="btn-compact" id="pack-reload-soul">Reload soul</button>
+              </div>
+              <p id="pack-status" class="meta" role="status"></p>
+              <p id="pack-error" class="error" role="status"></p>
             </div>
-            <p id="pack-status" class="meta" role="status"></p>
-            <p id="pack-error" class="error" role="status"></p>
           </div>
         </section>
 

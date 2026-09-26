@@ -16,6 +16,7 @@ mod profiles;
 mod providers;
 mod tools;
 mod tray;
+mod ui_prefs;
 
 use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
@@ -73,6 +74,8 @@ pub fn run() {
             profiles::pack_save,
             tools::tools_snapshot,
             tools::tools_save,
+            ui_prefs::ui_prefs_snapshot,
+            ui_prefs::ui_prefs_set_text_size,
         ])
         .setup(|app| {
             ensure_daemon::ensure_daemon_running();
@@ -293,6 +296,8 @@ mod tests {
         "pack_save",
         "tools_snapshot",
         "tools_save",
+        "ui_prefs_snapshot",
+        "ui_prefs_set_text_size",
     ];
 
     const PERMISSIONS: &[&str] = &[
@@ -338,6 +343,8 @@ mod tests {
         "allow-pack-save",
         "allow-tools-snapshot",
         "allow-tools-save",
+        "allow-ui-prefs-snapshot",
+        "allow-ui-prefs-set-text-size",
     ];
 
     #[test]

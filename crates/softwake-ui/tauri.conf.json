@@ -12,10 +12,10 @@
       {
         "label": "main",
         "title": "Softwake",
-        "width": 860,
-        "height": 680,
-        "minWidth": 720,
-        "minHeight": 560,
+        "width": 940,
+        "height": 740,
+        "minWidth": 800,
+        "minHeight": 620,
         "resizable": true
       }
     ]
@@ -25,6 +25,9 @@
     "category": "Utility",
     "shortDescription": "Softwake local assistant",
     "longDescription": "Softwake settings window, system tray, and HUD. Release builds bundle softwaked beside the UI.",
-    "icon": ["icons/icon.png", "icons/icon.ico"]
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ]
   }
 }

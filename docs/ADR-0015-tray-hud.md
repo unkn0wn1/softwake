@@ -32,6 +32,7 @@ v1 shipped a **mock level** (sine while capture is running, near-zero otherwise)
 - Live email / Drive / calendar clients.
 - Secret-bag encryption changes.
 - Replacing the Settings left-nav shell.
+- Settings text-size density ([ADR 0020](ADR-0020-ui-text-scale.md)); deferred here.
 
 ## Context
 
