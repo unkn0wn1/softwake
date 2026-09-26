@@ -403,6 +403,11 @@ pub struct Status {
     /// True when the latest ask compacted older turns.
     #[serde(default, skip_serializing_if = "is_false")]
     pub context_compacted: bool,
+    /// Voice test mode: phrases and state voice run; microphone speech is not sent to chat.
+    ///
+    /// Additive on protocol generation 1. Older peers omit it. Default off.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub voice_test: bool,
 }
 
 #[allow(
@@ -615,6 +620,18 @@ pub enum ClientMessage {
         /// Client-chosen id. The daemon echoes it and does not interpret it.
         id: u64,
     },
+    /// Turn voice test mode on or off.
+    ///
+    /// Phrases still change wake / sleep / hibernate and the state announcement
+    /// still runs. Microphone speech is not sent to the chat model. Typed `ask`
+    /// is unchanged. Additive on protocol generation 1. Default off. The flag
+    /// lives in the daemon process and clears when that process exits.
+    SetVoiceTest {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+        /// `true` enables voice test mode.
+        enabled: bool,
+    },
 }
 
 /// Daemon messages after a client connects.
@@ -690,6 +707,7 @@ mod tests {
             context_used: None,
             context_limit: None,
             context_compacted: false,
+            voice_test: false,
         }
     }
 
@@ -916,6 +934,14 @@ mod tests {
         assert!(talk_start_json.contains("\"type\":\"talk_start\""));
         let talk_stop = ClientMessage::TalkStop { id: 13 };
         assert_round_trip(&talk_stop);
+        let voice_test = ClientMessage::SetVoiceTest {
+            id: 14,
+            enabled: true,
+        };
+        assert_round_trip(&voice_test);
+        let voice_test_json = serde_json::to_string(&voice_test).expect("encode");
+        assert!(voice_test_json.contains("\"type\":\"set_voice_test\""));
+        assert!(voice_test_json.contains("\"enabled\":true"));
         let talk_stop_json = serde_json::to_string(&talk_stop).expect("encode");
         assert!(talk_stop_json.contains("\"type\":\"talk_stop\""));
         let talk_rejected = IpcError::TalkRejected {
@@ -979,6 +1005,7 @@ mod tests {
             context_used: None,
             context_limit: None,
             context_compacted: false,
+            voice_test: false,
         };
         assert_round_trip(&with_pending);
         let pending_json = serde_json::to_string(&with_pending).expect("encode");
@@ -1010,6 +1037,7 @@ mod tests {
         assert!(status.soul_reload_pending);
         assert!(status.capture_level.is_none());
         assert!(!status.talking);
+        assert!(!status.voice_test);
     }
 
     #[test]
@@ -1029,6 +1057,7 @@ mod tests {
             context_used: None,
             context_limit: None,
             context_compacted: false,
+            voice_test: false,
         };
         assert_round_trip(&with_level);
         let json = serde_json::to_string(&with_level).expect("encode");
@@ -1049,6 +1078,7 @@ mod tests {
             context_used: None,
             context_limit: None,
             context_compacted: false,
+            voice_test: false,
         };
         let json = serde_json::to_string(&without).expect("encode");
         assert!(!json.contains("capture_level"));
@@ -1076,6 +1106,7 @@ mod tests {
             context_used: None,
             context_limit: None,
             context_compacted: false,
+            voice_test: false,
         };
         assert_round_trip(&missing);
 
@@ -1097,6 +1128,7 @@ mod tests {
             context_used: None,
             context_limit: None,
             context_compacted: false,
+            voice_test: false,
         };
         let json = serde_json::to_string(&ok).expect("encode");
         assert!(json.contains("\"soul\":{\"ok\":true}"));

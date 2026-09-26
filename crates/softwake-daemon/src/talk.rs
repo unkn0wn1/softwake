@@ -39,6 +39,16 @@ impl TalkSession {
         self.buffer.is_armed()
     }
 
+    /// Samples held while the button is down. Zero when talk is not armed.
+    #[must_use]
+    pub(crate) fn buffered_samples(&self) -> usize {
+        if self.buffer.is_armed() {
+            self.buffer.len()
+        } else {
+            0
+        }
+    }
+
     pub(crate) fn arm(&mut self) {
         self.buffer.arm();
     }

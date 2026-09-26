@@ -522,7 +522,8 @@ impl ServerConnection {
             | ClientMessage::Ask { .. }
             | ClientMessage::Wake { .. }
             | ClientMessage::TalkStart { .. }
-            | ClientMessage::TalkStop { .. } => {
+            | ClientMessage::TalkStop { .. }
+            | ClientMessage::SetVoiceTest { .. } => {
                 let message = "expected a hello message".to_owned();
                 endpoint.write(&ServerMessage::HelloRejected {
                     protocol_version: PROTOCOL_VERSION,
@@ -749,6 +750,16 @@ impl Client {
     pub fn call_talk_stop(&mut self) -> Result<Status, CallError> {
         let id = self.allocate_id();
         self.round_trip(&ClientMessage::TalkStop { id }, id)
+    }
+
+    /// Turn voice test mode on or off and return the status.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] on transport failure or a rejected update.
+    pub fn set_voice_test(&mut self, enabled: bool) -> Result<Status, CallError> {
+        let id = self.allocate_id();
+        self.round_trip(&ClientMessage::SetVoiceTest { id, enabled }, id)
     }
 
     /// Confirm the pending tool and return the status after it runs.
@@ -990,6 +1001,7 @@ mod tests {
                         context_used: None,
                         context_limit: None,
                         context_compacted: false,
+                        voice_test: false,
                     }),
                 })
                 .expect("response");

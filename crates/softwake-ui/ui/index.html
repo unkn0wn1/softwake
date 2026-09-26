@@ -44,6 +44,15 @@
           </p>
           <p id="ui-prefs-status" class="meta" role="status"></p>
           <p id="ui-prefs-error" class="error" role="status"></p>
+          <label class="field row-check">
+            <input id="voice-test" type="checkbox" />
+            <span>Voice test mode</span>
+          </label>
+          <p class="meta">
+            Wake, sleep, and deep-sleep phrases still change state, and Softwake still speaks the short state line.
+            Microphone speech is not sent to the chat model. Default off.
+            A serve restart clears this unless serve was started with <code>--voice-test</code>.
+          </p>
         </section>
 
         <section id="pane-profiles" class="pane glass pane-fill hidden" hidden aria-labelledby="profiles-title">

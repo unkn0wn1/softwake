@@ -6,7 +6,7 @@ Three states. Names are fixed vocabulary for UI, logs, and docs.
 |-------|---------------|------------------|--------------------|
 | **sleep** | On | On (listening for wake) | **Off** — ignore speech for actions |
 | **awake** | On | On (listening for sleep phrase) | **On** — session + tools per policy |
-| **hibernate** | **Off** | Off | Off — only UI (or equivalent local command) can leave hibernate |
+| **hibernate** | **Off** | Off | Off — only UI Resume or `ctl resume` can leave hibernate (lands in sleep) |
 
 ## Sleep (default while “on”)
 
@@ -27,9 +27,9 @@ Three states. Names are fixed vocabulary for UI, logs, and docs.
 
 ## Hibernate
 
-- Entered from UI (or a future explicit local hotkey that does not need the mic).
+- Entered from the UI, from `ctl hibernate`, or from the voice phrase `deep sleep` (from sleep or from awake).
 - **Stops all listening.** Release mic devices; stop wake engine; close any acting session. Hibernate from awake releases the session before capture stops.
-- Cannot be woken by voice. Leaving hibernate is a conscious UI (or CLI) action → typically land in **sleep**, not directly awake (safer default).
+- Cannot be woken by voice. `hi`, `sleep`, and `deep sleep` do nothing while hibernating. Leaving hibernate is UI Resume or `ctl resume`, which lands in **sleep**, not awake.
 
 ## Invariants (test these)
 
@@ -43,11 +43,19 @@ Three states. Names are fixed vocabulary for UI, logs, and docs.
 
 ```toml
 [voice]
-wake_phrases = ["<profile name>", "hey <profile name>", "hey softwake", "softwake"]
-sleep_phrases = ["go to sleep", "goodnight <profile name>", "<profile name> sleep", "goodnight softwake", "softwake sleep"]
-# hibernate has no phrase by default — UI only
+wake_phrases = ["<profile name>", "hey <profile name>", "hey softwake", "softwake", "hi"]
+sleep_phrases = ["go to sleep", "goodnight <profile name>", "<profile name> sleep", "goodnight softwake", "softwake sleep", "sleep"]
+hibernate_phrases = ["deep sleep"]
 post_wake_cooldown_ms = 800
 post_sleep_cooldown_ms = 800
 ```
+
+`hi` and `sleep` are bare words added after the longer phrases. sherpa-onnx has no grammar. A short word is easier to spot in isolation (`#0.15` on single words of at most eight characters) and is ignored during an awake utterance that has already run about 1.5 seconds. A pause of about 400 ms resets the keyword stream. That is not a sentence parser. While asleep, bare `hi` can still false-wake.
+
+Entering awake, sleep, or hibernate speaks one short line through the profile voice. The line is a one-shot prompt, not a turn stored on the awake session. See [ADR 0022](ADR-0022-voice-modes.md).
+
+Voice test mode is off unless `softwaked serve --voice-test`, `softwaked ctl voice-test on`, or Settings → General turns it on. Phrases and the state line still run. Microphone speech is not sent to the chat model. The flag is not saved across a serve restart.
+
+Half-duplex mute during TTS playback is unchanged.
 
 Exact TOML shape lives with the implementation; this doc owns the semantics.

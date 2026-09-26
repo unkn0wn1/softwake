@@ -17,6 +17,7 @@ use sherpa_onnx::{
 };
 
 use crate::phrases::{hit_from_keyword, phrases_for_agent};
+use crate::short_word::is_short_single_word;
 use crate::{PhraseHit, WakeDetector};
 
 /// PCM detector for sherpa-onnx keyword spotting.
@@ -25,6 +26,7 @@ pub struct SherpaKwsDetector {
     model_dir: PathBuf,
     wake_phrases: Vec<String>,
     sleep_phrases: Vec<String>,
+    hibernate_phrases: Vec<String>,
     /// Phrases that encoded into `keywords_buf` (config ∩ sherpa).
     registered_phrases: Vec<String>,
     /// Phrases skipped because BPE encode failed.
@@ -32,6 +34,8 @@ pub struct SherpaKwsDetector {
     engine: Option<LoadedEngine>,
     /// Accepted audio since the last `KeywordSpotter::reset`.
     stream_budget: crate::stream_budget::StreamBudget,
+    /// Consecutive silence, so a pause can reset the stream before the 3s budget.
+    silence: crate::silence_reset::SilenceReset,
 }
 
 struct LoadedEngine {
@@ -46,6 +50,7 @@ impl std::fmt::Debug for SherpaKwsDetector {
             .field("model_dir", &self.model_dir)
             .field("wake_phrases", &self.wake_phrases)
             .field("sleep_phrases", &self.sleep_phrases)
+            .field("hibernate_phrases", &self.hibernate_phrases)
             .field("registered_phrases", &self.registered_phrases)
             .field("skipped_phrases", &self.skipped_phrases)
             .field("weights_loaded", &self.engine.is_some())
@@ -60,34 +65,53 @@ impl std::fmt::Debug for SherpaKwsDetector {
 impl SherpaKwsDetector {
     /// Remember phrases and try to load weights from `model_dir`.
     #[must_use]
-    pub fn new<W, S, T, U>(model_dir: impl Into<PathBuf>, wake_phrases: W, sleep_phrases: S) -> Self
+    pub fn new<W, S, H, T, U, V>(
+        model_dir: impl Into<PathBuf>,
+        wake_phrases: W,
+        sleep_phrases: S,
+        hibernate_phrases: H,
+    ) -> Self
     where
         W: IntoIterator<Item = T>,
         S: IntoIterator<Item = U>,
+        H: IntoIterator<Item = V>,
         T: AsRef<str>,
         U: AsRef<str>,
+        V: AsRef<str>,
     {
         let model_dir = model_dir.into();
         let wake_phrases = normalize(wake_phrases);
         let sleep_phrases = normalize(sleep_phrases);
-        let (engine, registered_phrases, skipped_phrases) =
-            load_engine(&model_dir, &wake_phrases, &sleep_phrases);
+        let hibernate_phrases = normalize(hibernate_phrases);
+        let (engine, registered_phrases, skipped_phrases) = load_engine(
+            &model_dir,
+            &wake_phrases,
+            &sleep_phrases,
+            &hibernate_phrases,
+        );
         Self {
             model_dir,
             wake_phrases,
             sleep_phrases,
+            hibernate_phrases,
             registered_phrases,
             skipped_phrases,
             engine,
             stream_budget: crate::stream_budget::StreamBudget::new(),
+            silence: crate::silence_reset::SilenceReset::new(),
         }
     }
 
     /// Detector for the active agent / profile name and [`Self::default_model_dir`].
     #[must_use]
     pub fn for_agent(agent_name: &str) -> Self {
-        let (wake, sleep) = phrases_for_agent(agent_name);
-        Self::new(Self::default_model_dir(), wake, sleep)
+        let phrases = phrases_for_agent(agent_name);
+        Self::new(
+            Self::default_model_dir(),
+            phrases.wake,
+            phrases.sleep,
+            phrases.hibernate,
+        )
     }
 
     /// Softwake defaults under [`Self::default_model_dir`].
@@ -118,6 +142,12 @@ impl SherpaKwsDetector {
     #[must_use]
     pub fn sleep_phrases(&self) -> &[String] {
         &self.sleep_phrases
+    }
+
+    /// Hibernate phrases, lowercase, in order.
+    #[must_use]
+    pub fn hibernate_phrases(&self) -> &[String] {
+        &self.hibernate_phrases
     }
 
     /// Phrases that made it into the sherpa `keywords_buf`.
@@ -152,26 +182,47 @@ impl SherpaKwsDetector {
     /// silence with no decode, [`SpotDetail::keyword`] stays `None`.
     #[must_use]
     pub fn push_samples_detailed(&mut self, samples: &[i16]) -> crate::SpotDetail {
-        let Some(engine) = self.engine.as_mut() else {
+        if self.engine.is_none() {
             return crate::SpotDetail {
                 hit: PhraseHit::None,
                 keyword: None,
+                silence_reset: false,
             };
-        };
+        }
         if samples.is_empty() {
             return crate::SpotDetail {
                 hit: PhraseHit::None,
                 keyword: None,
+                silence_reset: false,
             };
+        }
+        // A pause drops decoder context so the next short word is closer to an
+        // isolated utterance. This is not a grammar. The 3s budget below still
+        // resets when speech never goes quiet.
+        let silence_reset = self.silence.observe(samples.len(), window_rms(samples));
+        if silence_reset {
+            self.stream_budget.reset();
+            if let Some(engine) = self.engine.as_mut() {
+                engine.spotter.reset(&engine.stream);
+            }
         }
         // sherpa-onnx auto-resets only after ~1.5 s of trailing blanks. Awake
         // speech never builds that run, and a keyword is the only other reset,
         // so a long awake session stops emitting keywords. Reset before this
         // window once the sample budget is spent. `begin_window` / `finish_window`
         // match `stream_budget` tests (CI does not link sherpa).
-        if self.stream_budget.begin_window() {
+        if self.stream_budget.begin_window()
+            && let Some(engine) = self.engine.as_mut()
+        {
             engine.spotter.reset(&engine.stream);
         }
+        let Some(engine) = self.engine.as_mut() else {
+            return crate::SpotDetail {
+                hit: PhraseHit::None,
+                keyword: None,
+                silence_reset,
+            };
+        };
         let float_samples: Vec<f32> = samples
             .iter()
             .map(|sample| f32::from(*sample) / f32::from(i16::MAX))
@@ -184,8 +235,12 @@ impl SherpaKwsDetector {
             engine.spotter.decode(&engine.stream);
             if let Some(result) = engine.spotter.get_result(&engine.stream) {
                 if !result.keyword.is_empty() {
-                    let hit =
-                        hit_from_keyword(&result.keyword, &self.wake_phrases, &self.sleep_phrases);
+                    let hit = hit_from_keyword(
+                        &result.keyword,
+                        &self.wake_phrases,
+                        &self.sleep_phrases,
+                        &self.hibernate_phrases,
+                    );
                     engine.spotter.reset(&engine.stream);
                     keyword_reset = true;
                     last_keyword = Some(result.keyword);
@@ -201,14 +256,33 @@ impl SherpaKwsDetector {
         crate::SpotDetail {
             hit: last_hit,
             keyword: last_keyword,
+            silence_reset,
         }
     }
+}
+
+fn window_rms(samples: &[i16]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let mut sum_sq = 0.0_f32;
+    for sample in samples {
+        let unit = f32::from(*sample) / f32::from(i16::MAX);
+        sum_sq += unit * unit;
+    }
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "a capture window is a few hundred samples"
+    )]
+    let mean = sum_sq / samples.len() as f32;
+    mean.sqrt().clamp(0.0, 1.0)
 }
 
 fn load_engine(
     model_dir: &Path,
     wake_phrases: &[String],
     sleep_phrases: &[String],
+    hibernate_phrases: &[String],
 ) -> (Option<LoadedEngine>, Vec<String>, Vec<String>) {
     let Some(paths) = ModelPaths::discover(model_dir) else {
         return (None, Vec::new(), Vec::new());
@@ -216,7 +290,7 @@ fn load_engine(
     let Some(pieces) = load_token_pieces(&paths.tokens) else {
         return (None, Vec::new(), Vec::new());
     };
-    let built = build_keywords_buf(&pieces, wake_phrases, sleep_phrases);
+    let built = build_keywords_buf(&pieces, wake_phrases, sleep_phrases, hibernate_phrases);
     let registered = built.registered.clone();
     let skipped = built.skipped.clone();
     let Some(keywords_buf) = built.buf else {
@@ -352,11 +426,16 @@ fn build_keywords_buf(
     pieces: &[String],
     wake_phrases: &[String],
     sleep_phrases: &[String],
+    hibernate_phrases: &[String],
 ) -> KeywordBuild {
     let mut lines = Vec::new();
     let mut registered = Vec::new();
     let mut skipped = Vec::new();
-    for phrase in wake_phrases.iter().chain(sleep_phrases.iter()) {
+    for phrase in wake_phrases
+        .iter()
+        .chain(sleep_phrases.iter())
+        .chain(hibernate_phrases.iter())
+    {
         // Skip phrases the BPE table cannot encode instead of failing the
         // whole keyword list (one bad name must not idle voice wake).
         if let Some(line) = encode_keyword_line(pieces, phrase) {
@@ -415,12 +494,6 @@ fn encode_keyword_line(pieces: &[String], phrase: &str) -> Option<String> {
     Some(line)
 }
 
-/// True for a single whitespace-free word of at most 8 letters.
-fn is_short_single_word(phrase: &str) -> bool {
-    let trimmed = phrase.trim();
-    !trimmed.is_empty() && !trimmed.chars().any(char::is_whitespace) && trimmed.chars().count() <= 8
-}
-
 fn normalize<I, S>(phrases: I) -> Vec<String>
 where
     I: IntoIterator<Item = S>,
@@ -451,10 +524,7 @@ mod tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
-    use super::{
-        SherpaKwsDetector, encode_keyword_line, is_short_single_word, load_token_pieces,
-        model_dir_from,
-    };
+    use super::{SherpaKwsDetector, encode_keyword_line, load_token_pieces, model_dir_from};
     use crate::{PhraseHit, WakeDetector};
 
     #[test]
@@ -463,6 +533,7 @@ mod tests {
             PathBuf::from("/tmp/softwake-kws-missing"),
             ["hey softwake"],
             ["go to sleep"],
+            ["deep sleep"],
         );
         assert!(!detector.weights_loaded());
         assert_eq!(detector.push_samples(&[]), PhraseHit::None);
@@ -475,6 +546,7 @@ mod tests {
             PathBuf::from("kws-models"),
             ["  hey softwake  ", " "],
             ["GO TO SLEEP"],
+            [" deep sleep "],
         );
         assert_eq!(detector.wake_phrases(), ["hey softwake".to_owned()]);
         assert_eq!(detector.sleep_phrases(), ["go to sleep".to_owned()]);
@@ -506,6 +578,14 @@ mod tests {
                 .iter()
                 .any(|p| p == "goodnight ada")
         );
+        assert!(detector.wake_phrases().iter().any(|phrase| phrase == "hi"));
+        assert!(
+            detector
+                .sleep_phrases()
+                .iter()
+                .any(|phrase| phrase == "sleep")
+        );
+        assert_eq!(detector.hibernate_phrases(), ["deep sleep".to_owned()]);
     }
 
     #[test]
@@ -532,14 +612,5 @@ mod tests {
             !hey_sally.contains('#'),
             "multi-word stays on global threshold: {hey_sally}"
         );
-    }
-
-    #[test]
-    fn short_single_word_helper() {
-        assert!(is_short_single_word("sally"));
-        assert!(is_short_single_word("ada"));
-        assert!(!is_short_single_word("hey sally"));
-        assert!(is_short_single_word("softwake")); // 8 chars exactly counts as short
-        assert!(!is_short_single_word("softwakes")); // 9+
     }
 }

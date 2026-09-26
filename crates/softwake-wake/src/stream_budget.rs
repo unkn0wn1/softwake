@@ -34,6 +34,11 @@ impl StreamBudget {
         self.samples_since_reset
     }
 
+    /// Drop the count, as after a silence reset of the online stream.
+    pub(crate) const fn reset(&mut self) {
+        self.samples_since_reset = 0;
+    }
+
     /// Whether to reset the online stream *before* accepting this window.
     ///
     /// On `true`, the counter is cleared so the window starts a new budget.
@@ -65,6 +70,15 @@ impl StreamBudget {
 #[cfg(test)]
 mod tests {
     use super::{RESET_AFTER_SAMPLES, StreamBudget};
+
+    #[test]
+    fn reset_clears_a_partial_budget() {
+        let mut budget = StreamBudget::new();
+        budget.finish_window(100, false);
+        budget.reset();
+        assert_eq!(budget.samples_since_reset(), 0);
+        assert!(!budget.begin_window());
+    }
 
     #[test]
     fn three_second_budget_matches_16khz() {

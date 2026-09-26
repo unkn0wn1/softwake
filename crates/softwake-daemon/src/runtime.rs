@@ -78,6 +78,11 @@ pub(crate) struct Runtime {
     last_context_limit: Option<u32>,
     /// Whether the last ask compacted.
     last_context_compacted: bool,
+    /// KWS / voice test mode. Default off. Phrases still transition; mic speech is not asked.
+    voice_test: bool,
+    /// State-announcement prompts recorded in tests. Production speaks them off-thread.
+    #[cfg(test)]
+    announced_prompts: Vec<String>,
     /// Last playback error after a successful ask. Empty when speech played or was skipped.
     last_speech_note: Option<String>,
     /// In-test provider. Absent in the serve binary, so ask uses the disk path.
@@ -121,8 +126,9 @@ impl Runtime {
         let capture = CaptureBackend::open(kind)?;
         let soul = LoadedSoul::open(soul_dir);
         let agent = soul.agent_name();
+        let profile = soul.profile_log_token();
         let pcm = PcmEngine::for_agent(&agent);
-        pcm.log_startup(&agent, verbosity);
+        pcm.log_startup(&profile, verbosity);
         eprintln!(
             "softwaked: listen state={} capture={}",
             wire_state(VoiceState::Sleep).as_str(),
@@ -153,6 +159,9 @@ impl Runtime {
             last_context_used: None,
             last_context_limit: None,
             last_context_compacted: false,
+            voice_test: false,
+            #[cfg(test)]
+            announced_prompts: Vec::new(),
             last_speech_note: None,
             #[cfg(test)]
             chat_fixture: None,
@@ -360,6 +369,7 @@ impl Runtime {
                 let transport_compact = std::sync::Arc::clone(&transport);
                 let call_c = call.clone();
                 let bearer_c = bearer.clone();
+                let trace = self.trace_context();
                 match crate::chat::perform_ask(
                     &mut self.session,
                     text,
@@ -371,6 +381,7 @@ impl Runtime {
                     move |system, messages| {
                         crate::chat::complete_fixture(&transport, &call, &bearer, system, messages)
                     },
+                    trace,
                 ) {
                     Ok(ok) => self.finish_ask_reply(ok),
                     Err(error) => Self::chat_rejected(error.sentence()),
@@ -400,6 +411,7 @@ impl Runtime {
         let bearer_c = bearer.clone();
         let appendix =
             crate::chat::appendix_for_ask(text, Option::<&softwake_memory::MockMemory>::None);
+        let trace = self.trace_context();
         match crate::chat::perform_ask(
             &mut self.session,
             text,
@@ -409,6 +421,7 @@ impl Runtime {
             move |system, messages| {
                 crate::chat::finish_prepared_chat(&call, &bearer, system, messages)
             },
+            trace,
         ) {
             Ok(ok) => self.finish_ask_reply(ok),
             Err(error) => Self::chat_rejected(error.sentence()),
@@ -445,6 +458,23 @@ impl Runtime {
         }
     }
 
+    fn trace_context(&self) -> impl FnMut(&crate::chat::AskContext) + use<> {
+        let verbosity = self.verbosity;
+        let profile = self.soul.profile_log_token();
+        move |context| {
+            if verbosity == 0 {
+                return;
+            }
+            eprintln!(
+                "{}",
+                crate::chat::format_context_sent_line(&profile, context)
+            );
+            if context.compacted {
+                eprintln!("{}", crate::chat::format_compact_line(&profile, context));
+            }
+        }
+    }
+
     fn speak_if_configured(&mut self, reply: &str) {
         self.last_speech_note = None;
         // Unit tests must not open a speaker or call TTS. Serve speaks for real.
@@ -469,6 +499,9 @@ impl Runtime {
 
     /// Arm press-to-talk. Hibernate refuses. Sleep wakes first when the pack is valid.
     pub(crate) fn talk_start(&mut self) -> Outcome {
+        if self.voice_test {
+            return self.voice_test_speech_outcome();
+        }
         if wire_state(self.machine.state()) == WireState::Hibernate {
             return Self::talk_rejected(crate::talk::TALK_HIBERNATING);
         }
@@ -516,6 +549,9 @@ impl Runtime {
     ///
     /// Tests pass `samples` they already buffered through [`Self::push_talk_samples`].
     pub(crate) fn talk_stop(&mut self) -> Outcome {
+        if self.voice_test {
+            return self.voice_test_speech_outcome();
+        }
         if !self.talk.is_armed() && self.talk_buffer_empty() {
             return Self::talk_rejected("talk is not armed");
         }
@@ -557,6 +593,9 @@ impl Runtime {
     }
 
     fn transcribe_and_ask(&mut self, samples: &[i16]) -> Outcome {
+        if self.voice_test {
+            return self.voice_test_speech_outcome();
+        }
         #[cfg(test)]
         if let Some(text) = self.take_talk_transcript_override() {
             let _ = samples;
@@ -730,13 +769,19 @@ impl Runtime {
         // frames so speakers do not feed free-speech / KWS / PTT.
         let muted = softwake_voice::input_muted();
         let auto_ok = awake
+            && !self.voice_test
             && !self.talk.is_armed()
             && self.pending_auto_pcm.is_none()
             && !self.in_voice_cooldown()
             && !muted;
-        if !auto_ok && (self.auto_utt.is_buffering() || !awake || muted) {
-            // PTT, cooldown, TTS mute, sleep, or a pending clip — drop a partial auto buffer.
-            if self.talk.is_armed() || !awake || self.in_voice_cooldown() || muted {
+        if !auto_ok && (self.auto_utt.is_buffering() || !awake || muted || self.voice_test) {
+            // PTT, cooldown, TTS mute, voice test, sleep, or a pending clip — drop a partial auto buffer.
+            if self.talk.is_armed()
+                || !awake
+                || self.in_voice_cooldown()
+                || muted
+                || self.voice_test
+            {
                 self.auto_utt.reset();
             }
         }
@@ -763,14 +808,16 @@ impl Runtime {
                     );
                 }
             }
-            let detail = score_frame_detailed(&mut self.pcm, &frame);
-            self.log_kws_observation(&detail, level);
+            let observed = self.observe_kws_frame(&frame);
             scored = true;
-            // Stick the first Wake/Sleep; do not let later None overwrite it.
+            // Stick the first wake/sleep/hibernate; do not let later None overwrite it.
             if matches!(hit, PhraseHit::None)
-                && matches!(detail.hit, PhraseHit::Wake | PhraseHit::Sleep)
+                && matches!(
+                    observed,
+                    PhraseHit::Wake | PhraseHit::Sleep | PhraseHit::Hibernate
+                )
             {
-                hit = detail.hit;
+                hit = observed;
             }
         }
         if scored {
@@ -807,7 +854,8 @@ impl Runtime {
             if should_log {
                 self.last_energy_log = Some(now);
                 eprintln!(
-                    "softwaked: KWS listening (sleep) mic_rms={:.3} wake_phrases=[{}] — no keyword match yet",
+                    "softwaked: KWS {} listening (sleep) mic_rms={:.3} wake_phrases=[{}] — no keyword match yet",
+                    self.soul.profile_log_token(),
                     self.last_capture_level.unwrap_or(0.0),
                     self.pcm.wake_phrases().join(", ")
                 );
@@ -819,8 +867,38 @@ impl Runtime {
         self.apply_pcm_hit(hit)
     }
 
+    /// Score one frame. A short keyword inside a long awake utterance becomes none.
+    ///
+    /// sherpa has no grammar. This only drops bare short words after about 1.5s
+    /// of speech that is already buffered.
+    fn observe_kws_frame(&mut self, frame: &softwake_audio::AudioFrame) -> PhraseHit {
+        let mut detail = score_frame_detailed(&mut self.pcm, frame);
+        if detail.silence_reset {
+            self.log_kws_silence_reset();
+        }
+        let speech = Self::speech_samples(
+            self.auto_utt.buffered_samples(),
+            self.talk.buffered_samples(),
+        );
+        let suppressed = detail
+            .keyword
+            .as_deref()
+            .is_some_and(|keyword| softwake_wake::suppress_short_keyword(keyword, speech));
+        if suppressed {
+            detail.hit = PhraseHit::None;
+        }
+        let level = self.last_capture_level.unwrap_or(0.0);
+        self.log_kws_observation(&detail, level, suppressed);
+        detail.hit
+    }
+
     /// Log one KWS observation when verbosity asks for it.
-    fn log_kws_observation(&mut self, detail: &softwake_wake::SpotDetail, level: f32) {
+    fn log_kws_observation(
+        &mut self,
+        detail: &softwake_wake::SpotDetail,
+        level: f32,
+        suppressed: bool,
+    ) {
         if self.verbosity == 0 {
             return;
         }
@@ -829,7 +907,8 @@ impl Runtime {
         };
         let now = Instant::now();
         // Always log a real keyword immediately once; rate-limit repeats.
-        let should_log = detail.hit != PhraseHit::None
+        let should_log = suppressed
+            || detail.hit != PhraseHit::None
             || self
                 .last_kws_log
                 .is_none_or(|previous| now.duration_since(previous).as_millis() >= 250);
@@ -837,16 +916,43 @@ impl Runtime {
             return;
         }
         self.last_kws_log = Some(now);
-        let match_label = match detail.hit {
-            PhraseHit::Wake => "match=wake",
-            PhraseHit::Sleep => "match=sleep",
-            PhraseHit::None => "match=none",
+        let match_label = if suppressed {
+            "match=suppressed reason=long-utterance"
+        } else {
+            match detail.hit {
+                PhraseHit::Wake => "match=wake",
+                PhraseHit::Sleep => "match=sleep",
+                PhraseHit::Hibernate => "match=hibernate",
+                PhraseHit::None => "match=none",
+            }
         };
+        let profile = self.soul.profile_log_token();
+        let state = wire_state(self.machine.state()).as_str();
+        let wake = self.pcm.wake_phrases().join(", ");
+        let sleep = self.pcm.sleep_phrases().join(", ");
+        let hibernate = self.pcm.hibernate_phrases().join(", ");
         eprintln!(
-            "softwaked: KWS heard keyword=`{keyword}` {match_label} state={} mic_rms={level:.3} wake=[{}] sleep=[{}]",
-            wire_state(self.machine.state()).as_str(),
-            self.pcm.wake_phrases().join(", "),
-            self.pcm.sleep_phrases().join(", ")
+            "{}",
+            crate::verbose_log::format_kws_heard(&crate::verbose_log::KwsHeardLine {
+                profile: &profile,
+                keyword,
+                match_label,
+                state,
+                mic_rms: level,
+                wake: &wake,
+                sleep: &sleep,
+                hibernate: &hibernate,
+            })
+        );
+    }
+
+    fn log_kws_silence_reset(&self) {
+        if self.verbosity == 0 {
+            return;
+        }
+        eprintln!(
+            "{}",
+            crate::verbose_log::format_kws_silence(&self.soul.profile_log_token())
         );
     }
 
@@ -861,7 +967,8 @@ impl Runtime {
             return;
         }
         self.pcm = PcmEngine::for_agent(&agent);
-        self.pcm.log_startup(&agent, self.verbosity);
+        self.pcm
+            .log_startup(&self.soul.profile_log_token(), self.verbosity);
         self.pcm_agent = agent;
     }
 
@@ -878,6 +985,16 @@ impl Runtime {
                 self.log_pcm_phrase_refuse("sleep", &outcome);
                 outcome.events
             }
+            PhraseHit::Hibernate
+                if matches!(
+                    wire_state(self.machine.state()),
+                    WireState::Sleep | WireState::Awake
+                ) =>
+            {
+                let outcome = self.hibernate_phrase();
+                self.log_pcm_phrase_refuse("hibernate", &outcome);
+                outcome.events
+            }
             _ => Vec::new(),
         }
     }
@@ -890,7 +1007,14 @@ impl Runtime {
         let ResponseBody::Err { error } = &outcome.body else {
             return;
         };
-        eprintln!("softwaked: KWS {kind} match refused: {error}");
+        eprintln!(
+            "{}",
+            crate::verbose_log::format_kws_refuse(
+                &self.soul.profile_log_token(),
+                kind,
+                &error.to_string()
+            )
+        );
     }
 
     /// Leave awake on a sleep phrase (KWS or typed path).
@@ -899,6 +1023,40 @@ impl Runtime {
         self.apply_voice(Event::SleepPhrase, |error| {
             IpcError::protocol(error.to_string())
         })
+    }
+
+    /// Enter hibernate on `deep sleep`. Voice cannot leave hibernate.
+    pub(crate) fn hibernate_phrase(&mut self) -> Outcome {
+        self.tick();
+        self.apply_voice(Event::HibernatePhrase, |error| {
+            IpcError::protocol(error.to_string())
+        })
+    }
+
+    /// Enable or disable voice test mode without changing the voice state.
+    pub(crate) fn set_voice_test(&mut self, enabled: bool) -> Outcome {
+        self.voice_test = enabled;
+        if enabled {
+            self.auto_utt.reset();
+            self.pending_auto_pcm = None;
+            self.talk.clear();
+        }
+        let note = if enabled {
+            "voice test: on"
+        } else {
+            "voice test: off"
+        };
+        self.retain_status_text(Some(note.to_owned()), Some(note.to_owned()));
+        Self::quiet(self.snapshot(Some(note.to_owned()), Some(note.to_owned())))
+    }
+
+    fn voice_test_speech_outcome(&mut self) -> Outcome {
+        self.auto_utt.reset();
+        self.pending_auto_pcm = None;
+        self.talk.clear();
+        let note = "voice test: speech not sent to chat";
+        self.retain_status_text(Some(note.to_owned()), Some(note.to_owned()));
+        Self::quiet(self.snapshot(Some(note.to_owned()), Some(note.to_owned())))
     }
     fn transition(&mut self, command: Command) -> Outcome {
         self.tick();
@@ -926,6 +1084,18 @@ impl Runtime {
                     self.sync_shell_glossary();
                 }
                 let cleared = self.apply_effects(applied.effects);
+                if self.verbosity >= 1 {
+                    eprintln!(
+                        "{}",
+                        crate::verbose_log::format_voice_transition(
+                            &self.soul.profile_log_token(),
+                            applied.from.as_str(),
+                            applied.to.as_str(),
+                            event.as_str(),
+                        )
+                    );
+                }
+                self.announce_transition(applied.to);
                 let state = wire_state(self.machine.state());
                 let capture_running = self.capture.is_running();
                 let detail = Some(format!("{previous} -> {state}"));
@@ -943,6 +1113,10 @@ impl Runtime {
             }
             Err(error) => Self::rejected(map_err(error)),
         }
+    }
+
+    fn speech_samples(auto: usize, talk: usize) -> u64 {
+        u64::try_from(auto.max(talk)).unwrap_or(u64::MAX)
     }
 
     fn quiet(snapshot: Status) -> Outcome {
@@ -1030,11 +1204,43 @@ impl Runtime {
                 .filter(|_| self.session.phase() == softwake_session::SessionPhase::Open),
             context_compacted: self.last_context_compacted
                 && self.session.phase() == softwake_session::SessionPhase::Open,
+            voice_test: self.voice_test,
         }
+    }
+
+    fn announce_transition(&mut self, to: VoiceState) {
+        #[cfg(test)]
+        {
+            self.announced_prompts
+                .push(crate::announce::prompt_for(to).to_owned());
+        }
+        #[cfg(not(test))]
+        {
+            let system = self.announcement_system();
+            let profile = self.soul.profile_log_token();
+            crate::announce::spawn_announcement(system, to, profile, self.verbosity);
+        }
+    }
+
+    #[cfg(not(test))]
+    fn announcement_system(&self) -> String {
+        if let Some(text) = self.soul.applied_instructions() {
+            return text.to_owned();
+        }
+        if let Some(pack) = self.soul.pack() {
+            return pack.render_instructions_as(&self.soul.agent_name());
+        }
+        String::new()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn announced_prompts(&self) -> &[String] {
+        &self.announced_prompts
     }
 
     fn auto_listening_active(&self) -> bool {
         wire_state(self.machine.state()) == WireState::Awake
+            && !self.voice_test
             && self.capture.is_running()
             && !self.talk.is_armed()
             && self.pending_auto_pcm.is_none()
@@ -1496,6 +1702,18 @@ mod tests {
         assert_eq!(runtime.last_pcm_hit, Some(PhraseHit::Wake));
         assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Awake);
         assert!(
+            runtime
+                .announced_prompts()
+                .iter()
+                .any(|prompt| prompt.contains("now awake"))
+        );
+        assert!(
+            runtime
+                .session_turns()
+                .iter()
+                .all(|turn| !turn.contains("Tell the user"))
+        );
+        assert!(
             events.iter().any(|event| matches!(
                 event,
                 Event::StateChanged {
@@ -1505,6 +1723,119 @@ mod tests {
                 }
             )),
             "expected sleep→awake event, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn scripted_deep_sleep_enters_hibernate_from_sleep_and_awake() {
+        let _guard = softwake_voice::INPUT_MUTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        softwake_voice::clear_input_mute_for_test();
+        let (mut runtime, _soul) = valid_runtime();
+        runtime.install_scripted_pcm([PhraseHit::Hibernate]);
+        assert!(runtime.capture_mock().push_frame(&[0; 160]));
+        runtime.drain_pcm();
+        assert_eq!(
+            runtime.machine.state(),
+            softwake_state::VoiceState::Hibernate
+        );
+        assert!(!runtime.capture.is_running());
+        assert!(
+            runtime
+                .announced_prompts()
+                .last()
+                .is_some_and(|prompt| prompt.contains("deep sleep"))
+        );
+
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        runtime.install_scripted_pcm([PhraseHit::Hibernate]);
+        assert!(runtime.capture_mock().push_frame(&[0; 160]));
+        runtime.drain_pcm();
+        assert_eq!(
+            runtime.machine.state(),
+            softwake_state::VoiceState::Hibernate
+        );
+        assert!(!runtime.capture.is_running());
+        assert_eq!(runtime.session_phase(), SessionPhase::Closed);
+        assert!(
+            runtime
+                .session_turns()
+                .iter()
+                .all(|turn| !turn.contains("Tell the user"))
+        );
+    }
+
+    #[test]
+    fn phrase_hits_cannot_leave_hibernate() {
+        let (mut runtime, _soul) = valid_runtime();
+        runtime.handle(Command::Hibernate);
+        assert!(runtime.apply_pcm_hit(PhraseHit::Wake).is_empty());
+        assert!(runtime.apply_pcm_hit(PhraseHit::Sleep).is_empty());
+        assert!(runtime.apply_pcm_hit(PhraseHit::Hibernate).is_empty());
+        assert_eq!(
+            runtime.machine.state(),
+            softwake_state::VoiceState::Hibernate
+        );
+    }
+
+    #[test]
+    fn voice_test_keeps_wake_and_does_not_send_speech_to_chat() {
+        let _guard = softwake_voice::INPUT_MUTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        softwake_voice::clear_input_mute_for_test();
+        let (mut runtime, _soul) = valid_runtime();
+        let enabled = runtime.set_voice_test(true);
+        assert!(enabled.body.status().expect("on").voice_test);
+        runtime.install_scripted_pcm([PhraseHit::Wake]);
+        assert!(runtime.capture_mock().push_frame(&[0; 160]));
+        runtime.drain_pcm();
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Awake);
+        assert!(runtime.session_turns().is_empty());
+
+        runtime.set_talk_transcript_for_test("what time is it");
+        let stopped = runtime.talk_stop();
+        let status = stopped.body.status().expect("voice test");
+        assert_eq!(
+            status.message.as_deref(),
+            Some("voice test: speech not sent to chat")
+        );
+        assert!(runtime.chat_posts().is_empty());
+        assert!(runtime.session_turns().is_empty());
+
+        let loud = vec![8_000_i16; 320];
+        for _ in 0..40 {
+            assert!(runtime.capture_mock().push_frame(&loud));
+            runtime.drain_pcm();
+        }
+        assert!(runtime.take_pending_auto_pcm().is_none());
+
+        runtime.set_voice_test(false);
+        assert!(
+            !runtime
+                .handle(Command::GetStatus)
+                .body
+                .status()
+                .expect("off")
+                .voice_test
+        );
+        for _ in 0..8 {
+            assert!(runtime.capture_mock().push_frame(&loud));
+            runtime.drain_pcm();
+        }
+        let quiet = vec![0_i16; 320];
+        for _ in 0..30 {
+            assert!(runtime.capture_mock().push_frame(&quiet));
+            runtime.drain_pcm();
+            if runtime.pending_auto_pcm.is_some() {
+                break;
+            }
+        }
+        assert!(
+            runtime.take_pending_auto_pcm().is_some(),
+            "voice test off restores free-speech capture"
         );
     }
 

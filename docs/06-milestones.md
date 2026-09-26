@@ -21,6 +21,7 @@
    - [x] On-device wake engine chosen ([ADR 0006](ADR-0006-on-device-wake.md))
    - [x] Capture + PCM → WakeDetector plumbing (mock default; native feature-gated; CI mic-free)
    - [x] KWS voice wake/sleep behind `sherpa-kws` (weights via install script; profile name drives phrases; CI mic-free)
+   - [x] Bare `hi` / `sleep` / `deep sleep`, state voice, and voice test mode ([ADR 0022](ADR-0022-voice-modes.md); no grammar; CI stays mic-free)
    - [x] Streaming STT / TTS path ([ADR 0007](ADR-0007-awake-stt-tts.md); mock default; sherpa stubs feature-gated)
 2. [x] Confirmation UX for risky tools ([ADR 0005](ADR-0005-tool-confirmation.md))
 3. [x] Richer tool registry + logging

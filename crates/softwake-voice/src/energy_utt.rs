@@ -37,6 +37,12 @@ impl EnergyUtterance {
         self.buffering
     }
 
+    /// Samples stored in the current utterance. Zero when not buffering.
+    #[must_use]
+    pub fn buffered_samples(&self) -> usize {
+        self.samples.len()
+    }
+
     /// Drop any partial utterance (PTT took priority, sleep, or cooldown).
     pub fn reset(&mut self) {
         self.buffering = false;

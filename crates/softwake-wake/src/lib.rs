@@ -11,15 +11,20 @@
 mod phrases;
 #[cfg(feature = "sherpa-kws")]
 mod sherpa;
-// Used by the sherpa detector. Compiled for tests without that feature so CI
-// can check the reset budget without ONNX weights.
+mod short_word;
+// Silence and the sample budget are pure counters. Tests run them without
+// ONNX weights. The sherpa detector is the only caller of the budget outside
+// tests, so the budget stays behind that feature except in `cfg(test)`.
+#[cfg(any(test, feature = "sherpa-kws"))]
+mod silence_reset;
 #[cfg(any(test, feature = "sherpa-kws"))]
 mod stream_budget;
 mod text;
 
 use std::fmt;
 
-pub use phrases::{DEFAULT_AGENT_NAME, hit_from_keyword, phrases_for_agent};
+pub use phrases::{AgentPhrases, DEFAULT_AGENT_NAME, hit_from_keyword, phrases_for_agent};
+pub use short_word::{SHORT_SUPPRESS_AFTER_SAMPLES, is_short_single_word, suppress_short_keyword};
 
 #[cfg(feature = "sherpa-kws")]
 pub use sherpa::SherpaKwsDetector;
@@ -35,6 +40,10 @@ pub enum PhraseHit {
     Wake,
     /// Configured sleep phrase matched.
     Sleep,
+    /// Configured hibernate phrase matched (`deep sleep`).
+    ///
+    /// This enters hibernate. It is not a way out of hibernate.
+    Hibernate,
 }
 
 impl PhraseHit {
@@ -45,6 +54,7 @@ impl PhraseHit {
             Self::None => "none",
             Self::Wake => "wake",
             Self::Sleep => "sleep",
+            Self::Hibernate => "hibernate",
         }
     }
 }
@@ -58,10 +68,15 @@ impl fmt::Display for PhraseHit {
 /// One KWS decode observation (keyword text + wake/sleep mapping).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SpotDetail {
-    /// Mapped wake / sleep / none for the configured phrase lists.
+    /// Mapped wake / sleep / hibernate / none for the configured phrase lists.
     pub hit: PhraseHit,
     /// Raw keyword tag from the spotter (`@sally`, `sally`, …), when any.
     pub keyword: Option<String>,
+    /// The caller reset the online stream because this window ended a silence run.
+    ///
+    /// Always false for detectors that have no stream. Verbose logs use this
+    /// so the library does not print.
+    pub silence_reset: bool,
 }
 
 /// Scores capture windows for the configured wake and sleep phrases.
@@ -124,6 +139,7 @@ mod tests {
         assert_eq!(PhraseHit::None.as_str(), "none");
         assert_eq!(PhraseHit::Wake.to_string(), "wake");
         assert_eq!(PhraseHit::Sleep.to_string(), "sleep");
+        assert_eq!(PhraseHit::Hibernate.to_string(), "hibernate");
     }
 
     #[test]

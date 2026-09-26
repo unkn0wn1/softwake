@@ -149,6 +149,9 @@ function show(status, keepError) {
   }
   lastToolEl.textContent = status.last_tool ? `last tool: ${status.last_tool}` : "last tool: none";
   showPending(status);
+  if (voiceTestBox && !voiceTestEditing) {
+    voiceTestBox.checked = !!status.voice_test;
+  }
   if (!keepError) {
     errorEl.textContent = "";
   }
@@ -884,6 +887,8 @@ toolsSaveBtn.addEventListener("click", async () => {
 const uiTextSizeSelect = document.querySelector("#ui-text-size");
 const uiPrefsStatus = document.querySelector("#ui-prefs-status");
 const uiPrefsError = document.querySelector("#ui-prefs-error");
+const voiceTestBox = document.querySelector("#voice-test");
+let voiceTestEditing = false;
 
 const TEXT_SIZES = ["xx-small", "x-small", "small", "medium", "large"];
 
@@ -893,6 +898,27 @@ function applyTextSize(size) {
   if (uiTextSizeSelect) {
     uiTextSizeSelect.value = value;
   }
+}
+
+if (voiceTestBox) {
+  voiceTestBox.addEventListener("change", async () => {
+    const enabled = voiceTestBox.checked;
+    voiceTestEditing = true;
+    try {
+      const status = await invoke("set_voice_test", { enabled });
+      voiceTestEditing = false;
+      show(status, true);
+      if (uiPrefsError) uiPrefsError.textContent = "";
+    } catch (error) {
+      voiceTestEditing = false;
+      showUiPrefsError(error);
+      try {
+        show(await invoke("status"), true);
+      } catch (statusError) {
+        showUiPrefsError(statusError);
+      }
+    }
+  });
 }
 
 function showUiPrefsError(error) {
