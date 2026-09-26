@@ -34,7 +34,12 @@ impl StreamBudget {
         self.samples_since_reset
     }
 
-    /// Drop the count, as after a silence reset of the online stream.
+    /// Drop the count directly.
+    ///
+    /// Production clears the budget in [`Self::begin_window`] and on a keyword
+    /// hit. Silence used to call this and was removed. The unit test still
+    /// locks a dropped partial count.
+    #[cfg(test)]
     pub(crate) const fn reset(&mut self) {
         self.samples_since_reset = 0;
     }

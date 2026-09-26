@@ -12,11 +12,9 @@ mod phrases;
 #[cfg(feature = "sherpa-kws")]
 mod sherpa;
 mod short_word;
-// Silence and the sample budget are pure counters. Tests run them without
-// ONNX weights. The sherpa detector is the only caller of the budget outside
-// tests, so the budget stays behind that feature except in `cfg(test)`.
-#[cfg(any(test, feature = "sherpa-kws"))]
-mod silence_reset;
+// The sample budget is a pure counter. Tests run it without ONNX weights.
+// The sherpa detector is the only caller outside tests, so the budget stays
+// behind that feature except in `cfg(test)`.
 #[cfg(any(test, feature = "sherpa-kws"))]
 mod stream_budget;
 mod text;
@@ -24,7 +22,7 @@ mod text;
 use std::fmt;
 
 pub use phrases::{AgentPhrases, DEFAULT_AGENT_NAME, hit_from_keyword, phrases_for_agent};
-pub use short_word::{SHORT_SUPPRESS_AFTER_SAMPLES, is_short_single_word, suppress_short_keyword};
+pub use short_word::is_short_single_word;
 
 #[cfg(feature = "sherpa-kws")]
 pub use sherpa::SherpaKwsDetector;
@@ -72,11 +70,6 @@ pub struct SpotDetail {
     pub hit: PhraseHit,
     /// Raw keyword tag from the spotter (`@sally`, `sally`, …), when any.
     pub keyword: Option<String>,
-    /// The caller reset the online stream because this window ended a silence run.
-    ///
-    /// Always false for detectors that have no stream. Verbose logs use this
-    /// so the library does not print.
-    pub silence_reset: bool,
 }
 
 /// Scores capture windows for the configured wake and sleep phrases.
@@ -105,21 +98,49 @@ impl WakeDetector for NullDetector {
 #[derive(Debug, Default, Clone)]
 pub struct ScriptedDetector {
     hits: std::collections::VecDeque<PhraseHit>,
+    /// Raw keyword queued with each hit. `None` lets the caller pick a tag.
+    keywords: std::collections::VecDeque<Option<String>>,
 }
 
 impl ScriptedDetector {
     /// Queue `hits` to return on successive windows.
     #[must_use]
     pub fn new(hits: impl IntoIterator<Item = PhraseHit>) -> Self {
-        Self {
-            hits: hits.into_iter().collect(),
+        let hits: std::collections::VecDeque<PhraseHit> = hits.into_iter().collect();
+        let keywords = (0..hits.len()).map(|_| None).collect();
+        Self { hits, keywords }
+    }
+
+    /// Queue hits with the raw keyword tag a spotter would report.
+    ///
+    /// Daemon tests use this to feed bare `sleep` through the observe path
+    /// while a long awake buffer is open. That hit must stand.
+    #[must_use]
+    pub fn with_keywords<S>(items: impl IntoIterator<Item = (PhraseHit, S)>) -> Self
+    where
+        S: Into<String>,
+    {
+        let mut hits = std::collections::VecDeque::new();
+        let mut keywords = std::collections::VecDeque::new();
+        for (hit, keyword) in items {
+            hits.push_back(hit);
+            keywords.push_back(Some(keyword.into()));
         }
+        Self { hits, keywords }
+    }
+
+    /// Pop the next hit and its keyword, if one was queued.
+    #[must_use]
+    pub fn pop_detailed(&mut self) -> (PhraseHit, Option<String>) {
+        let hit = self.hits.pop_front().unwrap_or(PhraseHit::None);
+        let keyword = self.keywords.pop_front().flatten();
+        (hit, keyword)
     }
 }
 
 impl WakeDetector for ScriptedDetector {
     fn push_samples(&mut self, _samples: &[i16]) -> PhraseHit {
-        self.hits.pop_front().unwrap_or(PhraseHit::None)
+        self.pop_detailed().0
     }
 }
 
@@ -150,5 +171,15 @@ mod tests {
         assert_eq!(detector.push_samples(&[0]), PhraseHit::None);
         assert_eq!(detector.push_samples(&[1, 2]), PhraseHit::Sleep);
         assert_eq!(detector.push_samples(&[]), PhraseHit::None);
+    }
+
+    #[test]
+    fn scripted_keywords_round_trip_a_short_sleep_tag() {
+        let mut detector = ScriptedDetector::with_keywords([(PhraseHit::Sleep, "sleep")]);
+        assert_eq!(
+            detector.pop_detailed(),
+            (PhraseHit::Sleep, Some("sleep".to_owned()))
+        );
+        assert_eq!(detector.pop_detailed(), (PhraseHit::None, None));
     }
 }
