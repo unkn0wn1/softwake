@@ -114,6 +114,12 @@ pub fn clear_input_mute_for_test() {
     *grace = None;
 }
 
+/// Serialize tests that arm mute or score mic frames while mute may be set.
+///
+/// Mute state is process-wide; parallel tests that drain PCM must take this
+/// lock (and clear mute) so they do not race a mute-armed neighbor.
+pub static INPUT_MUTE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
 /// Play `bytes` or record them.
 ///
 /// Spawn starts a player and returns as soon as the child is running. It does
@@ -316,19 +322,15 @@ fn write_temp(bytes: &[u8], suffix: &str) -> Result<std::path::PathBuf, String> 
 #[cfg(test)]
 mod tests {
     use super::{
-        PLAYBACK_MUTE_GRACE, PLAYBACK_TIMEOUT, PlaybackMode, begin_input_mute,
-        clear_input_mute_for_test, end_input_mute, input_muted, play_audio,
+        INPUT_MUTE_TEST_LOCK, PLAYBACK_MUTE_GRACE, PLAYBACK_TIMEOUT, PlaybackMode,
+        begin_input_mute, clear_input_mute_for_test, end_input_mute, input_muted, play_audio,
     };
-    use std::sync::Mutex;
     use std::thread;
     use std::time::{Duration, Instant};
 
-    /// Mute uses process-wide statics; serialize tests that touch them.
-    static MUTE_TEST_LOCK: Mutex<()> = Mutex::new(());
-
     #[test]
     fn record_mode_keeps_bytes_and_rejects_empty() {
-        let _guard = MUTE_TEST_LOCK
+        let _guard = INPUT_MUTE_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         clear_input_mute_for_test();
@@ -360,7 +362,7 @@ mod tests {
 
     #[test]
     fn spawn_mode_returns_before_player_timeout_budget() {
-        let _guard = MUTE_TEST_LOCK
+        let _guard = INPUT_MUTE_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         clear_input_mute_for_test();
@@ -388,7 +390,7 @@ mod tests {
 
     #[test]
     fn mute_hold_and_grace_then_clear_stale_generation_ignored() {
-        let _guard = MUTE_TEST_LOCK
+        let _guard = INPUT_MUTE_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         clear_input_mute_for_test();

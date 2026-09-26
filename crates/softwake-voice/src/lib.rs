@@ -25,8 +25,9 @@ pub use energy_utt::{EnergyUtterance, SILENCE_FRAMES_END, SILENCE_RMS, START_FRA
 pub use mock::{MockStt, MockTts};
 pub use pcm_wav::{TALK_MAX_SAMPLES, TALK_MIN_SAMPLES, TalkBuffer, wav_from_pcm16};
 pub use playback::{
-    PLAYBACK_MUTE_GRACE, PLAYBACK_TIMEOUT, PlaybackMode, PlayedClip, begin_input_mute,
-    clear_input_mute_for_test, end_input_mute, input_muted, interrupt_playback, play_audio,
+    INPUT_MUTE_TEST_LOCK, PLAYBACK_MUTE_GRACE, PLAYBACK_TIMEOUT, PlaybackMode, PlayedClip,
+    begin_input_mute, clear_input_mute_for_test, end_input_mute, input_muted, interrupt_playback,
+    play_audio,
 };
 #[cfg(feature = "sherpa-asr")]
 pub use sherpa_asr::SherpaAsr;

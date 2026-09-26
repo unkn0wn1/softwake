@@ -1137,12 +1137,9 @@ mod talk_tests {
         ));
     }
 
-    /// Free-speech tests share process-wide TTS mute statics with softwake-voice.
-    static AUTO_SPEECH_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     #[test]
     fn awake_auto_utterance_queues_pcm_and_sleep_does_not() {
-        let _guard = AUTO_SPEECH_TEST_LOCK
+        let _guard = softwake_voice::INPUT_MUTE_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         softwake_voice::clear_input_mute_for_test();
@@ -1186,7 +1183,7 @@ mod talk_tests {
 
     #[test]
     fn ptt_resets_auto_gate_and_status_reports_auto_listening() {
-        let _guard = AUTO_SPEECH_TEST_LOCK
+        let _guard = softwake_voice::INPUT_MUTE_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         softwake_voice::clear_input_mute_for_test();
@@ -1209,7 +1206,7 @@ mod talk_tests {
 
     #[test]
     fn tts_mute_drops_free_speech_and_clears_auto_listening() {
-        let _guard = AUTO_SPEECH_TEST_LOCK
+        let _guard = softwake_voice::INPUT_MUTE_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         softwake_voice::clear_input_mute_for_test();
@@ -1279,6 +1276,10 @@ mod tests {
 
     #[test]
     fn queued_silence_is_scored_before_a_command_and_dropped_after_hibernate() {
+        let _guard = softwake_voice::INPUT_MUTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        softwake_voice::clear_input_mute_for_test();
         let (mut runtime, _soul) = valid_runtime();
         assert_eq!(runtime.last_pcm_hit, None);
         assert!(runtime.capture_mock().push_frame(&[0; 160]));
