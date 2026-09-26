@@ -100,6 +100,12 @@ pub struct ProviderSnapshot {
     pub has_openai_compatible_key: bool,
     /// Configured OpenAI-compatible base URL (may be empty).
     pub openai_compatible_base_url: String,
+    /// Context window override tokens (`0` = unset / use built-in map).
+    pub context_limit_tokens: u32,
+    /// Compaction trigger percent (`0` stored means default 70 at resolve).
+    pub compact_at_percent: u8,
+    /// Recent message entries kept after compaction.
+    pub keep_recent_turns: u32,
     /// Whether xAI OAuth tokens are saved.
     pub has_xai_oauth: bool,
     /// In-progress device-code sign-in, if any.
@@ -187,6 +193,17 @@ fn snapshot_from(
             .as_ref()
             .is_some_and(|key| !key.trim().is_empty()),
         openai_compatible_base_url: settings.openai_compatible_base_url.clone(),
+        context_limit_tokens: settings.context_limit_tokens,
+        compact_at_percent: if settings.compact_at_percent == 0 {
+            softwake_providers::DEFAULT_COMPACT_AT_PERCENT
+        } else {
+            settings.compact_at_percent
+        },
+        keep_recent_turns: if settings.keep_recent_turns == 0 {
+            softwake_providers::DEFAULT_KEEP_RECENT_TURNS
+        } else {
+            settings.keep_recent_turns
+        },
         has_xai_oauth: bag
             .xai_oauth
             .as_ref()
@@ -549,6 +566,24 @@ fn save_oauth_tokens(tokens: OAuthTokenSet) -> Result<(), String> {
     })
     .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn provider_set_context_limit(tokens: u32) -> Result<ProviderSnapshot, String> {
+    let store = open_settings()?;
+    let mut settings = store.load().map_err(|e| e.to_string())?;
+    settings.set_context_limit_tokens(tokens);
+    store.save(&settings).map_err(|e| e.to_string())?;
+    load_snapshot()
+}
+
+#[tauri::command]
+pub fn provider_set_compact_at(percent: u8) -> Result<ProviderSnapshot, String> {
+    let store = open_settings()?;
+    let mut settings = store.load().map_err(|e| e.to_string())?;
+    settings.set_compact_at_percent(percent);
+    store.save(&settings).map_err(|e| e.to_string())?;
+    load_snapshot()
 }
 
 /// Opt in to a local plaintext secret file. The command writes no key.

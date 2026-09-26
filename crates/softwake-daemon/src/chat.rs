@@ -7,9 +7,16 @@
 use std::time::Duration;
 
 use softwake_providers::{
-    PreparedChat, ProviderHandle, prepare_chat, resolve_providers_file, resolve_secrets_file,
+    CHAT_MAX_TOKENS, ChatMessage, ChatRole, PreparedChat, ProviderHandle, estimate_tokens_parts,
+    extractive_summary, prepare_chat, resolve_compact_at_percent, resolve_context_limit,
+    resolve_keep_recent_turns, resolve_providers_file, resolve_secrets_file, should_compact,
+    usage_percent,
 };
-use softwake_session::{SessionError, SessionPhase, TextStubSession};
+#[cfg(feature = "live-http")]
+use softwake_providers::{complete_chat, complete_compact};
+use softwake_session::{
+    MessageRole, SessionError, SessionMessage, SessionPhase, TextStubSession, assemble_system,
+};
 
 /// Connect, read, and overall timeout for one live chat call.
 #[cfg_attr(not(feature = "live-http"), allow(dead_code))]
@@ -82,28 +89,120 @@ pub(crate) fn appendix_for_ask(
     }
 }
 
-/// Record `text` and call `complete`, unless the line is blank or the session is closed.
+/// Context usage recorded for Status after one ask.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AskContext {
+    pub(crate) used: u32,
+    pub(crate) limit: u32,
+    pub(crate) percent: u8,
+    pub(crate) compacted: bool,
+}
+
+/// Successful ask with context accounting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AskOk {
+    pub(crate) reply: String,
+    pub(crate) context: AskContext,
+}
+
+/// Budget knobs for one ask (from Settings + model id).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ContextBudget {
+    pub(crate) limit: u32,
+    pub(crate) compact_at_percent: u8,
+    pub(crate) keep_recent: usize,
+}
+
+impl ContextBudget {
+    #[must_use]
+    pub(crate) fn from_settings(
+        model: &str,
+        settings: &softwake_providers::ProviderSettings,
+    ) -> Self {
+        Self {
+            limit: resolve_context_limit(model, settings.context_limit_tokens),
+            compact_at_percent: resolve_compact_at_percent(settings.compact_at_percent),
+            keep_recent: resolve_keep_recent_turns(settings.keep_recent_turns),
+        }
+    }
+}
+
+/// Map session messages to provider chat messages.
+#[must_use]
+pub(crate) fn to_chat_messages(messages: &[SessionMessage]) -> Vec<ChatMessage> {
+    messages
+        .iter()
+        .map(|message| ChatMessage {
+            role: match message.role {
+                MessageRole::User => ChatRole::User,
+                MessageRole::Assistant => ChatRole::Assistant,
+            },
+            content: message.content.clone(),
+        })
+        .collect()
+}
+
+/// Estimate tokens for system + prior messages + pending user + reply headroom.
+#[must_use]
+pub(crate) fn estimate_ask_usage(system: &str, prior: &[SessionMessage], new_user: &str) -> u32 {
+    let mut parts: Vec<&str> = vec![system, new_user];
+    for message in prior {
+        parts.push(message.content.as_str());
+    }
+    estimate_tokens_parts(parts).saturating_add(CHAT_MAX_TOKENS)
+}
+
+/// Record `text` and call `complete`, compacting older turns when over budget.
 ///
-/// Blank text and a closed session do not call `complete`.
+/// Blank text and a closed session do not call `complete` or `compact`.
 pub(crate) fn perform_ask(
     session: &mut TextStubSession,
     text: &str,
     appendix: &str,
-    complete: impl FnOnce(&str, &str) -> Result<String, String>,
-) -> Result<String, AskReject> {
+    budget: ContextBudget,
+    compact: impl FnOnce(&[SessionMessage]) -> Result<String, String>,
+    complete: impl FnOnce(&str, &[SessionMessage]) -> Result<String, String>,
+) -> Result<AskOk, AskReject> {
     if text.trim().is_empty() {
         return Err(AskReject::NeedsText);
     }
     if session.phase() != SessionPhase::Open {
         return Err(AskReject::Closed);
     }
-    session
-        .ask(text, appendix, complete)
-        .map_err(|error| match error {
-            SessionError::Empty => AskReject::NeedsText,
-            SessionError::Closed => AskReject::Closed,
-            SessionError::Complete { message } => AskReject::Failed(message),
-        })
+    let Some(instructions) = session.instructions() else {
+        return Err(AskReject::Closed);
+    };
+    let system = assemble_system(instructions, appendix);
+    let mut compacted = false;
+    let estimated = estimate_ask_usage(&system, session.messages(), text);
+    if should_compact(estimated, budget.limit, budget.compact_at_percent)
+        && session.messages().len() > budget.keep_recent
+    {
+        let prefix_len = session.messages().len() - budget.keep_recent;
+        let older: Vec<SessionMessage> = session.messages()[..prefix_len].to_vec();
+        let summary = match compact(&older) {
+            Ok(text) => text,
+            Err(_error) => {
+                let chat = to_chat_messages(&older);
+                extractive_summary(&chat, 2000)
+            }
+        };
+        session.apply_compaction(budget.keep_recent, &summary);
+        compacted = true;
+    }
+    let used = estimate_ask_usage(&system, session.messages(), text);
+    let context = AskContext {
+        used,
+        limit: budget.limit,
+        percent: usage_percent(used, budget.limit),
+        compacted,
+    };
+    match session.ask(text, appendix, complete) {
+        Ok(reply) => Ok(AskOk { reply, context }),
+        Err(SessionError::Empty) => Err(AskReject::NeedsText),
+        Err(SessionError::Closed) => Err(AskReject::Closed),
+        Err(SessionError::Complete { message }) => Err(AskReject::Failed(message)),
+    }
 }
 
 /// Refuse a disk ask before the session records the line when live HTTP is off.
@@ -120,7 +219,12 @@ pub(crate) fn gate_live_http(
 ) -> Result<(), String> {
     #[cfg(not(feature = "live-http"))]
     {
-        finish_prepared_chat(prepared, bearer, "", user)?;
+        finish_prepared_chat(
+            prepared,
+            bearer,
+            "",
+            &[softwake_session::SessionMessage::user(user)],
+        )?;
         Ok(())
     }
     #[cfg(feature = "live-http")]
@@ -138,6 +242,8 @@ pub(crate) struct DiskChat {
     pub(crate) tts_voice: String,
     /// Settings `selected_voice_model`. Empty means the xAI STT seed.
     pub(crate) stt_model: String,
+    /// Resolved context budget from Settings + model id.
+    pub(crate) budget: ContextBudget,
 }
 
 impl std::fmt::Debug for DiskChat {
@@ -148,6 +254,7 @@ impl std::fmt::Debug for DiskChat {
             .field("bearer", &"<redacted>")
             .field("tts_voice", &self.tts_voice)
             .field("stt_model", &self.stt_model)
+            .field("budget", &self.budget)
             .finish()
     }
 }
@@ -175,11 +282,13 @@ pub(crate) fn load_disk_chat() -> Result<DiskChat, String> {
         env_openai_compatible.as_deref(),
     )
     .map_err(|error| error.to_string())?;
+    let budget = ContextBudget::from_settings(&prepared.model, handle.settings());
     Ok(DiskChat {
         tts_voice: handle.selected_tts_voice().unwrap_or("").to_owned(),
         stt_model: handle.selected_voice_model().unwrap_or("").to_owned(),
         prepared,
         bearer,
+        budget,
     })
 }
 
@@ -205,9 +314,17 @@ pub(crate) fn finish_prepared_chat(
     prepared: &PreparedChat,
     bearer: &str,
     system: &str,
-    user: &str,
+    messages: &[SessionMessage],
 ) -> Result<String, String> {
-    finish_prepared_chat_inner(prepared, bearer, system, user)
+    finish_prepared_chat_inner(prepared, bearer, system, messages)
+}
+
+pub(crate) fn finish_prepared_compact(
+    prepared: &PreparedChat,
+    bearer: &str,
+    older: &[SessionMessage],
+) -> Result<String, String> {
+    finish_prepared_compact_inner(prepared, bearer, older)
 }
 
 #[cfg(not(feature = "live-http"))]
@@ -215,7 +332,16 @@ fn finish_prepared_chat_inner(
     _prepared: &PreparedChat,
     _bearer: &str,
     _system: &str,
-    _user: &str,
+    _messages: &[SessionMessage],
+) -> Result<String, String> {
+    Err(LIVE_HTTP_DISABLED.to_owned())
+}
+
+#[cfg(not(feature = "live-http"))]
+fn finish_prepared_compact_inner(
+    _prepared: &PreparedChat,
+    _bearer: &str,
+    _older: &[SessionMessage],
 ) -> Result<String, String> {
     Err(LIVE_HTTP_DISABLED.to_owned())
 }
@@ -225,11 +351,22 @@ fn finish_prepared_chat_inner(
     prepared: &PreparedChat,
     bearer: &str,
     system: &str,
-    user: &str,
+    messages: &[SessionMessage],
 ) -> Result<String, String> {
     let transport = softwake_providers::live::LiveTransport::bounded(CHAT_TIMEOUT);
-    softwake_providers::complete_chat(&transport, prepared, bearer, system, user)
-        .map_err(|error| error.to_string())
+    let chat = to_chat_messages(messages);
+    complete_chat(&transport, prepared, bearer, system, &chat).map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "live-http")]
+fn finish_prepared_compact_inner(
+    prepared: &PreparedChat,
+    bearer: &str,
+    older: &[SessionMessage],
+) -> Result<String, String> {
+    let transport = softwake_providers::live::LiveTransport::bounded(CHAT_TIMEOUT);
+    let chat = to_chat_messages(older);
+    complete_compact(&transport, prepared, bearer, &chat).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -240,6 +377,9 @@ mod fixture {
         HttpBytes, HttpResponse, MultipartField, PreparedChat, ProviderHandle, ProviderId,
         ProviderSettings, SecretBag, TestReport, Transport, TransportError,
     };
+    use softwake_session::SessionMessage;
+
+    use super::{ContextBudget, to_chat_messages};
 
     /// One recorded JSON POST. The bearer is not stored.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -364,10 +504,27 @@ mod fixture {
         prepared: &PreparedChat,
         bearer: &str,
         system: &str,
-        user: &str,
+        messages: &[SessionMessage],
     ) -> Result<String, String> {
-        softwake_providers::complete_chat(transport, prepared, bearer, system, user)
+        let chat = to_chat_messages(messages);
+        softwake_providers::complete_chat(transport, prepared, bearer, system, &chat)
             .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn compact_fixture(
+        transport: &ScriptedTransport,
+        prepared: &PreparedChat,
+        bearer: &str,
+        older: &[SessionMessage],
+    ) -> Result<String, String> {
+        let chat = to_chat_messages(older);
+        softwake_providers::complete_compact(transport, prepared, bearer, &chat)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn budget_for_handle(handle: &ProviderHandle) -> ContextBudget {
+        let model = handle.selected_model().unwrap_or("");
+        ContextBudget::from_settings(model, handle.settings())
     }
 
     /// xAI API-key fixture with a scripted assistant `content` body.
@@ -439,7 +596,8 @@ mod fixture {
 
 #[cfg(test)]
 pub(crate) use fixture::{
-    ChatFixture, RecordedPost, complete_fixture, prepare_fixture, xai_key_fixture,
+    ChatFixture, RecordedPost, budget_for_handle, compact_fixture, complete_fixture,
+    prepare_fixture, xai_key_fixture,
 };
 
 #[cfg(test)]
@@ -452,6 +610,8 @@ mod tests {
     };
     #[cfg(not(feature = "live-http"))]
     use softwake_providers::{PreparedChat, ProviderFamily};
+    #[cfg(not(feature = "live-http"))]
+    use softwake_session::SessionMessage;
 
     use super::CHAT_TIMEOUT;
     #[cfg(not(feature = "live-http"))]
@@ -532,8 +692,13 @@ mod tests {
             api_base: softwake_providers::XAI_API_BASE.to_owned(),
             model: "grok-4.5".to_owned(),
         };
-        let error = finish_prepared_chat(&prepared, "sk-test-secret", "system", "user")
-            .expect_err("disabled");
+        let error = finish_prepared_chat(
+            &prepared,
+            "sk-test-secret",
+            "system",
+            &[SessionMessage::user("user")],
+        )
+        .expect_err("disabled");
         assert_eq!(error, LIVE_HTTP_DISABLED);
         assert!(!error.contains("sk-test-secret"));
         assert!(!error.contains("LiveTransport"));

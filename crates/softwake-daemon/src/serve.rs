@@ -177,7 +177,7 @@ impl ServeHandle {
     /// User lines recorded since the session opened.
     #[cfg(test)]
     pub(crate) fn session_turns_for_test(&self) -> Vec<String> {
-        lock(&self.shared.runtime).session_turns().to_vec()
+        lock(&self.shared.runtime).session_turns()
     }
 
     /// Hold the runtime mutex so tests can prove `GetStatus` uses the cache.
@@ -487,6 +487,9 @@ fn publish_thinking(shared: &Shared, detail: &str) {
             last_tool: None,
             talking: false,
             auto_listening: false,
+            context_used: None,
+            context_limit: None,
+            context_compacted: false,
         });
     }
 }
@@ -532,6 +535,9 @@ fn placeholder_status() -> Status {
         last_tool: None,
         talking: false,
         auto_listening: false,
+        context_used: None,
+        context_limit: None,
+        context_compacted: false,
     }
 }
 

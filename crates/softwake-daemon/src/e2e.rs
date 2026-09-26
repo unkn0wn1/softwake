@@ -626,7 +626,11 @@ fn ctl_ask_is_refused_until_awake_then_returns_the_fixture_reply() {
     let posts = server.chat_posts_for_test();
     assert_eq!(posts.len(), 2);
     let body: serde_json::Value = serde_json::from_str(&posts[1].body).expect("json");
-    assert_eq!(body["messages"][1]["content"].as_str(), Some("hello there"));
+    let messages = body["messages"].as_array().expect("messages");
+    assert!(messages.len() >= 4, "{messages:?}");
+    assert_eq!(messages[1]["content"].as_str(), Some("hello"));
+    assert_eq!(messages[2]["role"].as_str(), Some("assistant"));
+    assert_eq!(messages[3]["content"].as_str(), Some("hello there"));
 
     watcher
         .set_read_timeout(Some(Duration::from_secs(2)))

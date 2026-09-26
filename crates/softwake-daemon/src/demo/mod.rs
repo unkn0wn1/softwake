@@ -319,8 +319,12 @@ impl Demo {
     }
 
     #[cfg(test)]
-    fn session_turns(&self) -> &[String] {
-        self.session.turns()
+    fn session_turns(&self) -> Vec<String> {
+        self.session
+            .user_texts()
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
     }
 
     #[cfg(test)]
@@ -435,17 +439,29 @@ impl Demo {
     fn ask_fixture(&mut self, text: &str) -> Vec<String> {
         let extracted = self.chat_fixture.as_ref().map(|fixture| {
             let prepared = crate::chat::prepare_fixture(fixture);
-            (prepared, std::sync::Arc::clone(&fixture.transport))
+            let budget = crate::chat::budget_for_handle(&fixture.handle);
+            (prepared, std::sync::Arc::clone(&fixture.transport), budget)
         });
-        let Some((prepared, transport)) = extracted else {
+        let Some((prepared, transport, budget)) = extracted else {
             return self.ask_disk(text);
         };
         match prepared {
             Ok((prepared, bearer)) => {
                 let call = prepared.clone();
-                self.complete_ask(text, &prepared, move |system, user| {
-                    crate::chat::complete_fixture(&transport, &call, &bearer, system, user)
-                })
+                let transport_c = std::sync::Arc::clone(&transport);
+                let call_c = call.clone();
+                let bearer_c = bearer.clone();
+                self.complete_ask(
+                    text,
+                    &prepared,
+                    budget,
+                    move |older| {
+                        crate::chat::compact_fixture(&transport_c, &call_c, &bearer_c, older)
+                    },
+                    move |system, messages| {
+                        crate::chat::complete_fixture(&transport, &call, &bearer, system, messages)
+                    },
+                )
             }
             Err(message) => self.chat_rejected(&message, None),
         }
@@ -465,21 +481,32 @@ impl Demo {
             bearer,
             tts_voice: _,
             stt_model: _,
+            budget,
         } = ready;
         if let Err(message) = crate::chat::gate_live_http(&prepared, &bearer, text) {
             return self.chat_rejected(&message, Some(&prepared));
         }
         let call = prepared.clone();
-        self.complete_ask(text, &prepared, move |system, user| {
-            crate::chat::finish_prepared_chat(&call, &bearer, system, user)
-        })
+        let call_c = prepared.clone();
+        let bearer_c = bearer.clone();
+        self.complete_ask(
+            text,
+            &prepared,
+            budget,
+            move |older| crate::chat::finish_prepared_compact(&call_c, &bearer_c, older),
+            move |system, messages| {
+                crate::chat::finish_prepared_chat(&call, &bearer, system, messages)
+            },
+        )
     }
 
     fn complete_ask(
         &mut self,
         text: &str,
         prepared: &PreparedChat,
-        complete: impl FnOnce(&str, &str) -> Result<String, String>,
+        budget: crate::chat::ContextBudget,
+        compact: impl FnOnce(&[softwake_session::SessionMessage]) -> Result<String, String>,
+        complete: impl FnOnce(&str, &[softwake_session::SessionMessage]) -> Result<String, String>,
     ) -> Vec<String> {
         let mut lines = Vec::new();
         self.note_chat(&mut lines, prepared);
@@ -488,8 +515,23 @@ impl Demo {
         #[cfg(not(test))]
         let fixture = Option::<&softwake_memory::MockMemory>::None;
         let appendix = crate::chat::appendix_for_ask(text, fixture);
-        match crate::chat::perform_ask(&mut self.session, text, &appendix, complete) {
-            Ok(reply) => lines.push(format!("assistant: {reply}")),
+        match crate::chat::perform_ask(
+            &mut self.session,
+            text,
+            &appendix,
+            budget,
+            compact,
+            complete,
+        ) {
+            Ok(ok) => {
+                if ok.context.compacted {
+                    lines.push(format!(
+                        "compacted: context ~{} / {} ({}%)",
+                        ok.context.used, ok.context.limit, ok.context.percent
+                    ));
+                }
+                lines.push(format!("assistant: {}", ok.reply));
+            }
             Err(error) => {
                 let rejected = format!("rejected: {}", error.sentence());
                 self.push_verbose(&mut lines, &rejected);

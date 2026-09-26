@@ -156,6 +156,19 @@
             </select>
           </label>
           <p id="tts-note" class="meta">Speech replies use the xAI voice Eve when the selected provider is xAI.</p>
+          <label class="field">
+            <span>Context limit (tokens)</span>
+            <input id="context-limit" type="number" min="0" step="1024" placeholder="0 = built-in / 128000" />
+          </label>
+          <p class="meta">Override the model context window. Empty or 0 uses the built-in map for known Grok/OpenAI ids, else 128000.</p>
+          <label class="field">
+            <span>Compact at (%)</span>
+            <input id="compact-at" type="number" min="1" max="100" step="1" value="70" />
+          </label>
+          <p class="meta">When estimated awake-session usage reaches this percent of the limit, older turns are summarized.</p>
+          <div class="row">
+            <button type="button" class="btn-primary" id="save-context">Save context settings</button>
+          </div>
           <p id="provider-error" class="error" role="status"></p>
           <p id="plaintext-warning" class="detail"></p>
           <button type="button" id="use-plaintext-file" class="hidden" hidden>Use plaintext file</button>
@@ -251,6 +264,7 @@
           <p class="meta">Reload reads soul.md, user.md, rules.md, and glossary.md.</p>
           <p class="meta">Socket: same default as ctl. The status snapshot does not include the path.</p>
           <p id="detail" class="detail"></p>
+          <p id="context-line" class="meta"></p>
           <p id="last-tool" class="meta"></p>
           <p id="pending" class="detail"></p>
           <p id="error" class="error" role="status"></p>

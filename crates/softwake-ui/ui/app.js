@@ -35,6 +35,10 @@ const testStatus = document.querySelector("#test-status");
 const modelSelect = document.querySelector("#model-select");
 const voiceModelSelect = document.querySelector("#voice-model-select");
 const ttsVoiceSelect = document.querySelector("#tts-voice-select");
+const contextLimitInput = document.querySelector("#context-limit");
+const compactAtInput = document.querySelector("#compact-at");
+const saveContextBtn = document.querySelector("#save-context");
+const contextLineEl = document.querySelector("#context-line");
 const ttsNote = document.querySelector("#tts-note");
 const providerError = document.querySelector("#provider-error");
 const emailLiveEnabled = document.querySelector("#email-live-enabled");
@@ -130,6 +134,18 @@ function show(status, keepError) {
     ? "soul reload: pending — applies on next awake"
     : "soul reload: not pending";
   detailEl.textContent = status.detail || status.message || "";
+  if (contextLineEl) {
+    if (status.state === "awake" && status.context_limit != null && status.context_used != null) {
+      const pct = status.context_limit
+        ? Math.min(100, Math.round((100 * status.context_used) / status.context_limit))
+        : 0;
+      let line = `context ~${status.context_used} / ${status.context_limit} (${pct}%)`;
+      if (status.context_compacted) line += " — compacted";
+      contextLineEl.textContent = line;
+    } else {
+      contextLineEl.textContent = "";
+    }
+  }
   lastToolEl.textContent = status.last_tool ? `last tool: ${status.last_tool}` : "last tool: none";
   showPending(status);
   if (!keepError) {
@@ -210,6 +226,15 @@ function selectedRow() {
 function renderProviders(snap) {
   providerSnap = snap;
   providerError.textContent = "";
+  if (contextLimitInput) {
+    contextLimitInput.value =
+      snap.context_limit_tokens && snap.context_limit_tokens > 0
+        ? String(snap.context_limit_tokens)
+        : "";
+  }
+  if (compactAtInput) {
+    compactAtInput.value = String(snap.compact_at_percent || 70);
+  }
   plaintextWarning.textContent = snap.storage_message || "";
   const showPlaintextOptIn = snap.storage_backend === "unavailable";
   usePlaintextBtn.classList.toggle("hidden", !showPlaintextOptIn);
@@ -442,6 +467,20 @@ saveBaseUrlBtn.addEventListener("click", () => {
     baseUrl: baseUrlInput.value,
   });
 });
+
+if (saveContextBtn) {
+  saveContextBtn.addEventListener("click", () => {
+    const rawLimit = (contextLimitInput && contextLimitInput.value.trim()) || "0";
+    const tokens = Math.max(0, Number.parseInt(rawLimit, 10) || 0);
+    const rawPct = (compactAtInput && compactAtInput.value.trim()) || "70";
+    let percent = Number.parseInt(rawPct, 10);
+    if (!Number.isFinite(percent) || percent < 1) percent = 70;
+    if (percent > 100) percent = 100;
+    providerAction("provider_set_context_limit", { tokens }).then(() =>
+      providerAction("provider_set_compact_at", { percent })
+    );
+  });
+}
 
 clearKeyBtn.addEventListener("click", () => {
   providerAction("provider_clear_cred", { providerId: providerSelect.value });
