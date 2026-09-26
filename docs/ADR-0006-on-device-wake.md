@@ -28,7 +28,7 @@ Whisper-as-wake is rejected. A full speech-to-text decode is the wrong amount of
 Accuracy expectations, without a new benchmark in this change:
 
 - Offline after the model directory is populated. The wake path does not open a socket.
-- Good enough to try as the always-on gate for a short phrase list. Similar-sounding speech will false-accept sometimes. sherpa-onnx exposes a keyword score and a threshold; those knobs are chosen when weights are loaded, not here.
+- Good enough to try as the always-on gate for a short phrase list. Similar-sounding speech will false-accept sometimes. sherpa-onnx exposes a keyword score and a threshold; Softwake uses the global defaults (score 1.0 / threshold 0.25) and appends a modest per-keyword `#0.15` trigger threshold for short single-word names (e.g. `sally`). Multi-word `hey <name>` stays on the global default and is usually easier to spot.
 - Heavier than Porcupine, much lighter than running Whisper while asleep.
 
 ## License and what ships

@@ -2,9 +2,10 @@
 //!
 //! Compiles only with `--features sherpa-kws`. Loads an English Zipformer KWS
 //! checkpoint from [`SherpaKwsDetector::model_dir`] when the ONNX files and
-//! `tokens.txt` are present. Keywords are BPE-encoded with a greedy matcher
-//! over `tokens.txt` (no SentencePiece link — that duplicates protobuf symbols
-//! with `sherpa-onnx-sys`). Without weights, [`WakeDetector::push_samples`]
+//! `tokens.txt` are present. Keywords are BPE-encoded with a longest-piece
+//! matcher over `tokens.txt` (pieces sorted by length descending; no
+//! `SentencePiece` link — that duplicates protobuf symbols with
+//! `sherpa-onnx-sys`). Without weights, [`WakeDetector::push_samples`]
 //! returns [`PhraseHit::None`]. CI does not enable this feature.
 
 use std::fs;
@@ -24,6 +25,10 @@ pub struct SherpaKwsDetector {
     model_dir: PathBuf,
     wake_phrases: Vec<String>,
     sleep_phrases: Vec<String>,
+    /// Phrases that encoded into `keywords_buf` (config ∩ sherpa).
+    registered_phrases: Vec<String>,
+    /// Phrases skipped because BPE encode failed.
+    skipped_phrases: Vec<String>,
     engine: Option<LoadedEngine>,
 }
 
@@ -39,6 +44,8 @@ impl std::fmt::Debug for SherpaKwsDetector {
             .field("model_dir", &self.model_dir)
             .field("wake_phrases", &self.wake_phrases)
             .field("sleep_phrases", &self.sleep_phrases)
+            .field("registered_phrases", &self.registered_phrases)
+            .field("skipped_phrases", &self.skipped_phrases)
             .field("weights_loaded", &self.engine.is_some())
             .finish()
     }
@@ -57,11 +64,14 @@ impl SherpaKwsDetector {
         let model_dir = model_dir.into();
         let wake_phrases = normalize(wake_phrases);
         let sleep_phrases = normalize(sleep_phrases);
-        let engine = load_engine(&model_dir, &wake_phrases, &sleep_phrases);
+        let (engine, registered_phrases, skipped_phrases) =
+            load_engine(&model_dir, &wake_phrases, &sleep_phrases);
         Self {
             model_dir,
             wake_phrases,
             sleep_phrases,
+            registered_phrases,
+            skipped_phrases,
             engine,
         }
     }
@@ -101,6 +111,18 @@ impl SherpaKwsDetector {
     #[must_use]
     pub fn sleep_phrases(&self) -> &[String] {
         &self.sleep_phrases
+    }
+
+    /// Phrases that made it into the sherpa `keywords_buf`.
+    #[must_use]
+    pub fn registered_phrases(&self) -> &[String] {
+        &self.registered_phrases
+    }
+
+    /// Phrases skipped because the BPE table could not encode them.
+    #[must_use]
+    pub fn skipped_phrases(&self) -> &[String] {
+        &self.skipped_phrases
     }
 
     /// `true` when ONNX + tokens loaded and a stream is open.
@@ -171,10 +193,19 @@ fn load_engine(
     model_dir: &Path,
     wake_phrases: &[String],
     sleep_phrases: &[String],
-) -> Option<LoadedEngine> {
-    let paths = ModelPaths::discover(model_dir)?;
-    let pieces = load_token_pieces(&paths.tokens)?;
-    let keywords_buf = build_keywords_buf(&pieces, wake_phrases, sleep_phrases)?;
+) -> (Option<LoadedEngine>, Vec<String>, Vec<String>) {
+    let Some(paths) = ModelPaths::discover(model_dir) else {
+        return (None, Vec::new(), Vec::new());
+    };
+    let Some(pieces) = load_token_pieces(&paths.tokens) else {
+        return (None, Vec::new(), Vec::new());
+    };
+    let built = build_keywords_buf(&pieces, wake_phrases, sleep_phrases);
+    let registered = built.registered.clone();
+    let skipped = built.skipped.clone();
+    let Some(keywords_buf) = built.buf else {
+        return (None, registered, skipped);
+    };
     let mut config = KeywordSpotterConfig::default();
     config.model_config = OnlineModelConfig {
         transducer: OnlineTransducerModelConfig {
@@ -191,9 +222,11 @@ fn load_engine(
     config.keywords_buf = Some(keywords_buf);
     config.keywords_threshold = 0.25;
     config.keywords_score = 1.0;
-    let spotter = KeywordSpotter::create(&config)?;
+    let Some(spotter) = KeywordSpotter::create(&config) else {
+        return (None, registered, skipped);
+    };
     let stream = spotter.create_stream();
-    Some(LoadedEngine { spotter, stream })
+    (Some(LoadedEngine { spotter, stream }), registered, skipped)
 }
 
 struct ModelPaths {
@@ -289,23 +322,42 @@ fn load_token_pieces(tokens_path: &str) -> Option<Vec<String>> {
     Some(pieces)
 }
 
+/// Result of encoding configured phrases into a sherpa `keywords_buf`.
+struct KeywordBuild {
+    /// Joined keyword lines, or `None` when nothing encoded.
+    buf: Option<String>,
+    /// Phrases that produced a line (config ∩ sherpa).
+    registered: Vec<String>,
+    /// Phrases the BPE table could not encode.
+    skipped: Vec<String>,
+}
+
 fn build_keywords_buf(
     pieces: &[String],
     wake_phrases: &[String],
     sleep_phrases: &[String],
-) -> Option<String> {
+) -> KeywordBuild {
     let mut lines = Vec::new();
+    let mut registered = Vec::new();
+    let mut skipped = Vec::new();
     for phrase in wake_phrases.iter().chain(sleep_phrases.iter()) {
         // Skip phrases the BPE table cannot encode instead of failing the
         // whole keyword list (one bad name must not idle voice wake).
         if let Some(line) = encode_keyword_line(pieces, phrase) {
             lines.push(line);
+            registered.push(phrase.clone());
+        } else {
+            skipped.push(phrase.clone());
         }
     }
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
+    KeywordBuild {
+        buf: if lines.is_empty() {
+            None
+        } else {
+            Some(lines.join("\n"))
+        },
+        registered,
+        skipped,
     }
 }
 
@@ -327,17 +379,30 @@ fn encode_keyword_line(pieces: &[String], phrase: &str) -> Option<String> {
     let chars: Vec<char> = surface.chars().collect();
     while index < chars.len() {
         let rest: String = chars[index..].iter().collect();
-        let Some(piece) = pieces
+        // `pieces` is sorted longest-first in [`load_token_pieces`], so the
+        // first prefix match is the longest BPE piece (not first-id greedy).
+        let piece = pieces
             .iter()
-            .find(|candidate| rest.starts_with(candidate.as_str()))
-        else {
-            return None;
-        };
+            .find(|candidate| rest.starts_with(candidate.as_str()))?;
         encoded.push(piece.as_str());
         index += piece.chars().count();
     }
     let tag = phrase.trim().to_ascii_lowercase().replace(' ', "_");
-    Some(format!("{} @{tag}", encoded.join(" ")))
+    let mut line = format!("{} @{tag}", encoded.join(" "));
+    // Short single-word names (e.g. "sally") are harder to spot at the
+    // default 0.25 threshold. sherpa per-keyword `#threshold` lowers the
+    // trigger bar for that line only (docs: lower = easier). Multi-word
+    // "hey <name>" stays on the global default and is usually more reliable.
+    if is_short_single_word(phrase) {
+        line.push_str(" #0.15");
+    }
+    Some(line)
+}
+
+/// True for a single whitespace-free word of at most 8 letters.
+fn is_short_single_word(phrase: &str) -> bool {
+    let trimmed = phrase.trim();
+    !trimmed.is_empty() && !trimmed.chars().any(char::is_whitespace) && trimmed.chars().count() <= 8
 }
 
 fn normalize<I, S>(phrases: I) -> Vec<String>
@@ -370,7 +435,10 @@ mod tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
-    use super::{SherpaKwsDetector, encode_keyword_line, load_token_pieces, model_dir_from};
+    use super::{
+        SherpaKwsDetector, encode_keyword_line, is_short_single_word, load_token_pieces,
+        model_dir_from,
+    };
     use crate::{PhraseHit, WakeDetector};
 
     #[test]
@@ -436,5 +504,26 @@ mod tests {
         let line = encode_keyword_line(&pieces, "hey softwake").expect("encode");
         assert!(line.ends_with("@hey_softwake"));
         assert!(line.starts_with("▁HE Y ▁SO F T W A KE "));
+        let sally = encode_keyword_line(&pieces, "sally").expect("sally encodes");
+        assert!(sally.contains("@sally"), "{sally}");
+        assert!(
+            sally.contains("#0.15"),
+            "short name gets lower threshold: {sally}"
+        );
+        let hey_sally = encode_keyword_line(&pieces, "hey sally").expect("hey sally");
+        assert!(hey_sally.contains("@hey_sally"), "{hey_sally}");
+        assert!(
+            !hey_sally.contains('#'),
+            "multi-word stays on global threshold: {hey_sally}"
+        );
+    }
+
+    #[test]
+    fn short_single_word_helper() {
+        assert!(is_short_single_word("sally"));
+        assert!(is_short_single_word("ada"));
+        assert!(!is_short_single_word("hey sally"));
+        assert!(is_short_single_word("softwake")); // 8 chars exactly counts as short
+        assert!(!is_short_single_word("softwakes")); // 9+
     }
 }

@@ -23,6 +23,9 @@ pub(crate) enum PcmEngine {
     /// Real sherpa-onnx KWS when the feature is on and weights loaded.
     #[cfg(feature = "sherpa-kws")]
     Sherpa(softwake_wake::SherpaKwsDetector),
+    /// Scripted hits for drain regression tests (no sherpa link).
+    #[cfg(test)]
+    Scripted(softwake_wake::ScriptedDetector),
 }
 
 impl WakeDetector for PcmEngine {
@@ -65,6 +68,8 @@ impl PcmEngine {
             Self::Null(_) => false,
             #[cfg(feature = "sherpa-kws")]
             Self::Sherpa(detector) => detector.weights_loaded(),
+            #[cfg(test)]
+            Self::Scripted(_) => true,
         }
     }
 
@@ -75,6 +80,8 @@ impl PcmEngine {
             Self::Null(_) => "null",
             #[cfg(feature = "sherpa-kws")]
             Self::Sherpa(_) => "sherpa-kws",
+            #[cfg(test)]
+            Self::Scripted(_) => "scripted",
         }
     }
 
@@ -85,6 +92,8 @@ impl PcmEngine {
             Self::Null(_) => &[],
             #[cfg(feature = "sherpa-kws")]
             Self::Sherpa(detector) => detector.wake_phrases(),
+            #[cfg(test)]
+            Self::Scripted(_) => &[],
         }
     }
 
@@ -95,6 +104,8 @@ impl PcmEngine {
             Self::Null(_) => &[],
             #[cfg(feature = "sherpa-kws")]
             Self::Sherpa(detector) => detector.sleep_phrases(),
+            #[cfg(test)]
+            Self::Scripted(_) => &[],
         }
     }
 
@@ -105,6 +116,8 @@ impl PcmEngine {
             Self::Null(_) => String::new(),
             #[cfg(feature = "sherpa-kws")]
             Self::Sherpa(detector) => detector.model_dir().display().to_string(),
+            #[cfg(test)]
+            Self::Scripted(_) => String::new(),
         }
     }
 
@@ -118,7 +131,23 @@ impl PcmEngine {
             },
             #[cfg(feature = "sherpa-kws")]
             Self::Sherpa(detector) => detector.push_samples_detailed(samples),
+            #[cfg(test)]
+            Self::Scripted(detector) => {
+                let hit = detector.push_samples(samples);
+                let keyword = match hit {
+                    PhraseHit::Wake => Some("scripted-wake".to_owned()),
+                    PhraseHit::Sleep => Some("scripted-sleep".to_owned()),
+                    PhraseHit::None => None,
+                };
+                SpotDetail { hit, keyword }
+            }
         }
+    }
+
+    /// Install a scripted hit queue (tests only).
+    #[cfg(test)]
+    pub(crate) fn scripted(hits: impl IntoIterator<Item = PhraseHit>) -> Self {
+        Self::Scripted(softwake_wake::ScriptedDetector::new(hits))
     }
 
     /// One-shot startup summary (profile phrases, backend, weights).
@@ -150,11 +179,39 @@ impl PcmEngine {
                     sleep.join(", ")
                 );
             }
+            self.log_registered_keywords(verbosity);
         }
         if verbosity >= 1 {
             eprintln!(
                 "softwaked: KWS verbose={verbosity} (-v logs keyword hear/match; -vv also logs mic energy while sleeping)"
             );
+        }
+    }
+
+    /// Log which phrases actually entered sherpa `keywords_buf` vs encode skips.
+    fn log_registered_keywords(&self, verbosity: u8) {
+        #[cfg(feature = "sherpa-kws")]
+        {
+            if let Self::Sherpa(detector) = self {
+                let registered = detector.registered_phrases();
+                let skipped = detector.skipped_phrases();
+                if verbosity >= 1 || !skipped.is_empty() || detector.weights_loaded() {
+                    eprintln!(
+                        "softwaked: KWS keywords registered=[{}] skipped=[{}]",
+                        registered.join(", "),
+                        skipped.join(", ")
+                    );
+                }
+                for phrase in skipped {
+                    eprintln!(
+                        "softwaked: KWS skipped unencodable phrase=`{phrase}` (not in sherpa keywords_buf)"
+                    );
+                }
+            }
+        }
+        #[cfg(not(feature = "sherpa-kws"))]
+        {
+            let _ = (self, verbosity);
         }
     }
 }

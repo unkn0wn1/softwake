@@ -369,9 +369,9 @@ Speak into the default input; the HUD capsule particles should bloom with your v
 
 1. Install weights (once): `./scripts/install-kws-weights.sh` → files under `$XDG_DATA_HOME/softwake/kws` (or `~/.local/share/softwake/kws`).
 2. Build with KWS + mic: `cargo build -p softwake-daemon --features live-http,sherpa-kws,pipewire-capture` (and the UI as usual), then install the binary (e.g. `cargo install --path crates/softwake-daemon --features live-http,sherpa-kws,pipewire-capture --force`).
-3. Set the active profile **name** in Settings → Profiles (e.g. `Sally`). Configured wake phrases are `<name>`, `hey <name>`, `hey softwake`, `softwake` — not bare greetings like `hi`.
+3. Set the active profile **name** in Settings → Profiles (e.g. `Sally`). Configured wake phrases are `<name>`, `hey <name>`, `hey softwake`, `softwake` — not bare greetings like `hi`. Short single-word names get a slightly lower per-keyword trigger threshold; **`hey <name>` is usually more reliable** than the bare name. At `-v`/`-vv`, startup logs `KWS keywords registered=[…] skipped=[…]` so you can see config vs sherpa.
 4. Start serve with PipeWire capture and optional verbosity: `softwaked serve --capture pipewire -vv`. Leave Softwake in **sleep**.
-5. Say the profile name (or “hey Softwake”) → awake. Look for `softwaked: KWS heard keyword=… match=wake` on stderr. Say “go to sleep” or “goodnight &lt;name&gt;” → sleep.
+5. Say “hey Softwake” / “softwake”, or `hey <name>` / `<name>` → awake. Look for `softwaked: KWS heard keyword=… match=wake` on stderr (and `KWS wake match refused: …` if soul/cooldown blocks). Say “go to sleep” or “goodnight &lt;name&gt;” → sleep.
 6. Free speech / PTT / Eve TTS while awake are unchanged; sleep-phrase KWS still runs so you can dismiss by voice.
 
 Without weights or without `sherpa-kws`, PCM stays on `NullDetector` and CI stays mic-free. See [ADR 0006](docs/ADR-0006-on-device-wake.md). Download is operator-consent only; weights are not vendored.

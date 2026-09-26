@@ -706,9 +706,19 @@ impl Runtime {
         self.capture.mock_mut()
     }
 
+    /// Replace the PCM engine with a scripted hit queue (tests only).
+    #[cfg(test)]
+    fn install_scripted_pcm(&mut self, hits: impl IntoIterator<Item = PhraseHit>) {
+        self.pcm = PcmEngine::scripted(hits);
+        self.pcm_agent = "scripted".to_owned();
+    }
+
     /// Pull every queued frame into the PCM detector.
     ///
-    /// Returns the last hit, or [`PhraseHit::None`] when the queue is empty.
+    /// Keeps the **first** actionable [`PhraseHit::Wake`] / [`PhraseHit::Sleep`]
+    /// in the batch. Later [`PhraseHit::None`] frames must not clear a wake that
+    /// already scored in an earlier window of the same drain (sherpa often
+    /// emits keyword then silence before the next poll).
     /// [`NullDetector`] never matches. After `stop`, the mock drops the queue,
     /// so hibernate does not score a late frame.
     fn drain_pcm(&mut self) -> Vec<WireEvent> {
@@ -754,9 +764,14 @@ impl Runtime {
                 }
             }
             let detail = score_frame_detailed(&mut self.pcm, &frame);
-            hit = detail.hit;
             self.log_kws_observation(&detail, level);
             scored = true;
+            // Stick the first Wake/Sleep; do not let later None overwrite it.
+            if matches!(hit, PhraseHit::None)
+                && matches!(detail.hit, PhraseHit::Wake | PhraseHit::Sleep)
+            {
+                hit = detail.hit;
+            }
         }
         if scored {
             self.last_pcm_hit = Some(hit);
@@ -854,13 +869,28 @@ impl Runtime {
     fn apply_pcm_hit(&mut self, hit: PhraseHit) -> Vec<WireEvent> {
         match hit {
             PhraseHit::Wake if wire_state(self.machine.state()) == WireState::Sleep => {
-                self.wake_phrase().events
+                let outcome = self.wake_phrase();
+                self.log_pcm_phrase_refuse("wake", &outcome);
+                outcome.events
             }
             PhraseHit::Sleep if wire_state(self.machine.state()) == WireState::Awake => {
-                self.sleep_phrase().events
+                let outcome = self.sleep_phrase();
+                self.log_pcm_phrase_refuse("sleep", &outcome);
+                outcome.events
             }
             _ => Vec::new(),
         }
+    }
+
+    /// When a KWS match did not change state (soul refusal, cooldown, …), log why.
+    fn log_pcm_phrase_refuse(&self, kind: &str, outcome: &Outcome) {
+        if self.verbosity == 0 {
+            return;
+        }
+        let ResponseBody::Err { error } = &outcome.body else {
+            return;
+        };
+        eprintln!("softwaked: KWS {kind} match refused: {error}");
     }
 
     /// Leave awake on a sleep phrase (KWS or typed path).
@@ -1438,6 +1468,44 @@ mod tests {
         runtime.last_pcm_hit = None;
         runtime.handle(Command::GetStatus);
         assert_eq!(runtime.last_pcm_hit, None);
+    }
+
+    #[test]
+    fn drain_keeps_first_wake_hit_when_later_frames_are_none() {
+        let _guard = softwake_voice::INPUT_MUTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        softwake_voice::clear_input_mute_for_test();
+        let (mut runtime, _soul) = valid_runtime();
+        assert_eq!(
+            runtime
+                .handle(Command::GetStatus)
+                .body
+                .status()
+                .expect("status")
+                .state,
+            VoiceState::Sleep
+        );
+        // One wake-scoring frame, then silence frames in the same drain batch —
+        // the old bug overwrote Wake with later None and never called wake_phrase.
+        runtime.install_scripted_pcm([PhraseHit::Wake, PhraseHit::None, PhraseHit::None]);
+        assert!(runtime.capture_mock().push_frame(&[0; 160]));
+        assert!(runtime.capture_mock().push_frame(&[0; 160]));
+        assert!(runtime.capture_mock().push_frame(&[0; 160]));
+        let events = runtime.drain_pcm();
+        assert_eq!(runtime.last_pcm_hit, Some(PhraseHit::Wake));
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Awake);
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                Event::StateChanged {
+                    state: VoiceState::Awake,
+                    previous: VoiceState::Sleep,
+                    ..
+                }
+            )),
+            "expected sleep→awake event, got {events:?}"
+        );
     }
 
     #[test]
