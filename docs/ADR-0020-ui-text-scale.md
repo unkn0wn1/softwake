@@ -26,4 +26,8 @@ Profiles chrome was already denser than Email and other panes. Operators asked f
 ## Consequences
 
 - Missing or corrupt `ui-prefs.json` falls back to `x-small`.
-- HUD capsule styling is unchanged (separate HTML/CSS).
+- HUD capsule text scale is unchanged (separate HTML/CSS). The same file now also stores HUD idle collapse; see the amendment below.
+
+## Amendment — HUD idle collapse (2026-09-26)
+
+`ui-prefs.json` stores `hud_idle_collapse_ms` (`u32`, default 3000, clamped to 1000–30000). Settings → General shows it as seconds (1–30, default 3), with a slider and a number. Saving one pref does not reset the other. The HUD reads the file on load and on its status poll, so a save applies without restarting softwaked and without a daemon command.

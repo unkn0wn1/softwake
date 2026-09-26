@@ -44,3 +44,7 @@ ADR 0015 shipped tray + HUD with a UI-only mock level because `Status` had no en
 
 When `softwaked` is built with `pipewire-capture` and started with `--capture pipewire` (or `SOFTWAKE_CAPTURE=pipewire`), drained frames come from the default PipeWire input instead of the mock listening tone. `capture_level` and HUD particle bloom follow that PCM. Default builds and CI stay on mock capture. Wake-from-voice still waits on KWS weights ([ADR 0006](ADR-0006-on-device-wake.md)).
 
+## Amendment — square collapse and full replies (2026-09-26)
+
+Capture level on this ADR is unchanged. The chrome around the bloom is now a square collapsed window (120×120, particles centered, no composer) and, when clicked, a taller panel of chat bubbles. Bubble text is the full model reply, not a line-clamped preview. The panel collapses after the pointer has been outside for `hud_idle_collapse_ms` (`ui-prefs.json`, default 3000, clamp 1000–30000; Settings → General shows 1–30 seconds, default 3). See [ADR 0015](ADR-0015-tray-hud.md).
+

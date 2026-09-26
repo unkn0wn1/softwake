@@ -4,6 +4,7 @@
 - **Date:** 2026-09-25
 - **Amended:** 2026-09-25 (budgeted FileMemory recall on ask/chat; `ctl ask` on generation 1; `ctl wake` on generation 1)
 - **Amended:** 2026-09-26 (multi-turn history + compaction — see [ADR 0021](ADR-0021-multi-turn-compact.md))
+- **Amended:** 2026-09-26 (`CHAT_TIMEOUT` 30s → 120s so a slow completion is not aborted)
 
 ## Decision
 
@@ -25,7 +26,7 @@ Readiness uses `ProviderHandle` from [ADR 0012](ADR-0012-model-providers.md): Se
 | Empty content | `The provider returned an empty reply.` |
 | Unreadable content | `The provider reply could not be read.` |
 
-`complete_chat` is the chat/completions call. `MockTransport` is the CI client. `LiveTransport::bounded` (30s connect, read, and overall) runs only when `softwake-daemon` is built with `live-http`.
+`complete_chat` is the chat/completions call. `MockTransport` is the CI client. `LiveTransport::bounded` (120s connect, read, and overall) runs only when `softwake-daemon` is built with `live-http`. The same budget covers live speech-to-text and speech-synthesis HTTP. TTS playback reaping stays 60s ([ADR 0007](ADR-0007-awake-stt-tts.md)) and can still stop a very long spoken clip after the text reply is complete.
 
 The operator paths are `softwaked demo` (`ask` and `chat`) and `softwaked ctl ask` / `ctl chat` against a running `softwaked serve`. Both use the same completion. Mic and STT are not on this path. Serve starts in sleep. `ctl wake` enters awake on that serve through the same soul gate. `ctl resume` still lands in sleep. There is still no microphone. `wake_phrase_for_test` calls the same runtime method. Protocol generation stays 1.
 

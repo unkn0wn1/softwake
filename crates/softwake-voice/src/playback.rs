@@ -24,6 +24,9 @@ use std::time::{Duration, Instant};
 
 /// Join deadline for the background reaper. Longer than a short reply, shorter
 /// than leaving a zombie player overnight.
+///
+/// Spoken audio that runs past this can be cut even when the text reply
+/// already arrived in full. The chat HTTP budget is separate and longer.
 pub const PLAYBACK_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Keep mic input gated briefly after the player exits (room reverb / latency).

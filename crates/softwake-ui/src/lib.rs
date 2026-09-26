@@ -81,6 +81,7 @@ pub fn run() {
             tools::tools_save,
             ui_prefs::ui_prefs_snapshot,
             ui_prefs::ui_prefs_set_text_size,
+            ui_prefs::ui_prefs_set_hud_idle_collapse_ms,
             kws_prefs::kws_thresholds_snapshot,
             kws_prefs::kws_thresholds_set,
             utterance_prefs::free_speech_silence_snapshot,
@@ -120,12 +121,12 @@ pub fn run() {
         .expect("softwake-ui failed to start");
 }
 
-/// Collapsed HUD: bloom capsule only.
-const HUD_COLLAPSED_W: f64 = 220.0;
-const HUD_COLLAPSED_H: f64 = 96.0;
-/// Expanded HUD: bloom + type strip + reply.
-const HUD_EXPANDED_W: f64 = 320.0;
-const HUD_EXPANDED_H: f64 = 176.0;
+/// Collapsed HUD: square bloom only. Particles are centered in this window.
+const HUD_COLLAPSED_W: f64 = 120.0;
+const HUD_COLLAPSED_H: f64 = 120.0;
+/// Expanded HUD: bloom strip, chat bubbles, and the composer.
+const HUD_EXPANDED_W: f64 = 400.0;
+const HUD_EXPANDED_H: f64 = 480.0;
 const HUD_MARGIN: f64 = 16.0;
 
 fn hud_logical_size(expanded: bool) -> (f64, f64) {
@@ -177,7 +178,11 @@ pub(crate) fn assert_hud_on_top<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Resize the HUD. Re-anchor to primary BR only when the operator has not dragged it.
+/// Resize the HUD.
+///
+/// With no saved drag, park at primary bottom-right for the new size. With a
+/// saved drag, keep that bottom-right corner (the bloom stays put) and rewrite
+/// the saved top-left so a later reassert does not jump.
 pub(crate) fn set_hud_layout<R: tauri::Runtime>(
     app: &AppHandle<R>,
     expanded: bool,
@@ -186,17 +191,92 @@ pub(crate) fn set_hud_layout<R: tauri::Runtime>(
     let window = app
         .get_webview_window("hud")
         .ok_or_else(|| "HUD window is not open".to_owned())?;
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let old_pos = window
+        .inner_position()
+        .ok()
+        .map(|pos| pos.to_logical::<f64>(scale));
+    let old_size = window
+        .inner_size()
+        .ok()
+        .map(|size| size.to_logical::<f64>(scale));
     window
         .set_size(LogicalSize::new(width, height))
         .map_err(|error| error.to_string())?;
-    if hud_pos::load().is_none() {
-        let (x, y) = default_hud_position(app, width, height);
-        window
-            .set_position(LogicalPosition::new(x, y))
-            .map_err(|error| error.to_string())?;
+    let saved = hud_pos::load();
+    let (x, y) = if saved.is_some() {
+        let (Some(pos), Some(size)) = (old_pos, old_size) else {
+            assert_hud_on_top(app);
+            return Ok(());
+        };
+        let (raw_x, raw_y) =
+            hud_pos::pin_bottom_right(pos.x, pos.y, size.width, size.height, width, height);
+        let anchor_x = pos.x + size.width;
+        let anchor_y = pos.y + size.height;
+        clamp_hud_origin(app, anchor_x, anchor_y, raw_x, raw_y, width, height)
+    } else {
+        default_hud_position(app, width, height)
+    };
+    window
+        .set_position(LogicalPosition::new(x, y))
+        .map_err(|error| error.to_string())?;
+    if saved.is_some() {
+        hud_pos::save(hud_pos::HudPosition { x, y })?;
     }
     assert_hud_on_top(app);
     Ok(())
+}
+
+fn work_area_logical(monitor: &tauri::Monitor) -> (f64, f64, f64, f64) {
+    let scale = monitor.scale_factor();
+    let area = monitor.work_area();
+    (
+        f64::from(area.position.x) / scale,
+        f64::from(area.position.y) / scale,
+        f64::from(area.size.width) / scale,
+        f64::from(area.size.height) / scale,
+    )
+}
+
+fn monitor_containing<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    x: f64,
+    y: f64,
+) -> Option<tauri::Monitor> {
+    let monitors = app.available_monitors().ok()?;
+    monitors.into_iter().find(|monitor| {
+        let (origin_x, origin_y, width, height) = work_area_logical(monitor);
+        x >= origin_x && y >= origin_y && x <= origin_x + width && y <= origin_y + height
+    })
+}
+
+fn clamp_hud_origin<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    anchor_x: f64,
+    anchor_y: f64,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> (f64, f64) {
+    let monitor = monitor_containing(app, anchor_x, anchor_y)
+        .or_else(|| app.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else {
+        return (x, y);
+    };
+    let (origin_x, origin_y, area_w, area_h) = work_area_logical(&monitor);
+    hud_pos::clamp_to_work_area(
+        hud_pos::WorkArea {
+            origin_x,
+            origin_y,
+            width: area_w,
+            height: area_h,
+        },
+        x,
+        y,
+        width,
+        height,
+    )
 }
 
 fn open_hud<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
@@ -309,6 +389,7 @@ mod tests {
         "tools_save",
         "ui_prefs_snapshot",
         "ui_prefs_set_text_size",
+        "ui_prefs_set_hud_idle_collapse_ms",
         "kws_thresholds_snapshot",
         "kws_thresholds_set",
         "free_speech_silence_snapshot",
@@ -360,6 +441,7 @@ mod tests {
         "allow-tools-save",
         "allow-ui-prefs-snapshot",
         "allow-ui-prefs-set-text-size",
+        "allow-ui-prefs-set-hud-idle",
         "allow-kws-thresholds-snapshot",
         "allow-kws-thresholds-set",
         "allow-free-speech-silence-snapshot",
@@ -408,5 +490,16 @@ mod tests {
             !capability.contains("allow-open-path"),
             "capability must not grant allow-open-path"
         );
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp, reason = "window sizes are exact logical pixels")]
+    fn collapsed_hud_is_a_square_bloom() {
+        let (width, height) = super::hud_logical_size(false);
+        assert_eq!(width, 120.0);
+        assert_eq!(height, 120.0);
+        let (expanded_w, expanded_h) = super::hud_logical_size(true);
+        assert!(expanded_w > width);
+        assert!(expanded_h > height);
     }
 }

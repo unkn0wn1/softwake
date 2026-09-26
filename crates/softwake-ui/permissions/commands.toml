@@ -225,13 +225,18 @@ commands.allow = ["tools_save"]
 
 [[permission]]
 identifier = "allow-ui-prefs-snapshot"
-description = "Read Settings UI prefs (text size)."
+description = "Read Settings UI prefs (text size and HUD idle collapse)."
 commands.allow = ["ui_prefs_snapshot"]
 
 [[permission]]
 identifier = "allow-ui-prefs-set-text-size"
 description = "Save Settings UI text size."
 commands.allow = ["ui_prefs_set_text_size"]
+
+[[permission]]
+identifier = "allow-ui-prefs-set-hud-idle"
+description = "Save HUD idle-collapse delay (ui-prefs.json hud_idle_collapse_ms)."
+commands.allow = ["ui_prefs_set_hud_idle_collapse_ms"]
 
 [[permission]]
 identifier = "allow-kws-thresholds-snapshot"

@@ -2,20 +2,26 @@ const capsule = document.querySelector("#capsule");
 const canvas = document.querySelector("#bloom");
 const ctx = canvas.getContext("2d");
 const strip = document.querySelector("#strip");
+const logEl = document.querySelector("#log");
+const liveEl = document.querySelector("#live");
 const form = document.querySelector("#ask-form");
 const input = document.querySelector("#ask-input");
-const replyEl = document.querySelector("#reply");
 const talkBtn = document.querySelector("#talk");
 
-const IDLE_MS = 4000;
-const POST_ASK_IDLE_MS = 12000;
+const IDLE_MIN_MS = 1000;
+const IDLE_MAX_MS = 30000;
+const IDLE_DEFAULT_MS = 3000;
+const MAX_TURNS = 40;
+
 const particles = [];
 let level = 0.02;
 let state = "sleep";
 let captureRunning = false;
 let expanded = false;
 let idleTimer = null;
-let idleMs = IDLE_MS;
+let configuredIdleMs = IDLE_DEFAULT_MS;
+let lastActivity = Date.now();
+let pointerOver = false;
 let raf = 0;
 let holding = false;
 let talkPending = false;
@@ -23,6 +29,11 @@ let autoListening = false;
 let lastReplyKey = "";
 let refreshInFlight = false;
 let lastStatusMessage = "";
+let profileName = "Softwake";
+let profilePollAt = 0;
+let viewW = 120;
+let viewH = 120;
+const turns = [];
 
 function invoke(command, args) {
   const core = window.__TAURI__ && window.__TAURI__.core;
@@ -30,6 +41,14 @@ function invoke(command, args) {
     return Promise.reject(new Error("window bridge is not available"));
   }
   return core.invoke(command, args);
+}
+
+function clampIdleMs(ms) {
+  const n = Math.round(Number(ms));
+  if (!Number.isFinite(n)) {
+    return IDLE_DEFAULT_MS;
+  }
+  return Math.min(IDLE_MAX_MS, Math.max(IDLE_MIN_MS, n));
 }
 
 function palette() {
@@ -56,18 +75,33 @@ function palette() {
   ];
 }
 
+function fitCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  viewW = Math.max(1, Math.round(rect.width) || 120);
+  viewH = Math.max(1, Math.round(rect.height) || 120);
+  const backingW = Math.max(1, Math.round(viewW * dpr));
+  const backingH = Math.max(1, Math.round(viewH * dpr));
+  if (canvas.width !== backingW || canvas.height !== backingH) {
+    canvas.width = backingW;
+    canvas.height = backingH;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
 function spawnBurstWithLevel(drawLevel) {
   const dens = Math.floor(2 + drawLevel * 14);
   const colors = palette();
-  const cx = canvas.width * 0.5;
-  const cy = canvas.height * 0.55;
+  // Square collapsed bloom and the expanded strip both center the particles.
+  const cx = viewW * 0.5;
+  const cy = viewH * 0.5;
   for (let i = 0; i < dens; i += 1) {
     const color = colors[Math.floor(Math.random() * colors.length)];
     const angle = Math.random() * Math.PI * 2;
     const speed = 0.2 + Math.random() * (0.6 + drawLevel * 1.8);
     particles.push({
       x: cx + (Math.random() - 0.5) * 18,
-      y: cy + (Math.random() - 0.5) * 10,
+      y: cy + (Math.random() - 0.5) * 12,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed - 0.15,
       r: 3 + Math.random() * (4 + drawLevel * 10),
@@ -77,10 +111,6 @@ function spawnBurstWithLevel(drawLevel) {
       alpha: 0.25 + drawLevel * 0.55,
     });
   }
-}
-
-function spawnBurst() {
-  spawnBurstWithLevel(bloomLevel());
 }
 
 /** Local breath while STT/ask/TTS holds the daemon — never await status here. */
@@ -97,9 +127,9 @@ function bloomLevel() {
 }
 
 function tick() {
-  // Bloom is decoupled from status fetch: always paint from last-known level.
+  fitCanvas();
   const drawLevel = bloomLevel();
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, viewW, viewH);
   const listening = captureRunning || drawLevel > 0.08 || talkPending;
   if (listening && Math.random() < 0.08 + drawLevel * 0.35) {
     spawnBurstWithLevel(drawLevel);
@@ -140,49 +170,79 @@ async function applyWindowLayout(next) {
   }
 }
 
+function idleBlocked() {
+  if (pointerOver || holding || talkPending) {
+    return true;
+  }
+  return !!input.value.trim();
+}
+
+function armIdle() {
+  if (idleTimer) {
+    window.clearTimeout(idleTimer);
+    idleTimer = null;
+  }
+  if (!expanded) {
+    return;
+  }
+  idleTimer = window.setTimeout(() => {
+    idleTimer = null;
+    if (!expanded) {
+      return;
+    }
+    if (idleBlocked() || Date.now() - lastActivity < configuredIdleMs) {
+      armIdle();
+      return;
+    }
+    setExpanded(false);
+  }, configuredIdleMs);
+}
+
+function markActivity() {
+  lastActivity = Date.now();
+  if (expanded) {
+    armIdle();
+  }
+}
+
+function setConfiguredIdle(ms) {
+  const next = clampIdleMs(ms);
+  capsule.dataset.idleMs = String(next);
+  if (next === configuredIdleMs) {
+    return;
+  }
+  configuredIdleMs = next;
+  if (expanded) {
+    armIdle();
+  }
+}
+
 function setExpanded(next) {
   if (expanded === next) {
     if (next) {
-      bumpIdle();
+      markActivity();
     }
     return;
   }
   expanded = next;
   capsule.classList.toggle("expanded", next);
+  capsule.setAttribute("aria-expanded", next ? "true" : "false");
+  capsule.setAttribute("role", next ? "group" : "button");
   void applyWindowLayout(next);
   if (next) {
     strip.hidden = false;
-    strip.classList.remove("fading");
     input.focus();
-    bumpIdle();
+    markActivity();
   } else {
-    strip.classList.add("fading");
-    idleMs = IDLE_MS;
-    window.setTimeout(() => {
-      if (!expanded) {
-        strip.hidden = true;
-        strip.classList.remove("fading");
-        replyEl.textContent = "";
-        replyEl.classList.remove("error");
-      }
-    }, 450);
-  }
-}
-
-function bumpIdle(ms) {
-  if (typeof ms === "number") {
-    idleMs = ms;
-  }
-  if (idleTimer) {
-    window.clearTimeout(idleTimer);
-  }
-  idleTimer = window.setTimeout(() => {
-    if (document.activeElement === input && input.value.trim()) {
-      bumpIdle();
-      return;
+    strip.hidden = true;
+    liveEl.hidden = true;
+    input.blur();
+    if (idleTimer) {
+      window.clearTimeout(idleTimer);
+      idleTimer = null;
     }
-    setExpanded(false);
-  }, idleMs);
+  }
+  requestAnimationFrame(fitCanvas);
 }
 
 function updateHint() {
@@ -190,6 +250,7 @@ function updateHint() {
   if (!hint) {
     return;
   }
+  hint.hidden = true;
   if (state === "awake") {
     hint.textContent = autoListening
       ? "speak or hold · drag to move"
@@ -201,8 +262,185 @@ function updateHint() {
   }
 }
 
+function setLive(text, isError) {
+  const line = text || "";
+  liveEl.classList.toggle("error", !!isError);
+  liveEl.textContent = line;
+  liveEl.hidden = !line;
+}
+
+function formatClock(ts) {
+  return new Date(ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function appendBubble(turn) {
+  const article = document.createElement("article");
+  article.className = "bubble " + (turn.role === "user" ? "user" : "assistant");
+  if (turn.error) {
+    article.classList.add("error");
+  }
+  const header = document.createElement("header");
+  const who = document.createElement("span");
+  who.className = "who";
+  who.textContent = turn.name;
+  const time = document.createElement("time");
+  time.dateTime = new Date(turn.ts).toISOString();
+  time.textContent = formatClock(turn.ts);
+  header.append(who, time);
+  const body = document.createElement("p");
+  body.className = "body";
+  body.textContent = turn.text;
+  article.append(header, body);
+  if (turn.note) {
+    const note = document.createElement("p");
+    note.className = "note";
+    note.textContent = turn.note;
+    article.append(note);
+  }
+  logEl.append(article);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function renderLog() {
+  logEl.replaceChildren();
+  for (const turn of turns) {
+    appendBubble(turn);
+  }
+}
+
+function pushTurn(turn) {
+  turns.push(turn);
+  const overflow = turns.length > MAX_TURNS;
+  while (turns.length > MAX_TURNS) {
+    turns.shift();
+  }
+  if (overflow) {
+    renderLog();
+    return;
+  }
+  appendBubble(turn);
+}
+
+function dropTrailingError() {
+  const last = turns[turns.length - 1];
+  if (!last || !last.error) {
+    return;
+  }
+  turns.pop();
+  const node = logEl.lastElementChild;
+  if (node) {
+    node.remove();
+  }
+}
+
+function pushUser(text) {
+  const clean = String(text || "").trim();
+  if (!clean) {
+    return;
+  }
+  pushTurn({ role: "user", name: "You", text: clean, ts: Date.now(), error: false, note: "" });
+}
+
+function replyNote(detail, text) {
+  const note = String(detail || "").trim();
+  if (!note || note === text) {
+    return "";
+  }
+  if (note === "press and hold to talk" || note === "press to talk") {
+    return "";
+  }
+  return note;
+}
+
+function pushAssistant(text, detail, isError) {
+  const clean = String(text || "").trim();
+  if (!clean) {
+    return;
+  }
+  if (!isError) {
+    dropTrailingError();
+  }
+  const last = turns[turns.length - 1];
+  // Command result and the next status poll can deliver the same reply twice.
+  // A later turn that happens to repeat the words still gets its own bubble.
+  if (
+    last &&
+    last.role === "assistant" &&
+    last.text === clean &&
+    !!last.error === !!isError &&
+    Date.now() - last.ts < 2000
+  ) {
+    return;
+  }
+  pushTurn({
+    role: "assistant",
+    name: profileName || "Softwake",
+    text: clean,
+    ts: Date.now(),
+    error: !!isError,
+    note: isError ? "" : replyNote(detail, clean),
+  });
+}
+
+function isThinking(message) {
+  return message === "thinking…" || message === "thinking...";
+}
+
+function considerStatus(message, detail) {
+  const text = message || "";
+  if (!text || holding) {
+    return;
+  }
+  const key = text + "\0" + (detail || "");
+  if (key === lastReplyKey) {
+    return;
+  }
+  if (text === "listening" || text === "listening…") {
+    lastReplyKey = key;
+    return;
+  }
+  if (isThinking(text)) {
+    lastReplyKey = key;
+    setLive(detail ? "thinking… (" + detail + ")" : "thinking…", false);
+    setExpanded(true);
+    return;
+  }
+  lastReplyKey = key;
+  setLive("", false);
+  pushAssistant(text, detail, false);
+  setExpanded(true);
+}
+
+async function refreshIdlePref() {
+  try {
+    const snap = await invoke("ui_prefs_snapshot");
+    if (snap && typeof snap.hud_idle_collapse_ms === "number") {
+      setConfiguredIdle(snap.hud_idle_collapse_ms);
+    }
+  } catch (_error) {
+    capsule.dataset.idleMs = String(configuredIdleMs);
+  }
+}
+
+async function refreshProfileName(force) {
+  const now = Date.now();
+  if (!force && now - profilePollAt < 5000) {
+    return;
+  }
+  profilePollAt = now;
+  try {
+    const snap = await invoke("profiles_snapshot", { selectedId: null });
+    const rows = (snap && snap.profiles) || [];
+    const active = rows.find((row) => row && row.active);
+    const name = active && active.name ? String(active.name).trim() : "";
+    profileName = name || "Softwake";
+    capsule.dataset.profile = profileName;
+  } catch (_error) {
+    capsule.dataset.profile = profileName;
+  }
+}
+
 async function refresh() {
-  // Never stack status polls: a stuck GetStatus must not queue behind itself.
   if (refreshInFlight) {
     return;
   }
@@ -216,25 +454,7 @@ async function refresh() {
     const message = (snap && snap.message) || "";
     const detail = (snap && snap.detail) || "";
     lastStatusMessage = message;
-    const key = message + "\0" + detail;
-    // Surface free-speech / async replies without awaiting the pipeline.
-    if (
-      message &&
-      key !== lastReplyKey &&
-      message !== "listening" &&
-      !(talkPending && message === "thinking…")
-    ) {
-      lastReplyKey = key;
-      if (message === "thinking…") {
-        showReply(detail ? "thinking… (" + detail + ")" : "thinking…", false);
-        setExpanded(true);
-        bumpIdle(POST_ASK_IDLE_MS);
-      } else if (!holding) {
-        showReply(detail && detail !== message ? message + " — " + detail : message, false);
-        setExpanded(true);
-        bumpIdle(POST_ASK_IDLE_MS);
-      }
-    }
+    considerStatus(message, detail);
   } catch (_error) {
     state = "sleep";
     captureRunning = false;
@@ -244,6 +464,8 @@ async function refresh() {
     refreshInFlight = false;
   }
   updateHint();
+  void refreshIdlePref();
+  void refreshProfileName(false);
 }
 
 function errorText(error, fallback) {
@@ -256,45 +478,42 @@ function errorText(error, fallback) {
   return fallback;
 }
 
-function showReply(text, isError) {
-  replyEl.classList.toggle("error", !!isError);
-  replyEl.textContent = text;
-}
-
 async function beginTalk() {
   if (holding || talkPending || state === "hibernate") {
     if (state === "hibernate") {
       setExpanded(true);
-      showReply(
-        "Softwake is hibernating — leave hibernate from Settings (Resume) first",
-        true,
-      );
+      const line =
+        "Softwake is hibernating — leave hibernate from Settings (Resume) first";
+      setLive(line, true);
+      pushAssistant(line, "", true);
     }
     return;
   }
   holding = true;
   talkBtn.classList.add("holding");
-  talkBtn.textContent = "…";
+  talkBtn.setAttribute("aria-pressed", "true");
   setExpanded(true);
-  bumpIdle(POST_ASK_IDLE_MS);
-  showReply("listening…", false);
+  markActivity();
+  setLive("listening…", false);
   try {
     await invoke("hud_talk_start");
     await refresh();
   } catch (error) {
     holding = false;
     talkBtn.classList.remove("holding");
-    talkBtn.textContent = "Hold";
-    showReply(errorText(error, "could not start listening"), true);
+    talkBtn.setAttribute("aria-pressed", "false");
+    const line = errorText(error, "could not start listening");
+    setLive(line, true);
+    pushAssistant(line, "", true);
   }
 }
 
 function paintReleasedMic(label) {
   holding = false;
   talkBtn.classList.remove("holding");
-  talkBtn.textContent = "Hold";
-  lastStatusMessage = label === "thinking…" || label === "thinking..." ? "thinking…" : lastStatusMessage;
-  showReply(label, false);
+  talkBtn.setAttribute("aria-pressed", "false");
+  lastStatusMessage = isThinking(label) ? "thinking…" : lastStatusMessage;
+  setLive(label, false);
 }
 
 /** Yield two animation frames so the released mic paints before a long invoke. */
@@ -310,26 +529,31 @@ function endTalk() {
   }
   talkPending = true;
   paintReleasedMic("thinking…");
-  bumpIdle(POST_ASK_IDLE_MS);
+  markActivity();
   // Fire-and-forget: never await STT/ask/TTS on the HUD event loop. Bloom rAF
   // must keep running; the daemon pushes the reply onto status for refresh().
   afterPaint().then(() =>
     invoke("hud_talk_stop")
       .then((status) => {
-        const message =
-          (status && (status.message || status.detail)) || "(no reply text)";
-        const speechNote =
-          status && status.detail && status.message ? status.detail : "";
-        const line = speechNote ? message + " — " + speechNote : message;
-        lastReplyKey = message + "\0" + (status && status.detail ? status.detail : "");
-        showReply(line, false);
+        const message = (status && (status.message || status.detail)) || "(no reply text)";
+        const detail = (status && status.detail) || "";
+        lastReplyKey = message + "\0" + detail;
+        lastStatusMessage = message;
+        if (isThinking(message) || message === "listening") {
+          setLive(message, false);
+          return;
+        }
+        setLive("", false);
+        pushAssistant(message, detail, false);
       })
       .catch((error) => {
-        showReply(errorText(error, "talk failed"), true);
+        const line = errorText(error, "talk failed");
+        setLive(line, true);
+        pushAssistant(line, "", true);
       })
       .finally(() => {
         talkPending = false;
-        bumpIdle(POST_ASK_IDLE_MS);
+        markActivity();
         refresh();
       }),
   );
@@ -350,7 +574,6 @@ talkBtn.addEventListener("pointerup", (event) => {
   } catch (_error) {
     // Capture may already be released.
   }
-  // Release chrome before the long STT→ask→TTS round trip.
   endTalk();
 });
 
@@ -389,7 +612,6 @@ function isTypingTarget(target) {
   return !!target.closest("input, textarea, button, select, [contenteditable], #ask-form");
 }
 
-
 let dragMoved = false;
 let dragStartX = 0;
 let dragStartY = 0;
@@ -398,7 +620,9 @@ function isInteractiveTarget(target) {
   if (!target || !(target instanceof Element)) {
     return false;
   }
-  return !!target.closest("#ask-form, #talk, #ask-send, #ask-input, button, input, a, .reply");
+  return !!target.closest(
+    "#ask-form, #talk, #ask-send, #ask-input, #log, #live, button, input, a, .bubble",
+  );
 }
 
 async function startHudDrag() {
@@ -424,7 +648,6 @@ capsule.addEventListener("pointerdown", (event) => {
   dragMoved = false;
   dragStartX = event.screenX;
   dragStartY = event.screenY;
-  // Native drag; click-to-expand still runs on pointerup if we did not move.
   startHudDrag();
 });
 
@@ -447,7 +670,12 @@ capsule.addEventListener("click", (event) => {
     dragMoved = false;
     return;
   }
-  if (event.target.closest("#ask-form") || event.target.closest(".reply") || event.target.closest("#talk")) {
+  if (
+    event.target.closest("#ask-form") ||
+    event.target.closest("#log") ||
+    event.target.closest("#live") ||
+    event.target.closest("#talk")
+  ) {
     return;
   }
   setExpanded(!expanded);
@@ -465,11 +693,27 @@ capsule.addEventListener("keydown", (event) => {
   setExpanded(!expanded);
 });
 
-input.addEventListener("input", () => bumpIdle());
-input.addEventListener("focus", () => bumpIdle());
+capsule.addEventListener("pointerenter", () => {
+  pointerOver = true;
+  markActivity();
+});
+
+capsule.addEventListener("pointerleave", () => {
+  pointerOver = false;
+  markActivity();
+});
+
+capsule.addEventListener("pointermove", () => {
+  pointerOver = true;
+  markActivity();
+});
+
+input.addEventListener("input", () => markActivity());
+input.addEventListener("focus", () => markActivity());
 input.addEventListener("keydown", (event) => {
   // Stop capsule handlers from seeing Space/Enter while typing.
   event.stopPropagation();
+  markActivity();
 });
 
 form.addEventListener("submit", (event) => {
@@ -479,36 +723,41 @@ form.addEventListener("submit", (event) => {
     return;
   }
   setExpanded(true);
-  bumpIdle(POST_ASK_IDLE_MS);
-  replyEl.classList.remove("error");
-  replyEl.textContent = "thinking…";
+  markActivity();
+  pushUser(asked);
+  setLive("thinking…", false);
   lastStatusMessage = "thinking…";
   input.value = "";
   talkPending = true;
-  // Same as PTT: do not block the particle loop on ask + Eve playback.
   invoke("hud_ask", { text: asked })
     .then((status) => {
-      const message =
-        (status && (status.message || status.detail)) || "(no reply text)";
-      lastReplyKey = message + "\0" + (status && status.detail ? status.detail : "");
-      replyEl.textContent = message;
+      const message = (status && (status.message || status.detail)) || "(no reply text)";
+      const detail = (status && status.detail) || "";
+      lastReplyKey = message + "\0" + detail;
+      lastStatusMessage = message;
+      if (isThinking(message)) {
+        setLive(message, false);
+        return;
+      }
+      setLive("", false);
+      pushAssistant(message, detail, false);
     })
     .catch((error) => {
-      replyEl.classList.add("error");
-      replyEl.textContent =
-        typeof error === "string"
-          ? error
-          : error && error.message
-            ? error.message
-            : "ask failed";
+      const line = errorText(error, "ask failed");
+      setLive(line, true);
+      pushAssistant(line, "", true);
     })
     .finally(() => {
       talkPending = false;
-      bumpIdle(POST_ASK_IDLE_MS);
+      markActivity();
       refresh();
     });
 });
 
+capsule.dataset.idleMs = String(configuredIdleMs);
+capsule.dataset.profile = profileName;
+updateHint();
 refresh();
+void refreshProfileName(true);
 window.setInterval(refresh, 900);
 raf = requestAnimationFrame(tick);

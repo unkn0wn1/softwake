@@ -239,10 +239,22 @@ pub async fn hud_talk_start() -> Result<Status, String> {
     .map_err(|error| format!("talk start task failed: {error}"))?
 }
 
+/// Socket wait for one typed HUD ask.
+///
+/// The daemon chat budget is 120s, and speech synthesis uses that same budget
+/// before the reply is returned. This waits for both, plus a short wake.
+const HUD_ASK_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(270);
+
+/// Socket wait for press-to-talk release.
+///
+/// Speech-to-text, chat, and speech synthesis each use the 120s daemon budget
+/// before this round trip returns.
+const HUD_TALK_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(390);
+
 /// Release press-to-talk, transcribe, ask, and speak when Eve is configured.
 ///
-/// The socket read timeout is raised for this call because STT, ask, and TTS
-/// share one round trip. The daemon still bounds each HTTP call. Work runs on
+/// The socket read timeout is raised for this call because STT and ask share
+/// one round trip and each may take the full daemon chat budget. Work runs on
 /// a blocking pool so the HUD can paint a released mic button and a thinking
 /// line while the round trip is in flight.
 ///
@@ -254,7 +266,7 @@ pub async fn hud_talk_stop() -> Result<Status, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let mut client = connect()?;
         client
-            .set_read_timeout(Some(std::time::Duration::from_secs(90)))
+            .set_read_timeout(Some(HUD_TALK_READ_TIMEOUT))
             .map_err(|error| error.to_string())?;
         client.call_talk_stop().map_err(|error| error.to_string())
     })
@@ -279,6 +291,9 @@ pub async fn hud_ask(text: String) -> Result<Status, String> {
     }
     tauri::async_runtime::spawn_blocking(move || {
         let mut client = connect()?;
+        client
+            .set_read_timeout(Some(HUD_ASK_READ_TIMEOUT))
+            .map_err(|error| error.to_string())?;
         let status = client
             .call(Command::GetStatus)
             .map_err(|error| error.to_string())?;

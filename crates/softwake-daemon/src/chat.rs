@@ -18,9 +18,14 @@ use softwake_session::{
     MessageRole, SessionError, SessionMessage, SessionPhase, TextStubSession, assemble_system,
 };
 
-/// Connect, read, and overall timeout for one live chat call.
+/// Connect, read, and overall timeout for one live chat, STT, or TTS HTTP call.
+///
+/// A 30s budget aborted slow completions while the provider was still writing,
+/// so long replies never arrived. 120s is the whole-call ceiling. Spoken
+/// playback is a separate 60s reaper (`softwake_voice::PLAYBACK_TIMEOUT`) and
+/// can still stop audio after the text reply is already complete.
 #[cfg_attr(not(feature = "live-http"), allow(dead_code))]
-pub(crate) const CHAT_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const CHAT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Shown when readiness passed and this binary was built without `live-http`.
 #[cfg_attr(feature = "live-http", allow(dead_code))]
@@ -788,7 +793,7 @@ mod tests {
     #[cfg(not(feature = "live-http"))]
     #[test]
     fn disk_finish_without_live_http_returns_the_sentence() {
-        assert_eq!(CHAT_TIMEOUT, std::time::Duration::from_secs(30));
+        assert_eq!(CHAT_TIMEOUT, std::time::Duration::from_secs(120));
         let prepared = PreparedChat {
             provider: ProviderId::XaiKey,
             family: ProviderFamily::Xai,

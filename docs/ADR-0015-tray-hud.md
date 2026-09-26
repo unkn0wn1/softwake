@@ -74,3 +74,11 @@ After playback and HUD fire-and-forget ([ADR 0007](ADR-0007-awake-stt-tts.md)), 
 - `hud_snapshot` runs on the blocking pool (`spawn_blocking`), same as talk/ask.
 - Serve `GetStatus` uses `try_lock`: when ask/talk_stop holds the runtime lock, the server returns the last cached `Status` (with a thinking line published before the long hold) so HUD polls never wait on the pipeline.
 - The HUD particle loop always uses last-known level; while `talkPending` / thinking it adds a local sine breath so the capsule stays lively even if capture RMS is briefly stale.
+
+## Amendment — square collapse, bubbles, idle (2026-09-26)
+
+- Collapsed default is a **square** bloom, 120×120 logical pixels. Particles are centered. The composer, chat log, and hint are hidden.
+- A click expands to 400×480: a short bloom strip, scrollable bubbles, and a bottom composer (text, Send, mic icon). Each bubble is labeled `You` or the active profile name and has a timestamp. Bubble text is the full model reply (no line clamp). Recent turns live in a client-side ring buffer for the HUD session.
+- The mic control is an icon only. Its accessible name stays “Hold to talk”. Space and Enter on that button are press-to-talk. Space typed in the ask field is not stolen. Space on the collapsed capsule still toggles expand.
+- Idle collapse default is 3 seconds. The pointer inside the capsule, or a non-empty ask draft, keeps it open. Leaving starts the timer. Settings → General stores `hud_idle_collapse_ms` in `ui-prefs.json` (default 3000, clamp 1000–30000, shown as 1–30 seconds). The HUD re-reads the file. No daemon IPC.
+- A saved drag keeps the bottom-right corner across expand and collapse instead of jumping to primary bottom-right. First launch with no saved position still parks at primary bottom-right. Always-on-top is unchanged.
