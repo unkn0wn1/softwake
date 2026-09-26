@@ -85,3 +85,11 @@ No new binary behavior. `cargo test --workspace` stays green because no Rust cha
 - Protocol generation stays 1 until an implementation ADR or slice adds a message on purpose.
 - Voice model pickers remain a separate follow-up and are not blocked on shipping skill code.
 - Clients and CI see no runtime change from this stub alone.
+
+
+## Amendment (2026-09-26) — Settings Skills page and `skill_save`
+
+- Crate `softwake-skills` stores one Markdown file per skill under `$XDG_DATA_HOME/softwake/skills/` (else `~/.local/share/softwake/skills/`). Front matter: `version`, `title`, `source` (`user`|`agent`), `updated`. Body headings: Procedure, Pitfalls, Verify.
+- Settings → Skills lists both sources and supports add/edit/remove (Tauri only; protocol generation stays 1).
+- Registry tool `skill_save` is confirm-gated. Default Tools permission is Ask. After confirm the daemon writes `source: agent`. Ask heuristics (`make a skill …`, `make a skill from this`) stage the tool like shell intent.
+- Webhook wake, auto-refine spam, and marketplace remain later. Soul rules still beat skills.

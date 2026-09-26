@@ -73,6 +73,9 @@
           "url": "https://auth.x.ai/*"
         }
       ]
-    }
+    },
+    "allow-skills-snapshot",
+    "allow-skills-save",
+    "allow-skills-delete"
   ]
 }

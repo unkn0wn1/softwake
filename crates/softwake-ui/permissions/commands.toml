@@ -272,3 +272,18 @@ commands.allow = ["tts_playback_timeout_snapshot"]
 identifier = "allow-tts-playback-timeout-set"
 description = "Save the TTS playback reaper deadline and tell the running daemon."
 commands.allow = ["tts_playback_timeout_set"]
+
+[[permission]]
+identifier = "allow-skills-snapshot"
+description = "List and read Softwake skills."
+commands.allow = ["skills_snapshot"]
+
+[[permission]]
+identifier = "allow-skills-save"
+description = "Create or update a Softwake skill from Settings."
+commands.allow = ["skills_save"]
+
+[[permission]]
+identifier = "allow-skills-delete"
+description = "Delete a Softwake skill from Settings."
+commands.allow = ["skills_delete"]

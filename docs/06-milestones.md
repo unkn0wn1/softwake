@@ -73,7 +73,7 @@
 
 ## Deferred ideas (do not pull into phase 1)
 
-- Skills hub, opt-in refine loop, and authenticated webhook wake ([ADR 0014](ADR-0014-skills-hub.md)). Direction accepted; implementation later. Voice model pickers are a separate follow-up.
+- Skills hub ([ADR 0014](ADR-0014-skills-hub.md)): Settings Skills page + on-disk Markdown + confirm-gated `skill_save` shipped. Opt-in refine loop and authenticated webhook wake remain later.
 - Meeting memory / transcript integration (separate product track; may feed Softwake later)
 - Boring coding-agent harness (separate repo)
 - Multi-conductor / named worker routing (out of scope for Softwake)

@@ -3849,6 +3849,7 @@ dependencies = [
  "softwake-policy",
  "softwake-providers",
  "softwake-session",
+ "softwake-skills",
  "softwake-soul",
  "softwake-state",
  "softwake-tools",
@@ -3902,6 +3903,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "softwake-skills"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "softwake-soul"
 version = "0.1.0"
 dependencies = [
@@ -3936,6 +3945,7 @@ dependencies = [
  "softwake-connectors",
  "softwake-ipc",
  "softwake-providers",
+ "softwake-skills",
  "softwake-soul",
  "softwake-tools",
  "tauri",

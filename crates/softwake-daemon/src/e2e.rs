@@ -480,10 +480,14 @@ fn ctl_cancel_and_hibernate_clear_a_pending_notification() {
         "{gone}"
     );
 
+    // Default is Deny. A developer tools.json may Ask/Always allow; empty argv then
+    // fails as InvalidArgs (shared "{name} needs to, subject, and body" text).
     let denied = ctl::call_tool(temp.path(), "shell", &[]).expect_err("shell");
+    let denied_text = denied.to_string();
     assert!(
-        denied.to_string().contains("tool denied: shell"),
-        "{denied}"
+        denied_text.contains("tool denied: shell")
+            || denied_text.contains("needs to, subject, and body"),
+        "{denied_text}"
     );
 
     ctl::call_tool(temp.path(), "notify", &["later".to_owned()]).expect("later");

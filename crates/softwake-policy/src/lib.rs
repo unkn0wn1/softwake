@@ -226,7 +226,8 @@ mod tests {
         DRIVE_DELETE, DRIVE_LIST, EMAIL, EMAIL_DELETE, EMAIL_SEND,
     };
     use softwake_tools::{
-        ECHO_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL, SHELL_TOOL, ToolRegistry, ToolRisk,
+        ECHO_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL, SHELL_TOOL, SKILL_SAVE_TOOL, ToolRegistry,
+        ToolRisk,
     };
 
     use softwake_tools::ToolPermission;
@@ -271,6 +272,7 @@ mod tests {
         assert_eq!(eval_tool(&engine, NOTIFY_TOOL), PolicyDecision::Confirm);
         assert_eq!(eval_tool(&engine, EMAIL_SEND_TOOL), PolicyDecision::Confirm);
         assert_eq!(eval_tool(&engine, SHELL_TOOL), PolicyDecision::Confirm);
+        assert_eq!(eval_tool(&engine, SKILL_SAVE_TOOL), PolicyDecision::Confirm);
         assert_eq!(
             eval_connector(&engine, EMAIL, EMAIL_SEND),
             PolicyDecision::Confirm

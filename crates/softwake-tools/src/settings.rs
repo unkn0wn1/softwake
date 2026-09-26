@@ -131,7 +131,9 @@ pub fn parse_tool_permission(value: &str) -> Result<ToolPermission, ToolsSetting
 pub fn default_permission(name: &str) -> Option<ToolPermission> {
     match name {
         crate::ECHO_TOOL => Some(ToolPermission::AlwaysAllow),
-        crate::NOTIFY_TOOL | crate::EMAIL_SEND_TOOL => Some(ToolPermission::Ask),
+        crate::NOTIFY_TOOL | crate::EMAIL_SEND_TOOL | crate::SKILL_SAVE_TOOL => {
+            Some(ToolPermission::Ask)
+        }
         crate::SHELL_TOOL => Some(ToolPermission::Deny),
         _ => None,
     }
@@ -203,7 +205,12 @@ impl ToolsSettings {
             };
             self.permissions.insert(crate::SHELL_TOOL.to_owned(), shell);
         }
-        for name in [crate::ECHO_TOOL, crate::NOTIFY_TOOL, crate::EMAIL_SEND_TOOL] {
+        for name in [
+            crate::ECHO_TOOL,
+            crate::NOTIFY_TOOL,
+            crate::EMAIL_SEND_TOOL,
+            crate::SKILL_SAVE_TOOL,
+        ] {
             if !self.permissions.contains_key(name) {
                 if let Some(permission) = default_permission(name) {
                     self.permissions.insert(name.to_owned(), permission);

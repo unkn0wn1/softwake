@@ -327,6 +327,9 @@ impl Runtime {
         if let Some(outcome) = self.try_shell_ask(text) {
             return outcome;
         }
+        if let Some(outcome) = self.try_skill_ask(text) {
+            return outcome;
+        }
         #[cfg(test)]
         if self.chat_fixture.is_some() {
             return self.ask_fixture(text);
@@ -507,6 +510,27 @@ impl Runtime {
         let step = self
             .hands
             .request(&self.machine, softwake_tools::SHELL_TOOL, &[command]);
+        Some(self.outcome_for_request(step))
+    }
+
+    /// When `skill_save` is not deny, turn "make a skill …" asks into a tool call.
+    fn try_skill_ask(&mut self, text: &str) -> Option<Outcome> {
+        if self
+            .hands
+            .tools_settings()
+            .permission(softwake_tools::SKILL_SAVE_TOOL)
+            == softwake_tools::ToolPermission::Deny
+        {
+            return None;
+        }
+        let last = self
+            .last_status_detail
+            .as_deref()
+            .or(self.last_status_message.as_deref());
+        let args = crate::skill_intent::propose_skill_save(text, last)?;
+        let step = self
+            .hands
+            .request(&self.machine, softwake_tools::SKILL_SAVE_TOOL, &args);
         Some(self.outcome_for_request(step))
     }
 
@@ -3150,6 +3174,9 @@ mod tests {
     #[test]
     fn shell_is_denied_and_unknown_is_rejected_while_awake() {
         let (mut runtime, _soul) = valid_runtime();
+        runtime
+            .hands
+            .set_tools_settings_for_test(Some(softwake_tools::ToolsSettings::default()));
         wake(&mut runtime);
         let denied = runtime.invoke_tool("shell", &["echo".to_owned()]);
         assert!(denied.events.is_empty());

@@ -125,10 +125,10 @@ Long-term memory is a library boundary in `softwake-memory` ([ADR 0009](ADR-0009
 ~/.local/state/softwake/
   runtime.json          # last state, pid hints
   memory.json           # snippets, only after an enabled FileMemory writes
-  skills/               # optional refine/runtime scratch ([ADR 0014](ADR-0014-skills-hub.md)); unused until implemented
+  skills/               # optional refine/runtime scratch ([ADR 0014](ADR-0014-skills-hub.md)); unused in this slice
 ~/.local/share/softwake/
   logs/
-  skills/               # authored Markdown skills ([ADR 0014](ADR-0014-skills-hub.md)); unused until implemented
+  skills/               # authored Markdown skills ([ADR 0014](ADR-0014-skills-hub.md)); Settings Skills + skill_save
 ```
 
 Project-local override optional later (`./.softwake/`) with the same trust caveats as other local config systems.

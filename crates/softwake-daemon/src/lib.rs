@@ -30,6 +30,7 @@ mod playback_timeout;
 mod runtime;
 mod serve;
 mod shell_intent;
+mod skill_intent;
 mod soul;
 mod talk;
 mod verbose_log;
