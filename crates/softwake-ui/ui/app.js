@@ -77,7 +77,8 @@ const packEditors = {
 
 const commands = {
   hibernate: "hibernate",
-  wake: "resume",
+  resume: "resume",
+  wake: "wake",
   sleep: "sleep",
   "reload-soul": "reload_soul",
 };

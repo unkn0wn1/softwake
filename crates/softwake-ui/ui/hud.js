@@ -266,7 +266,7 @@ async function beginTalk() {
     if (state === "hibernate") {
       setExpanded(true);
       showReply(
-        "Softwake is hibernating — leave hibernate from Settings (Wake) or the tray first",
+        "Softwake is hibernating — leave hibernate from Settings (Resume) first",
         true,
       );
     }

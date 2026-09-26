@@ -273,8 +273,7 @@ pub async fn hud_ask(text: String) -> Result<Status, String> {
                 client.call_ask(&trimmed).map_err(|error| error.to_string())
             }
             VoiceState::Hibernate => Err(
-                "Softwake is hibernating — leave hibernate from Settings (Wake) or the tray first"
-                    .to_owned(),
+                "Softwake is hibernating — leave hibernate from Settings (Resume) first".to_owned(),
             ),
         }
     })

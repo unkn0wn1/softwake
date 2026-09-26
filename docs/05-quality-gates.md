@@ -46,7 +46,8 @@ cargo run -p softwake-daemon -- demo
 | Wake | Configured phrase transitions sleep → awake within agreed latency budget | Typed demo: `wake` (or the configured wake phrase path). Needs a valid soul pack. `ctl wake` against `serve` moves sleep to awake when the pack is valid. |
 | Sleep phrase | Awake → sleep; tools stop; mic stays up | Typed demo: `sleep` after the post-wake cooldown. Capture stays running. Session closes. Further `tool` calls are rejected. |
 | Hibernate | UI hibernate stops capture (no frames); voice cannot wake | Typed demo / UI / `ctl hibernate`: capture stopped; `wake` is rejected until `resume`. |
-| UI wake | Hibernate → sleep via UI | UI button or `ctl resume` / demo `resume`. Lands in sleep, not awake. |
+| UI resume | Hibernate → sleep via UI | Status **Resume** or `ctl resume` / demo `resume`. Lands in sleep, not awake. |
+| UI wake | Sleep → awake via UI | Status **Wake** or `ctl wake`. Requires a valid soul pack. |
 | Soul required | Missing any of `soul.md`, `user.md`, `rules.md`, or `glossary.md` blocks awake with a clear error | Remove a pack file and typed `wake` or `ctl wake`; status shows that file missing and state stays sleep. Hibernate / resume / sleep still work. |
 | Safe tool | One safe tool succeeds end-to-end while awake | Typed demo while awake: `tool echo hello` → `echo: hello`; `tool echo` → `pong`. Unknown names (`tool volume`) are rejected. `ctl tool echo hello` works against `serve` only after the daemon is awake. |
 | Confirm tool | A confirm-gated tool does not run until confirm | Typed demo while awake: `tool notify hello` prints `waiting for confirm` and does not append; `confirm` appends `hello`; `cancel` appends nothing. `tool email_send ada@example.com hello a short note` stays empty until `confirm`, which appends one in-memory message. `tool shell` is denied. Sleep or hibernate clears a pending confirmation. |
