@@ -47,3 +47,10 @@ host aliases) without turning Softwake into a silent full-machine agent.
 Shell confirm policy (`always`, `mutating_only`, `allowlisted_quiet`) applies only when shell is Ask. Always allow expands glossary aliases and runs with no prompt. Deny does not spawn. `allowlisted_quiet` is still reserved and uses the same gate as `mutating_only`.
 
 Settings → Tools lists every registered tool. The HUD shows Approve and Deny for a pending tool and stays expanded until the operator actions it. After Approve, if the stored mode is still ask, the HUD can offer “Always allow this tool”. That offer writes `tools.json`. Soul policy overrides can still only tighten. A registry deny cannot be lifted. Shell is still not full machine access.
+
+## Amendment — API tool-calling (2026-09-27)
+
+Chat completions may advertise non-deny tools as OpenAI-style function tools.
+The model can call them on natural asks; Hands still gates Always allow / Ask /
+Deny. Heuristic `run` / `shell` / `ssh` lines remain a fast path. Details:
+[ADR-0025](ADR-0025-api-tool-calling.md).

@@ -86,6 +86,13 @@
 - [x] Ask heuristic for `run` / `ssh to …`; Status confirm; unit tests without live ssh
 - [x] Per-tool Always allow / Ask / Deny in `tools.json` version 2, and HUD Approve / Deny that holds the panel open while a tool is pending
 
+
+## Chat API tool-calling ([ADR-0025](ADR-0025-api-tool-calling.md))
+
+- [x] Advertise non-deny tools on chat completions; daemon tool loop via Hands
+- [x] Keep `run` / `shell` / `ssh` ask heuristics; glossary expand on spawn
+- [x] Unit tests for schema + mock tool loop (no live ssh)
+
 ## Multi-platform releases
 
 Linux and Windows x86_64 GitHub Releases (AppImage, tar.gz + systemd --user install, Windows setup.exe + portable): [ADR 0019](ADR-0019-multiplatform-releases.md), [releases.md](releases.md).
