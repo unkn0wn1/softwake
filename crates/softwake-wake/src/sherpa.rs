@@ -531,6 +531,8 @@ fn build_keywords_buf(
     hibernate_phrases: &[String],
     thresholds: KwsThresholds,
 ) -> KeywordBuild {
+    // Primary wake phrase is the active profile name (`phrases_for_agent`).
+    let profile_name = wake_phrases.first().map(String::as_str).unwrap_or("");
     let mut lines = Vec::new();
     let mut registered = Vec::new();
     let mut skipped = Vec::new();
@@ -541,7 +543,7 @@ fn build_keywords_buf(
     {
         // Skip phrases the BPE table cannot encode instead of failing the
         // whole keyword list (one bad name must not idle voice wake).
-        if let Some(line) = encode_keyword_line(pieces, phrase, thresholds) {
+        if let Some(line) = encode_keyword_line(pieces, phrase, profile_name, thresholds) {
             lines.push(line);
             registered.push(phrase.clone());
         } else {
@@ -586,17 +588,29 @@ fn build_probe_keywords_buf(
 fn encode_keyword_line(
     pieces: &[String],
     phrase: &str,
+    profile_name: &str,
     thresholds: KwsThresholds,
 ) -> Option<String> {
     let mut line = encode_keyword_tokens(pieces, phrase)?;
-    // Short single-word names (e.g. "sally") are harder to spot at the global
-    // threshold. sherpa per-keyword `#threshold` lowers the trigger bar for
-    // that line only (docs: lower = easier). Multi-word "hey <name>" stays on
-    // the global default and is usually more reliable.
-    if is_short_single_word(phrase) {
+    // Profile name / hey <name> get an extra ease vs product short words —
+    // "sally" under-fires relative to "softwake" at the same short threshold.
+    // Other short singles (`sleep`, `hi`, product `softwake` when not the
+    // active name) keep the short suffix. Multi-word non-name phrases use global.
+    if is_profile_wake_phrase(phrase, profile_name) {
+        line.push_str(&thresholds.name_suffix());
+    } else if is_short_single_word(phrase) {
         line.push_str(&thresholds.short_suffix());
     }
     Some(line)
+}
+
+/// Bare profile name or `hey <name>` (case already folded by callers).
+fn is_profile_wake_phrase(phrase: &str, profile_name: &str) -> bool {
+    let name = profile_name.trim();
+    if name.is_empty() {
+        return false;
+    }
+    phrase == name || phrase == format!("hey {name}")
 }
 
 fn encode_probe_keyword_line(
@@ -773,20 +787,30 @@ mod tests {
         }
         let pieces = load_token_pieces(tokens.to_str().expect("utf8")).expect("pieces");
         let thresholds = KwsThresholds::default();
-        let line = encode_keyword_line(&pieces, "hey softwake", thresholds).expect("encode");
+        let line =
+            encode_keyword_line(&pieces, "hey softwake", "sally", thresholds).expect("encode");
         assert!(line.ends_with("@hey_softwake"));
         assert!(line.starts_with("▁HE Y ▁SO F T W A KE "));
-        let sally = encode_keyword_line(&pieces, "sally", thresholds).expect("sally encodes");
+        // Product softwake while profile is sally → short suffix, not name ease.
+        let softwake = encode_keyword_line(&pieces, "softwake", "sally", thresholds)
+            .expect("softwake encodes");
+        assert!(
+            softwake.contains("#0.10"),
+            "product short word keeps short threshold: {softwake}"
+        );
+        let sally =
+            encode_keyword_line(&pieces, "sally", "sally", thresholds).expect("sally encodes");
         assert!(sally.contains("@sally"), "{sally}");
         assert!(
-            sally.contains("#0.10"),
-            "short name gets lower threshold: {sally}"
+            sally.contains("#0.05"),
+            "profile name gets name ease below short: {sally}"
         );
-        let hey_sally = encode_keyword_line(&pieces, "hey sally", thresholds).expect("hey sally");
+        let hey_sally =
+            encode_keyword_line(&pieces, "hey sally", "sally", thresholds).expect("hey sally");
         assert!(hey_sally.contains("@hey_sally"), "{hey_sally}");
         assert!(
-            !hey_sally.contains('#'),
-            "multi-word stays on global threshold: {hey_sally}"
+            hey_sally.contains("#0.05"),
+            "hey <profile> also gets name ease: {hey_sally}"
         );
     }
 }

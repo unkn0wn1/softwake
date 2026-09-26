@@ -1011,23 +1011,20 @@ async function saveKwsThresholds() {
 }
 
 function scheduleKwsSave() {
+  // Debounce live ReloadKws — range drag steps 0.15→0.05 would otherwise
+  // rebuild ONNX weights on every tick. change used to flush immediately and
+  // defeated the input debounce on some browsers.
   if (kwsSaveTimer) clearTimeout(kwsSaveTimer);
   kwsSaveTimer = setTimeout(() => {
     kwsSaveTimer = null;
     saveKwsThresholds();
-  }, 350);
+  }, 450);
 }
 
 if (kwsGlobalInput && kwsShortInput) {
   for (const el of [kwsGlobalInput, kwsShortInput]) {
-    el.addEventListener("change", () => {
-      if (kwsSaveTimer) {
-        clearTimeout(kwsSaveTimer);
-        kwsSaveTimer = null;
-      }
-      saveKwsThresholds();
-    });
     el.addEventListener("input", scheduleKwsSave);
+    el.addEventListener("change", scheduleKwsSave);
   }
   refreshKwsThresholds();
 }
