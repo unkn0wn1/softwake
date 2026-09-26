@@ -479,7 +479,8 @@ impl ServerConnection {
             | ClientMessage::Wake { .. }
             | ClientMessage::TalkStart { .. }
             | ClientMessage::TalkStop { .. }
-            | ClientMessage::SetVoiceTest { .. } => {
+            | ClientMessage::SetVoiceTest { .. }
+            | ClientMessage::ReloadKws { .. } => {
                 let message = "expected a hello message".to_owned();
                 endpoint.write(&ServerMessage::HelloRejected {
                     protocol_version: PROTOCOL_VERSION,
@@ -732,6 +733,16 @@ impl Client {
     pub fn set_voice_test(&mut self, enabled: bool) -> Result<Status, CallError> {
         let id = self.allocate_id();
         self.round_trip(&ClientMessage::SetVoiceTest { id, enabled }, id)
+    }
+
+    /// Rebuild the KWS detector from current `softwake.json` / env thresholds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] on transport failure or a rejected reload.
+    pub fn reload_kws(&mut self) -> Result<Status, CallError> {
+        let id = self.allocate_id();
+        self.round_trip(&ClientMessage::ReloadKws { id }, id)
     }
 
     /// Confirm the pending tool and return the status after it runs.

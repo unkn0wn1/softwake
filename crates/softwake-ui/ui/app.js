@@ -960,6 +960,78 @@ if (uiTextSizeSelect) {
   });
 }
 
+
+const kwsGlobalInput = document.querySelector("#kws-global");
+const kwsShortInput = document.querySelector("#kws-short");
+const kwsStatus = document.querySelector("#kws-status");
+const kwsError = document.querySelector("#kws-error");
+let kwsSaveTimer = null;
+
+function showKwsError(error) {
+  if (!kwsError) return;
+  kwsError.textContent =
+    typeof error === "string" ? error : error && error.message ? error.message : "request failed";
+}
+
+function applyKwsSnapshot(snap) {
+  if (kwsGlobalInput && typeof snap.global === "number") {
+    kwsGlobalInput.value = snap.global.toFixed(2);
+  }
+  if (kwsShortInput && typeof snap.short === "number") {
+    kwsShortInput.value = snap.short.toFixed(2);
+  }
+  if (kwsStatus) {
+    kwsStatus.textContent = snap.message || "";
+  }
+}
+
+async function refreshKwsThresholds() {
+  if (!kwsGlobalInput || !kwsShortInput) return;
+  try {
+    if (kwsError) kwsError.textContent = "";
+    const snap = await invoke("kws_thresholds_snapshot");
+    applyKwsSnapshot(snap);
+  } catch (error) {
+    showKwsError(error);
+  }
+}
+
+async function saveKwsThresholds() {
+  if (!kwsGlobalInput || !kwsShortInput) return;
+  const global = Number(kwsGlobalInput.value);
+  const short = Number(kwsShortInput.value);
+  try {
+    if (kwsError) kwsError.textContent = "";
+    const snap = await invoke("kws_thresholds_set", { global, short });
+    applyKwsSnapshot(snap);
+  } catch (error) {
+    showKwsError(error);
+    refreshKwsThresholds();
+  }
+}
+
+function scheduleKwsSave() {
+  if (kwsSaveTimer) clearTimeout(kwsSaveTimer);
+  kwsSaveTimer = setTimeout(() => {
+    kwsSaveTimer = null;
+    saveKwsThresholds();
+  }, 350);
+}
+
+if (kwsGlobalInput && kwsShortInput) {
+  for (const el of [kwsGlobalInput, kwsShortInput]) {
+    el.addEventListener("change", () => {
+      if (kwsSaveTimer) {
+        clearTimeout(kwsSaveTimer);
+        kwsSaveTimer = null;
+      }
+      saveKwsThresholds();
+    });
+    el.addEventListener("input", scheduleKwsSave);
+  }
+  refreshKwsThresholds();
+}
+
 function showPane(name) {
   for (const pane of panes) {
     const section = document.querySelector(`#pane-${pane}`);

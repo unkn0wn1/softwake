@@ -24,6 +24,8 @@ pub(crate) enum CtlAction {
     Sleep,
     /// `ctl reload-soul`
     ReloadSoul,
+    /// `ctl reload-kws`
+    ReloadKws,
     /// `ctl tool <name> [args...]`
     Tool {
         /// Tool name. Safe tools run while awake. Confirm-gated tools wait.
@@ -69,6 +71,7 @@ impl CtlAction {
             "wake" => Some(Self::Wake),
             "sleep" => Some(Self::Sleep),
             "reload-soul" => Some(Self::ReloadSoul),
+            "reload-kws" => Some(Self::ReloadKws),
             _ => None,
         }
     }
@@ -87,6 +90,7 @@ pub(crate) fn run(path: &Path, action: &CtlAction) -> Result<String, CallError> 
         CtlAction::Wake => call_wake(path)?,
         CtlAction::Sleep => call(path, Command::Sleep)?,
         CtlAction::ReloadSoul => call(path, Command::ReloadSoul)?,
+        CtlAction::ReloadKws => call_reload_kws(path)?,
         CtlAction::Tool { name, args } => call_tool(path, name, args)?,
         CtlAction::ConfirmTool { pending_id } => call_confirm(path, pending_id)?,
         CtlAction::CancelTool { pending_id } => call_cancel(path, pending_id)?,
@@ -127,6 +131,16 @@ pub(crate) fn call_tool(path: &Path, name: &str, args: &[String]) -> Result<Stat
 pub(crate) fn call_voice_test(path: &Path, enabled: bool) -> Result<Status, CallError> {
     let mut client = Client::connect(path)?;
     client.set_voice_test(enabled)
+}
+
+/// Connect and rebuild KWS thresholds from disk / env.
+///
+/// # Errors
+///
+/// Returns [`CallError`] when the daemon cannot be reached or rejects the reload.
+pub(crate) fn call_reload_kws(path: &Path) -> Result<Status, CallError> {
+    let mut client = Client::connect(path)?;
+    client.reload_kws()
 }
 
 /// Connect and send one ask.

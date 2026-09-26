@@ -10,6 +10,7 @@ mod commands;
 mod email;
 mod ensure_daemon;
 mod hud_pos;
+mod kws_prefs;
 mod oauth_open;
 mod pack;
 mod profiles;
@@ -79,6 +80,8 @@ pub fn run() {
             tools::tools_save,
             ui_prefs::ui_prefs_snapshot,
             ui_prefs::ui_prefs_set_text_size,
+            kws_prefs::kws_thresholds_snapshot,
+            kws_prefs::kws_thresholds_set,
         ])
         .setup(|app| {
             ensure_daemon::ensure_daemon_running();
@@ -303,6 +306,8 @@ mod tests {
         "tools_save",
         "ui_prefs_snapshot",
         "ui_prefs_set_text_size",
+        "kws_thresholds_snapshot",
+        "kws_thresholds_set",
     ];
 
     const PERMISSIONS: &[&str] = &[
@@ -350,6 +355,8 @@ mod tests {
         "allow-tools-save",
         "allow-ui-prefs-snapshot",
         "allow-ui-prefs-set-text-size",
+        "allow-kws-thresholds-snapshot",
+        "allow-kws-thresholds-set",
     ];
 
     #[test]

@@ -976,16 +976,44 @@ impl Runtime {
     ///
     /// Reloads ONNX only when the agent / profile name actually changed.
     /// Repeat `reload_soul` with the same agent must not reopen KWS weights
-    /// (each load holds ONNX / mmap FDs).
+    /// (each load holds ONNX / mmap FDs). Threshold-only updates use
+    /// [`Self::rebuild_pcm_forced`].
     fn rebuild_pcm(&mut self) {
         let agent = self.soul.agent_name();
         if agent == self.pcm_agent {
             return;
         }
+        self.rebuild_pcm_forced();
+    }
+
+    /// Always rebuild the keyword spotter (thresholds or agent changed).
+    ///
+    /// Serve socket stays up. Brief KWS gap while weights reopen is expected.
+    fn rebuild_pcm_forced(&mut self) {
+        let agent = self.soul.agent_name();
         self.pcm = PcmEngine::for_agent_with_verbosity(&agent, self.verbosity);
         self.pcm
             .log_startup(&self.soul.profile_log_token(), self.verbosity);
+        if self.verbosity >= 1 {
+            if let Some(display) = self.pcm.thresholds_display() {
+                eprintln!("softwaked: KWS thresholds updated live {display}");
+            } else {
+                eprintln!("softwaked: KWS thresholds updated live (null detector)");
+            }
+        }
         self.pcm_agent = agent;
+    }
+
+    /// Re-read KWS thresholds and rebuild the spotter without changing voice state.
+    pub(crate) fn reload_kws(&mut self) -> Outcome {
+        self.rebuild_pcm_forced();
+        let note = if let Some(display) = self.pcm.thresholds_display() {
+            format!("kws thresholds reloaded ({display})")
+        } else {
+            "kws thresholds reloaded".to_owned()
+        };
+        self.retain_status_text(Some(note.clone()), Some(note.clone()));
+        Self::quiet(self.snapshot(Some(note.clone()), Some(note)))
     }
 
     /// Apply a KWS hit to the voice machine when the state allows it.
@@ -1838,6 +1866,20 @@ mod tests {
             runtime.machine.state(),
             softwake_state::VoiceState::Hibernate
         );
+    }
+
+    #[test]
+    fn reload_kws_force_rebuilds_without_agent_rename() {
+        let (mut runtime, _soul) = valid_runtime();
+        let before = runtime.pcm_agent.clone();
+        let outcome = runtime.reload_kws();
+        let status = outcome.body.status().expect("status");
+        let message = status.message.as_deref().unwrap_or("");
+        assert!(
+            message.contains("kws thresholds reloaded"),
+            "unexpected message: {message}"
+        );
+        assert_eq!(runtime.pcm_agent, before);
     }
 
     #[test]

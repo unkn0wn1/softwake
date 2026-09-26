@@ -632,6 +632,16 @@ pub enum ClientMessage {
         /// `true` enables voice test mode.
         enabled: bool,
     },
+    /// Re-read KWS thresholds from `softwake.json` (then env) and rebuild the
+    /// keyword spotter without dropping the serve socket.
+    ///
+    /// Additive on protocol generation 1. Settings → General writes the file
+    /// then sends this so threshold changes apply live. Brief KWS gap while
+    /// ONNX reopens is expected; wake/sleep state is unchanged.
+    ReloadKws {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+    },
 }
 
 /// Daemon messages after a client connects.
@@ -942,6 +952,10 @@ mod tests {
         let voice_test_json = serde_json::to_string(&voice_test).expect("encode");
         assert!(voice_test_json.contains("\"type\":\"set_voice_test\""));
         assert!(voice_test_json.contains("\"enabled\":true"));
+        let reload_kws = ClientMessage::ReloadKws { id: 15 };
+        assert_round_trip(&reload_kws);
+        let reload_kws_json = serde_json::to_string(&reload_kws).expect("encode");
+        assert!(reload_kws_json.contains("\"type\":\"reload_kws\""));
         let talk_stop_json = serde_json::to_string(&talk_stop).expect("encode");
         assert!(talk_stop_json.contains("\"type\":\"talk_stop\""));
         let talk_rejected = IpcError::TalkRejected {

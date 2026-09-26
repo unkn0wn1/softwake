@@ -189,6 +189,7 @@ Usage:
   softwaked ctl wake        enter awake from sleep (valid soul pack required)
   softwaked ctl sleep       sleep from awake
   softwaked ctl reload-soul re-read the soul pack; it applies on the next awake
+  softwaked ctl reload-kws  rebuild the keyword spotter from softwake.json thresholds
   softwaked ctl voice-test [on|off]
                             show or set voice test mode (default off; not saved)
   softwaked ctl tool NAME [ARG...]
@@ -209,7 +210,7 @@ SOFTWAKE_LOG=debug enables the same detail as --verbose and -v (demo, or serve -
 SOFTWAKE_LOG=trace matches serve -vv for KWS mic-energy lines.
 
 Demo commands, one per line:
-  wake, sleep, hibernate, resume, status, reload-soul, tool, confirm, cancel, hear, say, ask, chat, quit
+  wake, sleep, hibernate, resume, status, reload-soul, reload-kws, tool, confirm, cancel, hear, say, ask, chat, quit
 
 `hear TEXT` injects a mock transcript while awake. `say TEXT` records mock speech.
 `ask TEXT` and `chat TEXT` send one typed line to the selected provider while
@@ -458,7 +459,7 @@ fn parse_ctl(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
 fn ctl_command(positional: &[String]) -> Result<CtlAction, String> {
     match positional {
         [] => Err(
-            "ctl needs a command: status, hibernate, resume, wake, sleep, reload-soul, voice-test, tool, confirm-tool, cancel-tool, ask, chat"
+            "ctl needs a command: status, hibernate, resume, wake, sleep, reload-soul, reload-kws, voice-test, tool, confirm-tool, cancel-tool, ask, chat"
                 .to_owned(),
         ),
         [name] if name == "tool" => Err("ctl tool needs a tool name".to_owned()),

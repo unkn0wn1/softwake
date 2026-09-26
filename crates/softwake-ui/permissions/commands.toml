@@ -232,3 +232,13 @@ commands.allow = ["ui_prefs_snapshot"]
 identifier = "allow-ui-prefs-set-text-size"
 description = "Save Settings UI text size."
 commands.allow = ["ui_prefs_set_text_size"]
+
+[[permission]]
+identifier = "allow-kws-thresholds-snapshot"
+description = "Read KWS wake-word thresholds for Settings General."
+commands.allow = ["kws_thresholds_snapshot"]
+
+[[permission]]
+identifier = "allow-kws-thresholds-set"
+description = "Save KWS wake-word thresholds and apply them live to the daemon."
+commands.allow = ["kws_thresholds_set"]

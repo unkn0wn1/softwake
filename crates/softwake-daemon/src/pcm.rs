@@ -291,8 +291,11 @@ pub(crate) fn score_frame_detailed(engine: &mut PcmEngine, frame: &AudioFrame) -
 
 /// Resolve KWS thresholds from `softwake.json`, then env overrides.
 ///
-/// `SOFTWAKE_KWS_THRESHOLD` / `SOFTWAKE_KWS_SHORT_THRESHOLD` are floats
-/// (e.g. `0.12`). Missing config uses product defaults (0.15 / 0.10).
+/// Precedence: env (`SOFTWAKE_KWS_THRESHOLD` / `SOFTWAKE_KWS_SHORT_THRESHOLD`
+/// floats, e.g. `0.12`) **wins over** file (`kws_*_milli` in softwake.json).
+/// Missing config uses product defaults (0.15 / 0.10). Settings → General
+/// writes the milli keys and then IPC `ReloadKws` rebuilds via this helper, so
+/// an env override still wins on every live rebuild until it is unset.
 #[cfg(feature = "sherpa-kws")]
 #[must_use]
 pub(crate) fn resolve_kws_thresholds() -> softwake_wake::KwsThresholds {
