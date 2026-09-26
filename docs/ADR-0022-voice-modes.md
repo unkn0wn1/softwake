@@ -16,8 +16,8 @@ Keyword lists gain three phrases and do not drop the existing ones:
 
 sherpa-onnx keyword spotting has no grammar. Softwake does not pretend otherwise. Short words are a best effort:
 
-1. Single words of at most eight characters keep the per-keyword threshold `#0.15`. `hi` is not lowered further.
-2. The online stream still resets after about three seconds of accepted audio, so a long awake session keeps emitting keywords. A ~400 ms silence reset was tried and withdrawn: pauses and quiet edges chopped a keyword before the window was accepted.
+1. Single words of at most eight characters keep the per-keyword threshold `#0.10` (global multi-word default `0.15`). Operators may lower further via config/env.
+2. The online stream soft-resets after about five seconds of **quiet** accepted audio, and hard-resets after about ten seconds even during speech, so a long awake session keeps emitting keywords without chopping a slow phrase mid-utterance. A ~400 ms silence reset was tried and withdrawn: pauses and quiet edges chopped a keyword before the window was accepted.
 3. Short hits are not dropped because free speech or press-to-talk has been buffering. A ~1.5 second suppress was tried and withdrawn: bare `sleep` disappeared during awake chat. Multi-word phrases were never the problem.
 
 A state change speaks one short line. The line is a one-shot completion: the loaded soul as system, and one fixed instruction as the only user turn, then the existing TTS path. That turn is not appended to the awake session. If the completion cannot run, TTS speaks a fixed fallback (`I'm awake.`, `Listening for wake.`, `Deep sleep.`) when a voice is configured.
@@ -35,7 +35,7 @@ Verbose (`-v` / `-vv`) KWS lines include the loaded profile name and, when it di
 
 ## Consequences
 
-Bare `hi` can false-wake from ordinary speech while asleep. `#0.15` makes that short word easier to spot, and there is no speech-buffer gate in sleep. If `hi` is too noisy or too weak on a given microphone, prefer `hey <name>` or the product phrases (`hey softwake`, `softwake`).
+Bare `hi` can false-wake from ordinary speech while asleep. `#0.10` makes that short word easier to spot, and there is no speech-buffer gate in sleep. If `hi` is too noisy or too weak on a given microphone, prefer `hey <name>` or the product phrases (`hey softwake`, `softwake`).
 
 Bare `sleep` is scored again during awake chat. `go to sleep` and `<name> sleep` remain the more reliable multi-word options. If the spotter emits the short tag `sleep` for a longer phrase, longest-match cannot recover the longer phrase.
 

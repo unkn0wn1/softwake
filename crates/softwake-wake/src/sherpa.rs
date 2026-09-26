@@ -18,6 +18,7 @@ use sherpa_onnx::{
 
 use crate::phrases::{hit_from_keyword, phrases_for_agent};
 use crate::short_word::is_short_single_word;
+use crate::thresholds::KwsThresholds;
 use crate::{PhraseHit, WakeDetector};
 
 /// PCM detector for sherpa-onnx keyword spotting.
@@ -31,6 +32,9 @@ pub struct SherpaKwsDetector {
     registered_phrases: Vec<String>,
     /// Phrases skipped because BPE encode failed.
     skipped_phrases: Vec<String>,
+    thresholds: KwsThresholds,
+    /// When true, feed a low-threshold probe stream for `-vv` near-miss logs.
+    near_miss_probe: bool,
     engine: Option<LoadedEngine>,
     /// Accepted audio since the last `KeywordSpotter::reset`.
     stream_budget: crate::stream_budget::StreamBudget,
@@ -39,6 +43,8 @@ pub struct SherpaKwsDetector {
 struct LoadedEngine {
     spotter: KeywordSpotter,
     stream: OnlineStream,
+    /// Low-threshold stream for near-miss diagnostics. Same phrases, easier fire.
+    probe_stream: OnlineStream,
 }
 
 impl std::fmt::Debug for SherpaKwsDetector {
@@ -51,6 +57,8 @@ impl std::fmt::Debug for SherpaKwsDetector {
             .field("hibernate_phrases", &self.hibernate_phrases)
             .field("registered_phrases", &self.registered_phrases)
             .field("skipped_phrases", &self.skipped_phrases)
+            .field("thresholds", &self.thresholds)
+            .field("near_miss_probe", &self.near_miss_probe)
             .field("weights_loaded", &self.engine.is_some())
             .field(
                 "samples_since_reset",
@@ -77,15 +85,44 @@ impl SherpaKwsDetector {
         U: AsRef<str>,
         V: AsRef<str>,
     {
+        Self::with_thresholds(
+            model_dir,
+            wake_phrases,
+            sleep_phrases,
+            hibernate_phrases,
+            KwsThresholds::default(),
+        )
+    }
+
+    /// Like [`Self::new`] with explicit trigger thresholds.
+    #[must_use]
+    pub fn with_thresholds<W, S, H, T, U, V>(
+        model_dir: impl Into<PathBuf>,
+        wake_phrases: W,
+        sleep_phrases: S,
+        hibernate_phrases: H,
+        thresholds: KwsThresholds,
+    ) -> Self
+    where
+        W: IntoIterator<Item = T>,
+        S: IntoIterator<Item = U>,
+        H: IntoIterator<Item = V>,
+        T: AsRef<str>,
+        U: AsRef<str>,
+        V: AsRef<str>,
+    {
         let model_dir = model_dir.into();
         let wake_phrases = normalize(wake_phrases);
         let sleep_phrases = normalize(sleep_phrases);
         let hibernate_phrases = normalize(hibernate_phrases);
+        let thresholds =
+            KwsThresholds::clamped(thresholds.global, thresholds.short, thresholds.probe);
         let (engine, registered_phrases, skipped_phrases) = load_engine(
             &model_dir,
             &wake_phrases,
             &sleep_phrases,
             &hibernate_phrases,
+            thresholds,
         );
         Self {
             model_dir,
@@ -94,6 +131,8 @@ impl SherpaKwsDetector {
             hibernate_phrases,
             registered_phrases,
             skipped_phrases,
+            thresholds,
+            near_miss_probe: false,
             engine,
             stream_budget: crate::stream_budget::StreamBudget::new(),
         }
@@ -102,12 +141,19 @@ impl SherpaKwsDetector {
     /// Detector for the active agent / profile name and [`Self::default_model_dir`].
     #[must_use]
     pub fn for_agent(agent_name: &str) -> Self {
+        Self::for_agent_with_thresholds(agent_name, KwsThresholds::default())
+    }
+
+    /// [`Self::for_agent`] with explicit thresholds.
+    #[must_use]
+    pub fn for_agent_with_thresholds(agent_name: &str, thresholds: KwsThresholds) -> Self {
         let phrases = phrases_for_agent(agent_name);
-        Self::new(
+        Self::with_thresholds(
             Self::default_model_dir(),
             phrases.wake,
             phrases.sleep,
             phrases.hibernate,
+            thresholds,
         )
     }
 
@@ -159,6 +205,26 @@ impl SherpaKwsDetector {
         &self.skipped_phrases
     }
 
+    /// Active trigger thresholds.
+    #[must_use]
+    pub const fn thresholds(&self) -> KwsThresholds {
+        self.thresholds
+    }
+
+    /// Enable or disable the low-threshold near-miss probe stream.
+    ///
+    /// The daemon turns this on at `-vv` so operators can see keywords that
+    /// almost fired. Probe hits never change voice state.
+    pub fn set_near_miss_probe(&mut self, enabled: bool) {
+        self.near_miss_probe = enabled;
+    }
+
+    /// `true` when the near-miss probe stream is fed.
+    #[must_use]
+    pub const fn near_miss_probe(&self) -> bool {
+        self.near_miss_probe
+    }
+
     /// `true` when ONNX + tokens loaded and a stream is open.
     #[must_use]
     pub fn weights_loaded(&self) -> bool {
@@ -176,44 +242,37 @@ impl SherpaKwsDetector {
     /// Score samples and return the last decoded keyword (if any) with the hit.
     ///
     /// Used by the daemon for `-v` / `-vv` hear logs. Without weights, or on
-    /// silence with no decode, [`SpotDetail::keyword`] stays `None`.
+    /// silence with no decode, [`SpotDetail::keyword`] stays `None`. When the
+    /// near-miss probe is on and fires without a main hit, [`SpotDetail::near_miss`]
+    /// carries that tag.
     #[must_use]
     pub fn push_samples_detailed(&mut self, samples: &[i16]) -> crate::SpotDetail {
         if self.engine.is_none() {
-            return crate::SpotDetail {
-                hit: PhraseHit::None,
-                keyword: None,
-            };
+            return crate::SpotDetail::default();
         }
         if samples.is_empty() {
-            return crate::SpotDetail {
-                hit: PhraseHit::None,
-                keyword: None,
-            };
+            return crate::SpotDetail::default();
         }
-        // sherpa-onnx auto-resets only after ~1.5 s of trailing blanks. Awake
-        // speech never builds that run, and a keyword is the only other reset,
-        // so a long awake session stops emitting keywords. Reset before this
-        // window once the 3 s sample budget is spent. A shorter silence reset
-        // was withdrawn: pauses and quiet edges chopped keywords mid-utterance.
-        // `begin_window` / `finish_window` match `stream_budget` tests (CI does
-        // not link sherpa).
-        if self.stream_budget.begin_window()
+        let speech_energy = window_has_speech_energy(samples);
+        // Soft budget waits for quiet so slow phrases are not chopped. Hard
+        // budget still recovers a long awake stream (#56).
+        if self.stream_budget.begin_window(speech_energy)
             && let Some(engine) = self.engine.as_mut()
         {
             engine.spotter.reset(&engine.stream);
+            engine.spotter.reset(&engine.probe_stream);
         }
         let Some(engine) = self.engine.as_mut() else {
-            return crate::SpotDetail {
-                hit: PhraseHit::None,
-                keyword: None,
-            };
+            return crate::SpotDetail::default();
         };
         let float_samples: Vec<f32> = samples
             .iter()
             .map(|sample| f32::from(*sample) / f32::from(i16::MAX))
             .collect();
         engine.stream.accept_waveform(16_000, &float_samples);
+        if self.near_miss_probe {
+            engine.probe_stream.accept_waveform(16_000, &float_samples);
+        }
         let mut last_keyword = None;
         let mut last_hit = PhraseHit::None;
         let mut keyword_reset = false;
@@ -228,10 +287,24 @@ impl SherpaKwsDetector {
                         &self.hibernate_phrases,
                     );
                     engine.spotter.reset(&engine.stream);
+                    engine.spotter.reset(&engine.probe_stream);
                     keyword_reset = true;
                     last_keyword = Some(result.keyword);
                     last_hit = hit;
                     if hit != PhraseHit::None {
+                        break;
+                    }
+                }
+            }
+        }
+        let mut near_miss = None;
+        if self.near_miss_probe && last_keyword.is_none() {
+            while engine.spotter.is_ready(&engine.probe_stream) {
+                engine.spotter.decode(&engine.probe_stream);
+                if let Some(result) = engine.spotter.get_result(&engine.probe_stream) {
+                    if !result.keyword.is_empty() {
+                        engine.spotter.reset(&engine.probe_stream);
+                        near_miss = Some(result.keyword);
                         break;
                     }
                 }
@@ -242,15 +315,36 @@ impl SherpaKwsDetector {
         crate::SpotDetail {
             hit: last_hit,
             keyword: last_keyword,
+            near_miss,
         }
     }
 }
 
+/// Peak-normalized RMS energy floor matching the daemon capture energy log.
+fn window_has_speech_energy(samples: &[i16]) -> bool {
+    if samples.is_empty() {
+        return false;
+    }
+    // Capture windows are tens of milliseconds (≪ u16::MAX samples).
+    let n = u16::try_from(samples.len()).unwrap_or(u16::MAX);
+    let sum_sq: f32 = samples
+        .iter()
+        .map(|sample| {
+            let x = f32::from(*sample) / f32::from(i16::MAX);
+            x * x
+        })
+        .sum();
+    let rms = (sum_sq / f32::from(n)).sqrt();
+    rms >= 0.02
+}
+
+#[allow(clippy::field_reassign_with_default)] // KeywordSpotterConfig has no builder.
 fn load_engine(
     model_dir: &Path,
     wake_phrases: &[String],
     sleep_phrases: &[String],
     hibernate_phrases: &[String],
+    thresholds: KwsThresholds,
 ) -> (Option<LoadedEngine>, Vec<String>, Vec<String>) {
     let Some(paths) = ModelPaths::discover(model_dir) else {
         return (None, Vec::new(), Vec::new());
@@ -258,12 +352,25 @@ fn load_engine(
     let Some(pieces) = load_token_pieces(&paths.tokens) else {
         return (None, Vec::new(), Vec::new());
     };
-    let built = build_keywords_buf(&pieces, wake_phrases, sleep_phrases, hibernate_phrases);
+    let built = build_keywords_buf(
+        &pieces,
+        wake_phrases,
+        sleep_phrases,
+        hibernate_phrases,
+        thresholds,
+    );
     let registered = built.registered.clone();
     let skipped = built.skipped.clone();
     let Some(keywords_buf) = built.buf else {
         return (None, registered, skipped);
     };
+    let probe_buf = build_probe_keywords_buf(
+        &pieces,
+        wake_phrases,
+        sleep_phrases,
+        hibernate_phrases,
+        thresholds,
+    );
     let mut config = KeywordSpotterConfig::default();
     config.model_config = OnlineModelConfig {
         transducer: OnlineTransducerModelConfig {
@@ -278,13 +385,25 @@ fn load_engine(
         ..OnlineModelConfig::default()
     };
     config.keywords_buf = Some(keywords_buf);
-    config.keywords_threshold = 0.25;
+    config.keywords_threshold = thresholds.global;
     config.keywords_score = 1.0;
     let Some(spotter) = KeywordSpotter::create(&config) else {
         return (None, registered, skipped);
     };
     let stream = spotter.create_stream();
-    (Some(LoadedEngine { spotter, stream }), registered, skipped)
+    let probe_stream = match probe_buf.as_deref() {
+        Some(buf) => spotter.create_stream_with_keywords(buf),
+        None => spotter.create_stream(),
+    };
+    (
+        Some(LoadedEngine {
+            spotter,
+            stream,
+            probe_stream,
+        }),
+        registered,
+        skipped,
+    )
 }
 
 struct ModelPaths {
@@ -312,6 +431,7 @@ impl ModelPaths {
     }
 }
 
+#[allow(clippy::case_sensitive_file_extension_comparisons)] // Model files ship lowercase .onnx.
 fn find_model_file(dir: &Path, prefix: &str) -> Option<String> {
     let preferred = [
         format!("{prefix}-epoch-12-avg-2-chunk-16-left-64.int8.onnx"),
@@ -395,6 +515,7 @@ fn build_keywords_buf(
     wake_phrases: &[String],
     sleep_phrases: &[String],
     hibernate_phrases: &[String],
+    thresholds: KwsThresholds,
 ) -> KeywordBuild {
     let mut lines = Vec::new();
     let mut registered = Vec::new();
@@ -406,7 +527,7 @@ fn build_keywords_buf(
     {
         // Skip phrases the BPE table cannot encode instead of failing the
         // whole keyword list (one bad name must not idle voice wake).
-        if let Some(line) = encode_keyword_line(pieces, phrase) {
+        if let Some(line) = encode_keyword_line(pieces, phrase, thresholds) {
             lines.push(line);
             registered.push(phrase.clone());
         } else {
@@ -424,7 +545,57 @@ fn build_keywords_buf(
     }
 }
 
-fn encode_keyword_line(pieces: &[String], phrase: &str) -> Option<String> {
+fn build_probe_keywords_buf(
+    pieces: &[String],
+    wake_phrases: &[String],
+    sleep_phrases: &[String],
+    hibernate_phrases: &[String],
+    thresholds: KwsThresholds,
+) -> Option<String> {
+    let mut lines = Vec::new();
+    for phrase in wake_phrases
+        .iter()
+        .chain(sleep_phrases.iter())
+        .chain(hibernate_phrases.iter())
+    {
+        if let Some(line) = encode_probe_keyword_line(pieces, phrase, thresholds) {
+            lines.push(line);
+        }
+    }
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
+}
+
+fn encode_keyword_line(
+    pieces: &[String],
+    phrase: &str,
+    thresholds: KwsThresholds,
+) -> Option<String> {
+    let mut line = encode_keyword_tokens(pieces, phrase)?;
+    // Short single-word names (e.g. "sally") are harder to spot at the global
+    // threshold. sherpa per-keyword `#threshold` lowers the trigger bar for
+    // that line only (docs: lower = easier). Multi-word "hey <name>" stays on
+    // the global default and is usually more reliable.
+    if is_short_single_word(phrase) {
+        line.push_str(&thresholds.short_suffix());
+    }
+    Some(line)
+}
+
+fn encode_probe_keyword_line(
+    pieces: &[String],
+    phrase: &str,
+    thresholds: KwsThresholds,
+) -> Option<String> {
+    let mut line = encode_keyword_tokens(pieces, phrase)?;
+    line.push_str(&thresholds.probe_suffix());
+    Some(line)
+}
+
+fn encode_keyword_tokens(pieces: &[String], phrase: &str) -> Option<String> {
     let upper = phrase.trim().to_ascii_uppercase();
     if upper.is_empty() {
         return None;
@@ -451,15 +622,7 @@ fn encode_keyword_line(pieces: &[String], phrase: &str) -> Option<String> {
         index += piece.chars().count();
     }
     let tag = phrase.trim().to_ascii_lowercase().replace(' ', "_");
-    let mut line = format!("{} @{tag}", encoded.join(" "));
-    // Short single-word names (e.g. "sally") are harder to spot at the
-    // default 0.25 threshold. sherpa per-keyword `#threshold` lowers the
-    // trigger bar for that line only (docs: lower = easier). Multi-word
-    // "hey <name>" stays on the global default and is usually more reliable.
-    if is_short_single_word(phrase) {
-        line.push_str(" #0.15");
-    }
-    Some(line)
+    Some(format!("{} @{tag}", encoded.join(" ")))
 }
 
 fn normalize<I, S>(phrases: I) -> Vec<String>
@@ -493,6 +656,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{SherpaKwsDetector, encode_keyword_line, load_token_pieces, model_dir_from};
+    use crate::thresholds::KwsThresholds;
     use crate::{PhraseHit, WakeDetector};
 
     #[test]
@@ -557,24 +721,39 @@ mod tests {
     }
 
     #[test]
+    fn defaults_expose_looser_thresholds() {
+        let detector = SherpaKwsDetector::for_agent("Sally");
+        let t = detector.thresholds();
+        assert!((t.global - 0.15).abs() < 0.000_1);
+        assert!((t.short - 0.10).abs() < 0.000_1);
+        assert!((t.probe - 0.05).abs() < 0.000_1);
+    }
+
+    #[test]
     fn greedy_tokens_match_known_softwake_encoding() {
         let tokens = PathBuf::from(
             "/tmp/kws-extract/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/tokens.txt",
         );
+        let tokens = if tokens.is_file() {
+            tokens
+        } else {
+            PathBuf::from("/home/spence/.local/share/softwake/kws/tokens.txt")
+        };
         if !tokens.is_file() {
             return;
         }
         let pieces = load_token_pieces(tokens.to_str().expect("utf8")).expect("pieces");
-        let line = encode_keyword_line(&pieces, "hey softwake").expect("encode");
+        let thresholds = KwsThresholds::default();
+        let line = encode_keyword_line(&pieces, "hey softwake", thresholds).expect("encode");
         assert!(line.ends_with("@hey_softwake"));
         assert!(line.starts_with("▁HE Y ▁SO F T W A KE "));
-        let sally = encode_keyword_line(&pieces, "sally").expect("sally encodes");
+        let sally = encode_keyword_line(&pieces, "sally", thresholds).expect("sally encodes");
         assert!(sally.contains("@sally"), "{sally}");
         assert!(
-            sally.contains("#0.15"),
+            sally.contains("#0.10"),
             "short name gets lower threshold: {sally}"
         );
-        let hey_sally = encode_keyword_line(&pieces, "hey sally").expect("hey sally");
+        let hey_sally = encode_keyword_line(&pieces, "hey sally", thresholds).expect("hey sally");
         assert!(hey_sally.contains("@hey_sally"), "{hey_sally}");
         assert!(
             !hey_sally.contains('#'),

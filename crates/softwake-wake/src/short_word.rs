@@ -2,12 +2,13 @@
 //!
 //! sherpa-onnx keyword spotting has no grammar and no word boundary. A short
 //! registered word (`hi`, `sleep`, a short profile name) is harder to spot at
-//! the global 0.25 threshold. [`is_short_single_word`] marks those phrases so
-//! the encoder can append `#0.15` on that line only.
+//! the global threshold. [`is_short_single_word`] marks those phrases so the
+//! encoder can append a per-keyword `#threshold` on that line only (default
+//! `#0.10`; see [`crate::KwsThresholds`]).
 //!
 //! Softwake does not drop a short hit because speech has been buffering.
 //! A ~1.5 s suppress did that and cut real `sleep` commands during awake
-//! chat, so it is gone. `#0.15` is not lowered further for `hi`.
+//! chat, so it is gone.
 
 /// True for one whitespace-free word of at most 8 characters.
 #[must_use]
@@ -33,9 +34,9 @@ mod tests {
         assert!(!is_short_single_word(""));
     }
 
-    /// Length only selects the `#0.15` encode hint. It does not change at the
-    /// old 1.5 s suppress point (`24_000` samples) or across a long awake turn
-    /// (8 s). The daemon observe path must not turn these into `None`.
+    /// Length only selects the short-word encode hint. It does not change at
+    /// the old 1.5 s suppress point (`24_000` samples) or across a long awake
+    /// turn (8 s). The daemon observe path must not turn these into `None`.
     #[test]
     fn short_sleep_stays_a_short_word_at_conversational_lengths() {
         // 1.5 s was the withdrawn suppress point. 8 s is a long awake turn.

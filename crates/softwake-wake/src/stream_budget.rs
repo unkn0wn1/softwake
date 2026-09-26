@@ -6,12 +6,16 @@
 //! for the whole session and eventually stops emitting keywords. This budget
 //! is the Softwake side of that reset: a few seconds of accepted audio, then
 //! the caller resets before the next window.
+//!
+//! Soft reset waits for a quiet window so a slow wake/sleep phrase is not
+//! chopped mid-utterance. Hard reset always fires so continuous speech cannot
+//! leave the stream silent forever (the #56 failure mode).
 
-/// Accepted samples (16 kHz) before the caller must reset the online stream.
-///
-/// Three seconds is longer than a wake or sleep phrase, and short enough that
-/// a stale awake stream recovers while the session is still in use.
-pub(crate) const RESET_AFTER_SAMPLES: u64 = 16_000 * 3;
+/// Soft budget (16 kHz): reset when exceeded **and** the window is quiet.
+pub(crate) const SOFT_RESET_AFTER_SAMPLES: u64 = 16_000 * 5;
+
+/// Hard budget (16 kHz): always reset when exceeded, even during speech.
+pub(crate) const HARD_RESET_AFTER_SAMPLES: u64 = 16_000 * 10;
 
 /// Samples accepted since the last stream reset.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -46,11 +50,15 @@ impl StreamBudget {
 
     /// Whether to reset the online stream *before* accepting this window.
     ///
-    /// On `true`, the counter is cleared so the window starts a new budget.
-    /// The caller still has to reset the sherpa stream itself.
+    /// `speech_energy` is true when the window's RMS is at/above the capture
+    /// energy floor. Soft budget only resets on a quiet window; hard budget
+    /// always resets. On `true`, the counter is cleared so the window starts a
+    /// new budget. The caller still has to reset the sherpa stream itself.
     #[must_use]
-    pub(crate) fn begin_window(&mut self) -> bool {
-        if self.samples_since_reset >= RESET_AFTER_SAMPLES {
+    pub(crate) fn begin_window(&mut self, speech_energy: bool) -> bool {
+        let hard = self.samples_since_reset >= HARD_RESET_AFTER_SAMPLES;
+        let soft = self.samples_since_reset >= SOFT_RESET_AFTER_SAMPLES && !speech_energy;
+        if hard || soft {
             self.samples_since_reset = 0;
             true
         } else {
@@ -74,7 +82,7 @@ impl StreamBudget {
 
 #[cfg(test)]
 mod tests {
-    use super::{RESET_AFTER_SAMPLES, StreamBudget};
+    use super::{HARD_RESET_AFTER_SAMPLES, SOFT_RESET_AFTER_SAMPLES, StreamBudget};
 
     #[test]
     fn reset_clears_a_partial_budget() {
@@ -82,34 +90,58 @@ mod tests {
         budget.finish_window(100, false);
         budget.reset();
         assert_eq!(budget.samples_since_reset(), 0);
-        assert!(!budget.begin_window());
+        assert!(!budget.begin_window(false));
     }
 
     #[test]
-    fn three_second_budget_matches_16khz() {
-        assert_eq!(RESET_AFTER_SAMPLES, 48_000);
-        assert_eq!(RESET_AFTER_SAMPLES, 16_000 * 3);
+    fn budgets_match_16khz() {
+        assert_eq!(SOFT_RESET_AFTER_SAMPLES, 80_000);
+        assert_eq!(SOFT_RESET_AFTER_SAMPLES, 16_000 * 5);
+        assert_eq!(HARD_RESET_AFTER_SAMPLES, 160_000);
+        assert_eq!(HARD_RESET_AFTER_SAMPLES, 16_000 * 10);
+        assert!(HARD_RESET_AFTER_SAMPLES > SOFT_RESET_AFTER_SAMPLES);
     }
 
     #[test]
-    fn under_the_limit_does_not_reset() {
+    fn under_the_soft_limit_does_not_reset() {
         let mut budget = StreamBudget::new();
-        assert!(!budget.begin_window());
-        let almost = usize::try_from(RESET_AFTER_SAMPLES - 1).expect("fits");
+        assert!(!budget.begin_window(false));
+        let almost = usize::try_from(SOFT_RESET_AFTER_SAMPLES - 1).expect("fits");
         budget.finish_window(almost, false);
-        assert_eq!(budget.samples_since_reset(), RESET_AFTER_SAMPLES - 1);
-        assert!(!budget.begin_window());
+        assert_eq!(budget.samples_since_reset(), SOFT_RESET_AFTER_SAMPLES - 1);
+        assert!(!budget.begin_window(false));
+        assert!(!budget.begin_window(true));
     }
 
     #[test]
-    fn next_window_after_the_limit_resets_then_counts_only_itself() {
+    fn soft_budget_resets_only_when_quiet() {
         let mut budget = StreamBudget::new();
-        let fill = usize::try_from(RESET_AFTER_SAMPLES).expect("fits");
-        assert!(!budget.begin_window());
+        let fill = usize::try_from(SOFT_RESET_AFTER_SAMPLES).expect("fits");
         budget.finish_window(fill, false);
-        assert_eq!(budget.samples_since_reset(), RESET_AFTER_SAMPLES);
+        assert_eq!(budget.samples_since_reset(), SOFT_RESET_AFTER_SAMPLES);
+        // Speech defers the soft reset.
+        assert!(!budget.begin_window(true));
+        assert_eq!(budget.samples_since_reset(), SOFT_RESET_AFTER_SAMPLES);
+        // Quiet allows it.
+        assert!(budget.begin_window(false));
+        assert_eq!(budget.samples_since_reset(), 0);
+    }
 
-        assert!(budget.begin_window());
+    #[test]
+    fn hard_budget_resets_even_during_speech() {
+        let mut budget = StreamBudget::new();
+        let fill = usize::try_from(HARD_RESET_AFTER_SAMPLES).expect("fits");
+        budget.finish_window(fill, false);
+        assert!(budget.begin_window(true));
+        assert_eq!(budget.samples_since_reset(), 0);
+    }
+
+    #[test]
+    fn next_window_after_soft_quiet_reset_counts_only_itself() {
+        let mut budget = StreamBudget::new();
+        let fill = usize::try_from(SOFT_RESET_AFTER_SAMPLES).expect("fits");
+        budget.finish_window(fill, false);
+        assert!(budget.begin_window(false));
         assert_eq!(budget.samples_since_reset(), 0);
         let frame = 320;
         budget.finish_window(frame, false);
@@ -117,24 +149,24 @@ mod tests {
             budget.samples_since_reset(),
             u64::try_from(frame).expect("fits")
         );
-        assert!(!budget.begin_window());
+        assert!(!budget.begin_window(false));
     }
 
     #[test]
     fn keyword_hit_clears_a_partial_budget() {
         let mut budget = StreamBudget::new();
-        assert!(!budget.begin_window());
+        assert!(!budget.begin_window(false));
         budget.finish_window(40_000, false);
-        assert!(!budget.begin_window());
+        assert!(!budget.begin_window(false));
         // Same order as `SherpaKwsDetector::push_samples_detailed`: a keyword
         // reset inside the window must not keep the pre-hit sample count.
         budget.finish_window(320, true);
         assert_eq!(budget.samples_since_reset(), 0);
-        assert!(!budget.begin_window());
+        assert!(!budget.begin_window(false));
     }
 
     #[test]
-    fn five_minutes_of_awake_frames_reset_about_every_three_seconds() {
+    fn five_minutes_of_quiet_frames_reset_about_every_five_seconds() {
         let mut budget = StreamBudget::new();
         // 20 ms at 16 kHz, the usual capture window.
         let frame: usize = 320;
@@ -144,7 +176,7 @@ mod tests {
         let mut gap: u64 = 0;
         let mut max_gap: u64 = 0;
         for _ in 0..total_frames {
-            if budget.begin_window() {
+            if budget.begin_window(false) {
                 resets += 1;
                 max_gap = max_gap.max(gap);
                 gap = 0;
@@ -152,11 +184,26 @@ mod tests {
             budget.finish_window(frame, false);
             gap = gap.saturating_add(frame_samples);
         }
-        // 5 min / 3 s = 100 periods. The reset fires on the following window,
-        // so the last boundary is pending and the count is 99.
-        assert_eq!(resets, 99, "max_gap={max_gap}");
-        assert_eq!(max_gap, RESET_AFTER_SAMPLES);
-        assert_eq!(budget.samples_since_reset(), RESET_AFTER_SAMPLES);
-        assert!(max_gap <= RESET_AFTER_SAMPLES + frame_samples);
+        // 5 min / 5 s = 60 periods. The reset fires on the following window,
+        // so the last boundary is pending and the count is 59.
+        assert_eq!(resets, 59, "max_gap={max_gap}");
+        assert_eq!(max_gap, SOFT_RESET_AFTER_SAMPLES);
+        assert_eq!(budget.samples_since_reset(), SOFT_RESET_AFTER_SAMPLES);
+        assert!(max_gap <= SOFT_RESET_AFTER_SAMPLES + frame_samples);
+    }
+
+    #[test]
+    fn continuous_speech_still_hard_resets() {
+        let mut budget = StreamBudget::new();
+        let frame: usize = 320;
+        let total_frames = usize::try_from(HARD_RESET_AFTER_SAMPLES / 320).expect("fits") + 2;
+        let mut resets = 0_u32;
+        for _ in 0..total_frames {
+            if budget.begin_window(true) {
+                resets += 1;
+            }
+            budget.finish_window(frame, false);
+        }
+        assert!(resets >= 1, "hard reset must fire under continuous speech");
     }
 }

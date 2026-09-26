@@ -50,7 +50,7 @@ post_wake_cooldown_ms = 800
 post_sleep_cooldown_ms = 800
 ```
 
-`hi` and `sleep` are bare words added after the longer phrases. sherpa-onnx has no grammar. A short single word of at most eight characters uses `#0.15` so it can fire; `hi` is not lowered further. Softwake does not ignore that hit during a long awake utterance, and a pause does not reset the keyword stream. The stream still refreshes after about three seconds of audio. While asleep, bare `hi` can false-wake. If that is too noisy or too weak on a microphone, prefer `hey <name>` or the product phrases. Bare `sleep` should match again during awake chat; `go to sleep` and `<name> sleep` remain the more reliable multi-word options.
+`hi` and `sleep` are bare words added after the longer phrases. sherpa-onnx has no grammar. A short single word of at most eight characters uses `#0.10` so it can fire (global default `0.15`). Softwake does not ignore that hit during a long awake utterance, and a pause does not reset the keyword stream. The stream soft-refreshes after about five seconds of quiet audio (hard refresh at ten seconds). While asleep, bare `hi` can false-wake. If that is too noisy or too weak on a microphone, prefer `hey <name>` or the product phrases. Bare `sleep` should match again during awake chat; `go to sleep` and `<name> sleep` remain the more reliable multi-word options.
 
 Entering awake, sleep, or hibernate speaks one short line through the profile voice. The line is a one-shot prompt, not a turn stored on the awake session. See [ADR 0022](ADR-0022-voice-modes.md).
 
