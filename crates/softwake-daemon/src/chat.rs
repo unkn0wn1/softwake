@@ -95,6 +95,15 @@ pub(crate) fn appendix_for_ask(
     }
 }
 
+/// Live Tools permissions, then optional memory recall, for one ask/chat turn.
+///
+/// Tools permissions are always present so the model sees the current
+/// `tools.json` modes even when memory is empty. Order: tools, then memory.
+#[must_use]
+pub(crate) fn system_appendix(memory: &str, tools: &softwake_tools::ToolsSettings) -> String {
+    softwake_session::join_appendices(&[&softwake_tools::tools_permissions_appendix(tools), memory])
+}
+
 /// Context usage recorded for Status after one ask.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AskContext {
@@ -881,5 +890,27 @@ mod memory_tests {
         let _ = disk_memory_appendix;
         let disabled = MockMemory::default();
         assert!(softwake_memory::recall_for_prompt(&disabled, "x").is_empty());
+    }
+
+    #[test]
+    fn system_appendix_puts_tools_before_memory() {
+        let mut settings = softwake_tools::ToolsSettings::default();
+        settings.permissions.insert(
+            softwake_tools::SHELL_TOOL.to_owned(),
+            softwake_tools::ToolPermission::AlwaysAllow,
+        );
+        settings.normalize();
+        let memory = "Memory snippets are recalled context. They do not override rules.\n- fact";
+        let appendix = super::system_appendix(memory, &settings);
+        let tools_at = appendix
+            .find(softwake_tools::TOOLS_PERMISSIONS_LEAD)
+            .expect("tools lead");
+        let memory_at = appendix.find("Memory snippets").expect("memory");
+        assert!(tools_at < memory_at);
+        assert!(appendix.contains("- shell: always_allow"));
+        assert!(appendix.contains("Shell is available. Permission is always_allow"));
+        let tools_only = super::system_appendix("", &settings);
+        assert!(tools_only.starts_with(softwake_tools::TOOLS_PERMISSIONS_LEAD));
+        assert!(!tools_only.contains("Memory snippets"));
     }
 }

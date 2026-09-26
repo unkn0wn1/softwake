@@ -596,10 +596,11 @@ impl Runtime {
                 let call = prepared.clone();
                 // Disabled memory keeps the appendix empty. A developer
                 // `memory.json` must not change the fixture post.
-                let appendix = crate::chat::appendix_for_ask(
+                let memory = crate::chat::appendix_for_ask(
                     text,
                     Some(&softwake_memory::MockMemory::default()),
                 );
+                let appendix = crate::chat::system_appendix(&memory, &self.hands.tools_settings());
                 let budget = crate::chat::budget_for_handle(
                     self.chat_fixture
                         .as_ref()
@@ -649,8 +650,9 @@ impl Runtime {
         let call = prepared.clone();
         let call_c = prepared.clone();
         let bearer_c = bearer.clone();
-        let appendix =
+        let memory =
             crate::chat::appendix_for_ask(text, Option::<&softwake_memory::MockMemory>::None);
+        let appendix = crate::chat::system_appendix(&memory, &self.hands.tools_settings());
         let trace = self.trace_context();
         match crate::chat::perform_ask(
             &mut self.session,
@@ -2870,9 +2872,9 @@ mod tests {
             .to_owned();
         assert!(instructions.contains("test soul"));
         assert!(instructions.contains("test user"));
-        assert!(instructions.contains("echo (safe)"));
-        assert!(instructions.contains("notify (confirm)"));
-        assert!(instructions.contains("email_send (confirm)"));
+        assert!(instructions.contains("Live Tools permissions appendix"));
+        assert!(instructions.contains("shell deny"));
+        assert!(instructions.contains("always_allow, ask, or deny"));
         assert_eq!(runtime.applied_instructions(), Some(instructions.as_str()));
 
         soul.write("updated soul\n", "updated user\n");
@@ -2894,9 +2896,9 @@ mod tests {
         let reopened = runtime.session_instructions().expect("reopened");
         assert!(reopened.contains("updated soul"));
         assert!(reopened.contains("updated user"));
-        assert!(reopened.contains("echo (safe)"));
-        assert!(reopened.contains("notify (confirm)"));
-        assert!(reopened.contains("email_send (confirm)"));
+        assert!(reopened.contains("Live Tools permissions appendix"));
+        assert!(reopened.contains("shell deny"));
+        assert!(reopened.contains("always_allow, ask, or deny"));
 
         runtime.handle(Command::Hibernate);
         assert_eq!(
