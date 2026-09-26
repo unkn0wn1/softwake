@@ -13,10 +13,12 @@
 //! Tools Settings choose always allow, ask, or deny. The daemon expands glossary
 //! aliases, then may spawn `/bin/sh -c` via [`shell`]. This crate still does not spawn on invoke.
 
+mod chat_schema;
 mod schedule;
 mod settings;
 mod shell;
 
+pub use chat_schema::{advertise_chat_tools, tool_args_from_json};
 pub use schedule::{
     CATCH_UP_GRACE_MS, CronExpr, MAX_ENTRIES, SCHEDULES_FILE_NAME, ScheduleAction, ScheduleEntry,
     ScheduleError, ScheduleKind, SchedulesFile, TIMEZONE_LOCAL, advance_after_fire, apply_action,
@@ -25,9 +27,9 @@ pub use schedule::{
     resolve_schedules_file, save_schedules, should_fire, skip_missed, validate_entry,
 };
 pub use settings::{
-    ConfirmPolicy, FileToolsSettings, TOOLS_FILE_NAME, ToolPermission, ToolsSettings,
-    ToolsSettingsError, default_permission, parse_confirm_policy, parse_tool_permission,
-    resolve_tools_file, resolve_tools_file_from,
+    ConfirmPolicy, FileToolsSettings, TOOLS_FILE_NAME, TOOLS_PERMISSIONS_LEAD, ToolPermission,
+    ToolsSettings, ToolsSettingsError, default_permission, parse_confirm_policy,
+    parse_tool_permission, resolve_tools_file, resolve_tools_file_from, tools_permissions_appendix,
 };
 pub use shell::{
     DEFAULT_OUTPUT_CAP, DEFAULT_SHELL_TIMEOUT, ShellError, ShellOutput, format_shell_output,

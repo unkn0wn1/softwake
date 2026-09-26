@@ -1,4 +1,4 @@
-# ADR-0025 — HUD chat history + UI passphrase unlock
+# ADR-0026 — HUD chat history + UI passphrase unlock
 
 - **Status:** Accepted
 - **Date:** 2026-09-27

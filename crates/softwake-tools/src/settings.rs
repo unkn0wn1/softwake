@@ -469,11 +469,56 @@ fn io_err(path: &Path, source: io::Error) -> ToolsSettingsError {
     }
 }
 
+/// Lead-in for the live Tools permissions appendix on each ask/chat turn.
+pub const TOOLS_PERMISSIONS_LEAD: &str = "Live Tools permissions (current Tools Settings). Trust this list over the static Runtime policy defaults for what is available right now.";
+
+/// Build the live Tools permissions appendix for one ask/chat system prompt.
+///
+/// Lists every registered tool's operator mode (`always_allow` / `ask` / `deny`),
+/// then spells out shell availability and how the model must propose commands.
+/// Always non-empty so each turn carries a fresh permission signal.
+#[must_use]
+pub fn tools_permissions_appendix(settings: &ToolsSettings) -> String {
+    let mut out = String::from(TOOLS_PERMISSIONS_LEAD);
+    for tool in crate::ToolRegistry::phase2().entries() {
+        let mode = settings.permission(tool.name);
+        out.push('\n');
+        out.push_str("- ");
+        out.push_str(tool.name);
+        out.push_str(": ");
+        out.push_str(mode.as_str());
+    }
+    out.push('\n');
+    out.push_str(shell_availability_line(
+        settings.permission(crate::SHELL_TOOL),
+    ));
+    out.push('\n');
+    out.push_str(
+        "Do not claim a tool is denied when this list says otherwise. When a tool is listed as always_allow or ask, Softwake advertises it as a chat function tool — call it when you need real results. Ask-mode tools wait for HUD Approve before they run; the turn may pause with a pending confirmation. Saying `run <command>` or `shell <command>` still works as a fast path. Never invent command output; only report stdout/stderr Softwake returns from a tool result.",
+    );
+    out
+}
+
+fn shell_availability_line(permission: ToolPermission) -> &'static str {
+    match permission {
+        ToolPermission::AlwaysAllow => {
+            "Shell is available. Permission is always_allow: Softwake runs shell without a confirm prompt when you call the shell tool or when the operator stages a command (for example by saying `run …`)."
+        }
+        ToolPermission::Ask => {
+            "Shell is available. Permission is ask: Softwake stages the command (API tool call or `run …`) and the operator must Approve in the HUD (or Status Confirm) before it runs."
+        }
+        ToolPermission::Deny => {
+            "Shell is unavailable. Permission is deny. Do not treat shell as available."
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfirmPolicy, FileToolsSettings, ToolPermission, ToolsSettings, ToolsSettingsError,
-        default_permission, parse_confirm_policy, parse_tool_permission, resolve_tools_file_from,
+        ConfirmPolicy, FileToolsSettings, TOOLS_PERMISSIONS_LEAD, ToolPermission, ToolsSettings,
+        ToolsSettingsError, default_permission, parse_confirm_policy, parse_tool_permission,
+        resolve_tools_file_from, tools_permissions_appendix,
     };
     use crate::{ECHO_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, ToolRegistry};
 
@@ -665,5 +710,55 @@ mod tests {
         .expect("bad always");
         assert!(store.load().is_err());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn tools_permissions_appendix_lists_every_registered_tool() {
+        let settings = ToolsSettings::default();
+        let appendix = tools_permissions_appendix(&settings);
+        assert!(appendix.starts_with(TOOLS_PERMISSIONS_LEAD));
+        for tool in ToolRegistry::phase2().entries() {
+            let line = format!("- {}: {}", tool.name, settings.permission(tool.name));
+            assert!(
+                appendix.contains(&line),
+                "missing permission line {line} in:\n{appendix}"
+            );
+        }
+        assert!(appendix.contains("Shell is unavailable. Permission is deny."));
+        assert!(appendix.contains("Do not claim a tool is denied when this list says otherwise."));
+        assert!(appendix.contains("`run <command>`"));
+        assert!(appendix.contains("Never invent command output"));
+        assert!(!appendix.contains("Shell is available."));
+    }
+
+    #[test]
+    fn tools_permissions_appendix_shell_always_allow_says_available_without_confirm() {
+        let mut settings = ToolsSettings::default();
+        settings
+            .permissions
+            .insert(SHELL_TOOL.to_owned(), ToolPermission::AlwaysAllow);
+        settings.normalize();
+        let appendix = tools_permissions_appendix(&settings);
+        assert!(appendix.contains("- shell: always_allow"));
+        assert!(appendix.contains(
+            "Shell is available. Permission is always_allow: Softwake runs shell without a confirm prompt"
+        ));
+        assert!(!appendix.contains("Shell is unavailable."));
+    }
+
+    #[test]
+    fn tools_permissions_appendix_shell_ask_says_available_with_hud_approve() {
+        let mut settings = ToolsSettings::default();
+        settings
+            .permissions
+            .insert(SHELL_TOOL.to_owned(), ToolPermission::Ask);
+        settings.normalize();
+        let appendix = tools_permissions_appendix(&settings);
+        assert!(appendix.contains("- shell: ask"));
+        assert!(
+            appendix.contains("Shell is available. Permission is ask: Softwake stages the command")
+        );
+        assert!(appendix.contains("Approve in the HUD"));
+        assert!(!appendix.contains("Shell is unavailable."));
     }
 }

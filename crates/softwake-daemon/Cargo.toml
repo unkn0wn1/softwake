@@ -29,6 +29,7 @@ softwake-skills.workspace = true
 softwake-wake.workspace = true
 softwake-voice.workspace = true
 thiserror.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

@@ -596,10 +596,13 @@ impl Runtime {
                 let call = prepared.clone();
                 // Disabled memory keeps the appendix empty. A developer
                 // `memory.json` must not change the fixture post.
-                let appendix = crate::chat::appendix_for_ask(
+                let memory = crate::chat::appendix_for_ask(
                     text,
                     Some(&softwake_memory::MockMemory::default()),
                 );
+                let tools_settings = self.hands.tools_settings();
+                let appendix = crate::chat::system_appendix(&memory, &tools_settings);
+                let tools = softwake_tools::advertise_chat_tools(&tools_settings);
                 let budget = crate::chat::budget_for_handle(
                     self.chat_fixture
                         .as_ref()
@@ -610,7 +613,7 @@ impl Runtime {
                 let call_c = call.clone();
                 let bearer_c = bearer.clone();
                 let trace = self.trace_context();
-                match crate::chat::perform_ask(
+                let prepared_ask = match crate::chat::prepare_ask_session(
                     &mut self.session,
                     text,
                     &appendix,
@@ -618,14 +621,31 @@ impl Runtime {
                     move |older| {
                         crate::chat::compact_fixture(&transport_compact, &call_c, &bearer_c, older)
                     },
-                    move |system, messages| {
-                        crate::chat::complete_fixture(&transport, &call, &bearer, system, messages)
-                    },
                     trace,
                 ) {
-                    Ok(ok) => self.finish_ask_reply(ok),
-                    Err(error) => Self::chat_rejected(error.sentence()),
-                }
+                    Ok(ok) => ok,
+                    Err(error) => return Self::chat_rejected(error.sentence()),
+                };
+                let (system, context) = prepared_ask;
+                let messages = self.session.messages().to_vec();
+                let loop_ok = {
+                    let hands = &mut self.hands;
+                    let machine = &self.machine;
+                    crate::chat::complete_fixture_tools(
+                        &transport,
+                        &call,
+                        &bearer,
+                        &system,
+                        &messages,
+                        &tools,
+                        |name, args| {
+                            crate::tool_loop::invoke_from_request(
+                                hands.request(machine, name, args),
+                            )
+                        },
+                    )
+                };
+                self.finish_tool_loop_ask(loop_ok, context)
             }
             Err(message) => Self::chat_rejected(&message),
         }
@@ -649,22 +669,76 @@ impl Runtime {
         let call = prepared.clone();
         let call_c = prepared.clone();
         let bearer_c = bearer.clone();
-        let appendix =
+        let memory =
             crate::chat::appendix_for_ask(text, Option::<&softwake_memory::MockMemory>::None);
+        let tools_settings = self.hands.tools_settings();
+        let appendix = crate::chat::system_appendix(&memory, &tools_settings);
+        let tools = softwake_tools::advertise_chat_tools(&tools_settings);
         let trace = self.trace_context();
-        match crate::chat::perform_ask(
+        let prepared_ask = match crate::chat::prepare_ask_session(
             &mut self.session,
             text,
             &appendix,
             budget,
             move |older| crate::chat::finish_prepared_compact(&call_c, &bearer_c, older),
-            move |system, messages| {
-                crate::chat::finish_prepared_chat(&call, &bearer, system, messages)
-            },
             trace,
         ) {
-            Ok(ok) => self.finish_ask_reply(ok),
-            Err(error) => Self::chat_rejected(error.sentence()),
+            Ok(ok) => ok,
+            Err(error) => return Self::chat_rejected(error.sentence()),
+        };
+        let (system, context) = prepared_ask;
+        let messages = self.session.messages().to_vec();
+        let loop_ok = {
+            let hands = &mut self.hands;
+            let machine = &self.machine;
+            crate::chat::finish_prepared_chat_tools(
+                &call,
+                &bearer,
+                &system,
+                &messages,
+                &tools,
+                |name, args| {
+                    crate::tool_loop::invoke_from_request(hands.request(machine, name, args))
+                },
+            )
+        };
+        self.finish_tool_loop_ask(loop_ok, context)
+    }
+
+    fn finish_tool_loop_ask(
+        &mut self,
+        loop_ok: Result<crate::tool_loop::ToolLoopOk, String>,
+        context: crate::chat::AskContext,
+    ) -> Outcome {
+        match loop_ok {
+            Ok(crate::tool_loop::ToolLoopOk::Message(reply)) => {
+                if let Err(error) = self.session.push_assistant_turn(&reply) {
+                    return Self::chat_rejected(&error.to_string());
+                }
+                self.finish_ask_reply(crate::chat::AskOk { reply, context })
+            }
+            Ok(crate::tool_loop::ToolLoopOk::Pending { message, pending }) => {
+                if let Err(error) = self.session.push_assistant_turn(&message) {
+                    return Self::chat_rejected(&error.to_string());
+                }
+                let _ = context;
+                // Context accounting still applies; reuse finish path for speech/status
+                // then overlay pending events.
+                let mut outcome = self.finish_ask_reply(crate::chat::AskOk {
+                    reply: message,
+                    context,
+                });
+                outcome
+                    .events
+                    .push(softwake_ipc::Event::ToolConfirmPending {
+                        pending_id: pending.pending_id,
+                        name: pending.name,
+                        args: pending.args,
+                        description: pending.description,
+                    });
+                outcome
+            }
+            Err(message) => Self::chat_rejected(&message),
         }
     }
 
@@ -2870,9 +2944,9 @@ mod tests {
             .to_owned();
         assert!(instructions.contains("test soul"));
         assert!(instructions.contains("test user"));
-        assert!(instructions.contains("echo (safe)"));
-        assert!(instructions.contains("notify (confirm)"));
-        assert!(instructions.contains("email_send (confirm)"));
+        assert!(instructions.contains("Live Tools permissions appendix"));
+        assert!(instructions.contains("shell deny"));
+        assert!(instructions.contains("always_allow, ask, or deny"));
         assert_eq!(runtime.applied_instructions(), Some(instructions.as_str()));
 
         soul.write("updated soul\n", "updated user\n");
@@ -2894,9 +2968,9 @@ mod tests {
         let reopened = runtime.session_instructions().expect("reopened");
         assert!(reopened.contains("updated soul"));
         assert!(reopened.contains("updated user"));
-        assert!(reopened.contains("echo (safe)"));
-        assert!(reopened.contains("notify (confirm)"));
-        assert!(reopened.contains("email_send (confirm)"));
+        assert!(reopened.contains("Live Tools permissions appendix"));
+        assert!(reopened.contains("shell deny"));
+        assert!(reopened.contains("always_allow, ask, or deny"));
 
         runtime.handle(Command::Hibernate);
         assert_eq!(
