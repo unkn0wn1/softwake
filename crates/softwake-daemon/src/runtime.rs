@@ -639,23 +639,31 @@ impl Runtime {
         let mut scored = false;
         let mut energy_seen = false;
         let awake = wire_state(self.machine.state()) == WireState::Awake;
+        // Half-duplex: while Eve TTS plays (and a short grace after), drop mic
+        // frames so speakers do not feed free-speech / KWS / PTT.
+        let muted = softwake_voice::input_muted();
         let auto_ok = awake
             && !self.talk.is_armed()
             && self.pending_auto_pcm.is_none()
-            && !self.in_voice_cooldown();
-        if !auto_ok && (self.auto_utt.is_buffering() || !awake) {
-            // PTT, cooldown, sleep, or a pending clip — drop a partial auto buffer.
-            if self.talk.is_armed() || !awake || self.in_voice_cooldown() {
+            && !self.in_voice_cooldown()
+            && !muted;
+        if !auto_ok && (self.auto_utt.is_buffering() || !awake || muted) {
+            // PTT, cooldown, TTS mute, sleep, or a pending clip — drop a partial auto buffer.
+            if self.talk.is_armed() || !awake || self.in_voice_cooldown() || muted {
                 self.auto_utt.reset();
             }
         }
         while let Ok(Some(frame)) = self.capture.poll_frame() {
             let samples = frame.samples();
+            let level = rms_level(samples);
+            self.last_capture_level = Some(level);
+            if muted {
+                // Still drain the queue / HUD level; do not treat as user input.
+                continue;
+            }
             if self.talk.is_armed() {
                 self.talk.push(samples);
             }
-            let level = rms_level(samples);
-            self.last_capture_level = Some(level);
             if level >= 0.02 {
                 energy_seen = true;
             }
@@ -859,6 +867,7 @@ impl Runtime {
             && !self.talk.is_armed()
             && self.pending_auto_pcm.is_none()
             && !self.in_voice_cooldown()
+            && !softwake_voice::input_muted()
     }
 
     fn in_voice_cooldown(&self) -> bool {
@@ -1128,8 +1137,15 @@ mod talk_tests {
         ));
     }
 
+    /// Free-speech tests share process-wide TTS mute statics with softwake-voice.
+    static AUTO_SPEECH_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn awake_auto_utterance_queues_pcm_and_sleep_does_not() {
+        let _guard = AUTO_SPEECH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        softwake_voice::clear_input_mute_for_test();
         let dir = TestSoulDir::valid();
         let mut runtime = Runtime::new(dir.soul_dir());
         let loud = vec![8_000_i16; 320];
@@ -1170,6 +1186,10 @@ mod talk_tests {
 
     #[test]
     fn ptt_resets_auto_gate_and_status_reports_auto_listening() {
+        let _guard = AUTO_SPEECH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        softwake_voice::clear_input_mute_for_test();
         let (mut runtime, _dir) = awake();
         let outcome = runtime.handle(softwake_ipc::Command::GetStatus);
         let status = outcome.body.status().expect("status");
@@ -1185,6 +1205,35 @@ mod talk_tests {
         assert!(!runtime.auto_utt.is_buffering());
         assert!(!started.body.status().expect("armed").auto_listening);
         assert!(runtime.take_pending_auto_pcm().is_none());
+    }
+
+    #[test]
+    fn tts_mute_drops_free_speech_and_clears_auto_listening() {
+        let _guard = AUTO_SPEECH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        softwake_voice::clear_input_mute_for_test();
+        let (mut runtime, _dir) = awake();
+        let mute_gen = softwake_voice::begin_input_mute();
+        assert!(softwake_voice::input_muted());
+        let outcome = runtime.handle(softwake_ipc::Command::GetStatus);
+        let status = outcome.body.status().expect("status");
+        assert!(!status.auto_listening);
+        let loud = vec![8_000_i16; 320];
+        for _ in 0..40 {
+            assert!(runtime.capture_mock().push_frame(&loud));
+            runtime.drain_pcm();
+        }
+        assert!(
+            runtime.take_pending_auto_pcm().is_none(),
+            "muted input must not queue a free-speech utterance"
+        );
+        softwake_voice::end_input_mute(mute_gen);
+        std::thread::sleep(
+            softwake_voice::PLAYBACK_MUTE_GRACE + std::time::Duration::from_millis(50),
+        );
+        assert!(!softwake_voice::input_muted());
+        softwake_voice::clear_input_mute_for_test();
     }
 }
 

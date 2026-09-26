@@ -8,17 +8,26 @@
 //! block the daemon, Tauri commands, or the HUD bloom on Eve finishing. A short
 //! reaper thread joins the child (with a timeout) and deletes the temp file.
 //! [`interrupt_playback`] kills the last spawned player so a new ask can cut in.
+//!
+//! While a spawned player is alive (and for a short grace after it exits),
+//! [`input_muted`] is true so the daemon can drop mic frames — half-duplex,
+//! mute-while-speaking — and avoid Eve hearing herself over speakers. Early
+//! returns (no TTS, missing player, Record mode) never arm mute.
 
 use std::io::Write;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Join deadline for the background reaper. Longer than a short reply, shorter
 /// than leaving a zombie player overnight.
 pub const PLAYBACK_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Keep mic input gated briefly after the player exits (room reverb / latency).
+pub const PLAYBACK_MUTE_GRACE: Duration = Duration::from_millis(200);
 
 /// How [`play_audio`] delivers bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +49,70 @@ pub struct PlayedClip {
 
 /// Pid of the player started by the latest [`PlaybackMode::Spawn`] call.
 static LAST_PLAYER: Mutex<Option<u32>> = Mutex::new(None);
+
+/// Generation of the active mute hold. Bumped on each arm so a stale reaper
+/// cannot clear mute while a newer clip is still playing.
+static MUTE_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// True while a spawned player owns the mute hold (before grace).
+static MUTE_HOLD: AtomicBool = AtomicBool::new(false);
+
+/// Wall time until which [`input_muted`] stays true after a hold ends.
+static MUTE_GRACE_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// True while TTS playback should suppress mic input (half-duplex).
+///
+/// Armed only when a Spawn player is running. Released when that player exits
+/// (or fails), then held for [`PLAYBACK_MUTE_GRACE`]. Record mode, empty audio,
+/// missing players, and synthesize failures never arm this — mute cannot stick
+/// from a skipped or failed speak.
+#[must_use]
+pub fn input_muted() -> bool {
+    if MUTE_HOLD.load(Ordering::Acquire) {
+        return true;
+    }
+    let until = MUTE_GRACE_UNTIL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    until.is_some_and(|deadline| Instant::now() < deadline)
+}
+
+/// Begin mute-while-speaking. Returns a generation the reaper must pass to
+/// [`end_input_mute`]. A newer arm invalidates older generations.
+pub fn begin_input_mute() -> u64 {
+    let generation = MUTE_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    MUTE_HOLD.store(true, Ordering::Release);
+    let mut grace = MUTE_GRACE_UNTIL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *grace = None;
+    generation
+}
+
+/// End the mute hold for `generation`, then apply [`PLAYBACK_MUTE_GRACE`].
+///
+/// No-op when a newer [`begin_input_mute`] has already taken over.
+pub fn end_input_mute(generation: u64) {
+    if MUTE_GENERATION.load(Ordering::Acquire) != generation {
+        return;
+    }
+    MUTE_HOLD.store(false, Ordering::Release);
+    let mut grace = MUTE_GRACE_UNTIL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *grace = Some(Instant::now() + PLAYBACK_MUTE_GRACE);
+}
+
+/// Drop any mute hold and grace immediately. For unit tests only — production
+/// paths use [`end_input_mute`] so room reverb is still covered by grace.
+pub fn clear_input_mute_for_test() {
+    MUTE_GENERATION.fetch_add(1, Ordering::AcqRel);
+    MUTE_HOLD.store(false, Ordering::Release);
+    let mut grace = MUTE_GRACE_UNTIL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *grace = None;
+}
 
 /// Play `bytes` or record them.
 ///
@@ -115,12 +188,15 @@ fn spawn_player_detached(bytes: &[u8], suffix: &str, timeout: Duration) -> Resul
                     Ok(Some(status)) if !status.success() => {
                         let _ = std::fs::remove_file(&path);
                         clear_pid_if(pid);
+                        // Never leave mute armed on a failed player.
                         return Err(format!(
                             "{program} exited immediately ({status}). Softwake could not play the reply."
                         ));
                     }
                     Ok(Some(_)) => {
-                        // Player finished a tiny clip successfully — fine.
+                        // Tiny clip already finished — brief grace only (reverb).
+                        let generation = begin_input_mute();
+                        end_input_mute(generation);
                         let _ = std::fs::remove_file(&path);
                         clear_pid_if(pid);
                         return Ok(());
@@ -132,6 +208,7 @@ fn spawn_player_detached(bytes: &[u8], suffix: &str, timeout: Duration) -> Resul
                         return Err(format!("could not check {program}: {error}"));
                     }
                 }
+                let mute_generation = begin_input_mute();
                 remember_pid(pid);
                 let path_for_reaper = path.clone();
                 let _ = thread::Builder::new()
@@ -140,6 +217,7 @@ fn spawn_player_detached(bytes: &[u8], suffix: &str, timeout: Duration) -> Resul
                         reap_player(child, timeout);
                         let _ = std::fs::remove_file(&path_for_reaper);
                         clear_pid_if(pid);
+                        end_input_mute(mute_generation);
                     });
                 // Fire-and-forget: caller returns while Eve is still speaking.
                 return Ok(());
@@ -237,11 +315,23 @@ fn write_temp(bytes: &[u8], suffix: &str) -> Result<std::path::PathBuf, String> 
 
 #[cfg(test)]
 mod tests {
-    use super::{PLAYBACK_TIMEOUT, PlaybackMode, play_audio};
-    use std::time::Instant;
+    use super::{
+        PLAYBACK_MUTE_GRACE, PLAYBACK_TIMEOUT, PlaybackMode, begin_input_mute,
+        clear_input_mute_for_test, end_input_mute, input_muted, play_audio,
+    };
+    use std::sync::Mutex;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    /// Mute uses process-wide statics; serialize tests that touch them.
+    static MUTE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn record_mode_keeps_bytes_and_rejects_empty() {
+        let _guard = MUTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        clear_input_mute_for_test();
         let mut record = None;
         play_audio(
             PlaybackMode::Record,
@@ -264,10 +354,16 @@ mod tests {
         )
         .expect_err("empty");
         assert!(error.contains("no audio"), "{error}");
+        // Record / empty never arms mute-while-speaking.
+        assert!(!input_muted());
     }
 
     #[test]
     fn spawn_mode_returns_before_player_timeout_budget() {
+        let _guard = MUTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        clear_input_mute_for_test();
         // Even when every player is missing, spawn must fail fast — never sleep
         // for PLAYBACK_TIMEOUT. When a player exists, it returns without waiting
         // for the clip to finish (covered operationally; CI stays player-free).
@@ -281,10 +377,31 @@ mod tests {
         );
         let elapsed = start.elapsed();
         assert!(
-            elapsed < std::time::Duration::from_secs(2),
+            elapsed < Duration::from_secs(2),
             "spawn path blocked for {elapsed:?}: {result:?}"
         );
-        // Missing player or a real spawn both finish under the budget.
-        let _ = result;
+        // A missing-player Err must not leave mute stuck forever.
+        if result.is_err() {
+            assert!(!input_muted(), "failed spawn left input muted");
+        }
+    }
+
+    #[test]
+    fn mute_hold_and_grace_then_clear_stale_generation_ignored() {
+        let _guard = MUTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        clear_input_mute_for_test();
+        let mute_gen = begin_input_mute();
+        assert!(input_muted());
+        // Newer arm invalidates the old generation.
+        let newer = begin_input_mute();
+        end_input_mute(mute_gen);
+        assert!(input_muted(), "stale end must not clear newer hold");
+        end_input_mute(newer);
+        assert!(input_muted(), "grace keeps mute briefly");
+        thread::sleep(PLAYBACK_MUTE_GRACE + Duration::from_millis(50));
+        assert!(!input_muted());
+        clear_input_mute_for_test();
     }
 }
