@@ -14,7 +14,7 @@
 //! `i16`.
 
 use softwake_audio::AudioFrame;
-use softwake_wake::{NullDetector, PhraseHit, WakeDetector};
+use softwake_wake::{NullDetector, PhraseHit, SpotDetail, WakeDetector};
 
 /// PCM engine used by [`crate::runtime::Runtime`].
 pub(crate) enum PcmEngine {
@@ -27,11 +27,7 @@ pub(crate) enum PcmEngine {
 
 impl WakeDetector for PcmEngine {
     fn push_samples(&mut self, samples: &[i16]) -> PhraseHit {
-        match self {
-            Self::Null(detector) => detector.push_samples(samples),
-            #[cfg(feature = "sherpa-kws")]
-            Self::Sherpa(detector) => detector.push_samples(samples),
-        }
+        self.score_detailed(samples).hit
     }
 }
 
@@ -71,12 +67,108 @@ impl PcmEngine {
             Self::Sherpa(detector) => detector.weights_loaded(),
         }
     }
+
+    /// Stable backend label for startup / verbose logs.
+    #[must_use]
+    pub(crate) fn backend_name(&self) -> &'static str {
+        match self {
+            Self::Null(_) => "null",
+            #[cfg(feature = "sherpa-kws")]
+            Self::Sherpa(_) => "sherpa-kws",
+        }
+    }
+
+    /// Configured wake phrases when sherpa is loaded; empty for null.
+    #[must_use]
+    pub(crate) fn wake_phrases(&self) -> &[String] {
+        match self {
+            Self::Null(_) => &[],
+            #[cfg(feature = "sherpa-kws")]
+            Self::Sherpa(detector) => detector.wake_phrases(),
+        }
+    }
+
+    /// Configured sleep phrases when sherpa is loaded; empty for null.
+    #[must_use]
+    pub(crate) fn sleep_phrases(&self) -> &[String] {
+        match self {
+            Self::Null(_) => &[],
+            #[cfg(feature = "sherpa-kws")]
+            Self::Sherpa(detector) => detector.sleep_phrases(),
+        }
+    }
+
+    /// Model directory when sherpa is in use.
+    #[must_use]
+    pub(crate) fn model_dir_display(&self) -> String {
+        match self {
+            Self::Null(_) => String::new(),
+            #[cfg(feature = "sherpa-kws")]
+            Self::Sherpa(detector) => detector.model_dir().display().to_string(),
+        }
+    }
+
+    /// Score one window and keep the raw keyword for verbose hear logs.
+    #[must_use]
+    pub(crate) fn score_detailed(&mut self, samples: &[i16]) -> SpotDetail {
+        match self {
+            Self::Null(detector) => SpotDetail {
+                hit: detector.push_samples(samples),
+                keyword: None,
+            },
+            #[cfg(feature = "sherpa-kws")]
+            Self::Sherpa(detector) => detector.push_samples_detailed(samples),
+        }
+    }
+
+    /// One-shot startup summary (profile phrases, backend, weights).
+    pub(crate) fn log_startup(&self, agent_name: &str, verbosity: u8) {
+        let feature = if cfg!(feature = "sherpa-kws") {
+            "sherpa-kws"
+        } else {
+            "off"
+        };
+        eprintln!(
+            "softwaked: KWS startup agent=`{agent_name}` backend={} feature={feature} weights_loaded={}",
+            self.backend_name(),
+            self.weights_loaded()
+        );
+        if !self.model_dir_display().is_empty() {
+            eprintln!("softwaked: KWS model_dir={}", self.model_dir_display());
+        }
+        if verbosity >= 1 || self.weights_loaded() {
+            let wake = self.wake_phrases();
+            let sleep = self.sleep_phrases();
+            if wake.is_empty() && sleep.is_empty() {
+                eprintln!(
+                    "softwaked: KWS phrases=(none — null detector; say-configured wake phrases will not match)"
+                );
+            } else {
+                eprintln!(
+                    "softwaked: KWS wake_phrases=[{}] sleep_phrases=[{}]",
+                    wake.join(", "),
+                    sleep.join(", ")
+                );
+            }
+        }
+        if verbosity >= 1 {
+            eprintln!(
+                "softwaked: KWS verbose={verbosity} (-v logs keyword hear/match; -vv also logs mic energy while sleeping)"
+            );
+        }
+    }
 }
 
 /// Score one captured window.
 #[must_use]
 pub(crate) fn score_frame(detector: &mut impl WakeDetector, frame: &AudioFrame) -> PhraseHit {
     detector.push_samples(frame.samples())
+}
+
+/// Score one captured window with keyword detail.
+#[must_use]
+pub(crate) fn score_frame_detailed(engine: &mut PcmEngine, frame: &AudioFrame) -> SpotDetail {
+    engine.score_detailed(frame.samples())
 }
 
 #[cfg(test)]
@@ -113,5 +205,14 @@ mod tests {
     fn for_agent_without_weights_is_null() {
         let engine = PcmEngine::for_agent("Ada");
         assert!(!engine.weights_loaded());
+        assert_eq!(engine.backend_name(), "null");
+    }
+
+    #[test]
+    fn score_detailed_null_has_no_keyword() {
+        let mut engine = PcmEngine::for_agent("Ada");
+        let detail = engine.score_detailed(&[0; 160]);
+        assert_eq!(detail.hit, PhraseHit::None);
+        assert!(detail.keyword.is_none());
     }
 }

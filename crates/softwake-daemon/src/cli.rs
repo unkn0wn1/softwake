@@ -41,6 +41,7 @@ where
             socket,
             soul_dir,
             capture,
+            verbosity,
         }) => {
             let dir = match resolve_soul_dir(soul_dir.as_deref()) {
                 Ok(dir) => dir,
@@ -49,7 +50,9 @@ where
                     return ExitCode::from(1);
                 }
             };
-            match serve::run(socket.as_deref(), dir, capture) {
+            let verbosity =
+                merge_serve_verbosity(verbosity, env::var("SOFTWAKE_LOG").ok().as_deref());
+            match serve::run(socket.as_deref(), dir, capture, verbosity) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
                     eprintln!("softwaked: {error}");
@@ -167,6 +170,9 @@ Usage:
   softwaked demo --soul-dir PATH
   softwaked serve           listen for ctl and UI clients
   softwaked --serve         same as serve
+  softwaked serve -v        KWS hear/match logs (keyword + wake/sleep)
+  softwaked serve -vv       also mic-energy lines while sleeping
+  softwaked -vv serve       same leading verbosity before serve
   softwaked serve --socket PATH
   softwaked serve --soul-dir PATH
   softwaked serve --capture mock|pipewire
@@ -190,7 +196,8 @@ Usage:
 The demo reads typed commands only and prints "> " before each line.
 It uses mock capture. A microphone is not opened. Native PipeWire is an
 optional feature (pipewire-native) and is not linked in the default build.
-SOFTWAKE_LOG=debug enables the same detail as --verbose and -v.
+SOFTWAKE_LOG=debug enables the same detail as --verbose and -v (demo, or serve -v).
+SOFTWAKE_LOG=trace matches serve -vv for KWS mic-energy lines.
 
 Demo commands, one per line:
   wake, sleep, hibernate, resume, status, reload-soul, tool, confirm, cancel, hear, say, ask, chat, quit
@@ -274,6 +281,8 @@ enum Mode {
         socket: Option<PathBuf>,
         soul_dir: Option<PathBuf>,
         capture: CaptureKind,
+        /// `0` quiet, `1` (`-v`), `2` (`-vv`).
+        verbosity: u8,
     },
     Ctl {
         socket: Option<PathBuf>,
@@ -285,28 +294,53 @@ fn parse_args<I>(args: I) -> Result<Mode, String>
 where
     I: IntoIterator<Item = String>,
 {
-    let mut args = args.into_iter();
+    let mut args = args.into_iter().peekable();
+    let mut leading_verbosity = 0_u8;
+    while let Some(arg) = args.peek() {
+        match arg.as_str() {
+            "-v" | "--verbose" => {
+                leading_verbosity = leading_verbosity.saturating_add(1).min(2);
+                args.next();
+            }
+            "-vv" => {
+                leading_verbosity = 2;
+                args.next();
+            }
+            _ => break,
+        }
+    }
     let first = args.next();
     match first.as_deref() {
+        None if leading_verbosity > 0 => {
+            Err("verbosity flags need a command (try: softwaked serve -vv)".to_owned())
+        }
         None => Ok(Mode::Status),
-        Some("demo" | "--demo") => parse_demo_flags(args),
+        Some("demo" | "--demo") => parse_demo_flags(args, leading_verbosity > 0),
         Some("help" | "--help" | "-h") => match args.next() {
             None => Ok(Mode::Help),
             Some(extra) => Err(format!("help does not take arguments (got {extra})")),
         },
-        Some("serve" | "--serve") => parse_serve_flags(args),
-        Some("ctl") => parse_ctl(args),
+        Some("serve" | "--serve") => parse_serve_flags(args, leading_verbosity),
+        Some("ctl") => {
+            if leading_verbosity > 0 {
+                return Err("ctl does not take -v / -vv".to_owned());
+            }
+            parse_ctl(args)
+        }
         Some(other) => Err(format!("unknown argument {other}")),
     }
 }
 
-fn parse_demo_flags(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
-    let mut verbose = false;
+fn parse_demo_flags(
+    args: impl IntoIterator<Item = String>,
+    leading_verbose: bool,
+) -> Result<Mode, String> {
+    let mut verbose = leading_verbose;
     let mut soul_dir = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--verbose" | "-v" => verbose = true,
+            "--verbose" | "-v" | "-vv" => verbose = true,
             "--soul-dir" => take_value("demo", "--soul-dir", &mut args, &mut soul_dir)?,
             other => return Err(format!("unknown demo argument {other}")),
         }
@@ -314,15 +348,21 @@ fn parse_demo_flags(args: impl IntoIterator<Item = String>) -> Result<Mode, Stri
     Ok(Mode::Demo { verbose, soul_dir })
 }
 
-fn parse_serve_flags(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
+fn parse_serve_flags(
+    args: impl IntoIterator<Item = String>,
+    leading_verbosity: u8,
+) -> Result<Mode, String> {
     let mut socket = None;
     let mut soul_dir = None;
     let mut capture_flag = None;
+    let mut verbosity = leading_verbosity;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--socket" => take_value("serve", "--socket", &mut args, &mut socket)?,
             "--soul-dir" => take_value("serve", "--soul-dir", &mut args, &mut soul_dir)?,
+            "--verbose" | "-v" => verbosity = verbosity.saturating_add(1).min(2),
+            "-vv" => verbosity = 2,
             "--capture" => {
                 if capture_flag.is_some() {
                     return Err("serve accepts one --capture".to_owned());
@@ -343,7 +383,18 @@ fn parse_serve_flags(args: impl IntoIterator<Item = String>) -> Result<Mode, Str
         socket,
         soul_dir,
         capture,
+        verbosity,
     })
+}
+
+/// Merge CLI verbosity with `SOFTWAKE_LOG` (`debug` → 1, `trace` → 2).
+fn merge_serve_verbosity(cli: u8, softwake_log: Option<&str>) -> u8 {
+    let from_env = match softwake_log.map(str::trim) {
+        Some("trace") => 2_u8,
+        Some("debug") => 1_u8,
+        _ => 0_u8,
+    };
+    cli.max(from_env)
 }
 
 fn parse_ctl(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
@@ -445,7 +496,10 @@ mod tests {
     use crate::capture::CaptureKind;
     use std::path::PathBuf;
 
-    use super::{Mode, debug_log_requested, help_text, parse_args, status_line, strip_line_ending};
+    use super::{
+        Mode, debug_log_requested, help_text, merge_serve_verbosity, parse_args, status_line,
+        strip_line_ending,
+    };
     use crate::ctl::CtlAction;
 
     #[test]
@@ -526,12 +580,22 @@ mod tests {
     }
 
     #[test]
+    fn serve_verbosity_merges_cli_and_env() {
+        assert_eq!(merge_serve_verbosity(0, None), 0);
+        assert_eq!(merge_serve_verbosity(0, Some("debug")), 1);
+        assert_eq!(merge_serve_verbosity(0, Some("trace")), 2);
+        assert_eq!(merge_serve_verbosity(2, Some("debug")), 2);
+        assert_eq!(merge_serve_verbosity(1, Some("trace")), 2);
+    }
+
+    #[test]
     fn help_mentions_typed_only_verbose_and_the_log_env() {
         let help = help_text();
         assert!(help.contains("typed commands only"));
         assert!(help.contains("PipeWire"));
         assert!(help.contains("--verbose"));
         assert!(help.contains("-v"));
+        assert!(help.contains("-vv"));
         assert!(help.contains("SOFTWAKE_LOG=debug"));
         assert!(help.contains("> "));
     }
@@ -581,7 +645,8 @@ mod tests {
             Ok(Mode::Serve {
                 socket: None,
                 soul_dir: None,
-                capture: CaptureKind::Mock
+                capture: CaptureKind::Mock,
+                verbosity: 0,
             })
         );
         assert_eq!(
@@ -595,7 +660,8 @@ mod tests {
             Ok(Mode::Serve {
                 socket: Some(PathBuf::from("/tmp/sw.sock")),
                 soul_dir: Some(PathBuf::from("/tmp/soul")),
-                capture: CaptureKind::Mock
+                capture: CaptureKind::Mock,
+                verbosity: 0,
             })
         );
         assert_eq!(
@@ -663,6 +729,46 @@ mod tests {
     }
 
     #[test]
+    fn serve_verbosity_flags() {
+        assert_eq!(
+            parse_args(["serve".to_owned(), "--verbose".to_owned()]),
+            Ok(Mode::Serve {
+                socket: None,
+                soul_dir: None,
+                capture: CaptureKind::Mock,
+                verbosity: 1,
+            })
+        );
+        assert_eq!(
+            parse_args(["serve".to_owned(), "-vv".to_owned()]),
+            Ok(Mode::Serve {
+                socket: None,
+                soul_dir: None,
+                capture: CaptureKind::Mock,
+                verbosity: 2,
+            })
+        );
+        assert_eq!(
+            parse_args(["-vv".to_owned(), "serve".to_owned()]),
+            Ok(Mode::Serve {
+                socket: None,
+                soul_dir: None,
+                capture: CaptureKind::Mock,
+                verbosity: 2,
+            })
+        );
+        assert_eq!(
+            parse_args(["serve".to_owned(), "-v".to_owned(), "-v".to_owned()]),
+            Ok(Mode::Serve {
+                socket: None,
+                soul_dir: None,
+                capture: CaptureKind::Mock,
+                verbosity: 2,
+            })
+        );
+    }
+
+    #[test]
     fn serve_and_ctl_reject_incomplete_arguments() {
         assert!(parse_args(["serve".to_owned(), "--socket".to_owned()]).is_err());
         assert!(parse_args(["serve".to_owned(), "--soul-dir".to_owned()]).is_err());
@@ -677,7 +783,6 @@ mod tests {
             ])
             .is_err()
         );
-        assert!(parse_args(["serve".to_owned(), "--verbose".to_owned()]).is_err());
         let bare = parse_args(["ctl".to_owned()]).expect_err("bare ctl");
         assert!(bare.contains("wake"), "{bare}");
         assert!(parse_args(["ctl".to_owned(), "status".to_owned(), "sleep".to_owned()]).is_err());

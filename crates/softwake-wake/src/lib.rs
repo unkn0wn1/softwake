@@ -16,6 +16,7 @@ mod text;
 use std::fmt;
 
 pub use phrases::{DEFAULT_AGENT_NAME, hit_from_keyword, phrases_for_agent};
+
 #[cfg(feature = "sherpa-kws")]
 pub use sherpa::SherpaKwsDetector;
 pub use text::{PhraseTable, PhraseTableError, TextWakeDetector};
@@ -48,6 +49,15 @@ impl fmt::Display for PhraseHit {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
+}
+
+/// One KWS decode observation (keyword text + wake/sleep mapping).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SpotDetail {
+    /// Mapped wake / sleep / none for the configured phrase lists.
+    pub hit: PhraseHit,
+    /// Raw keyword tag from the spotter (`@sally`, `sally`, …), when any.
+    pub keyword: Option<String>,
 }
 
 /// Scores capture windows for the configured wake and sleep phrases.

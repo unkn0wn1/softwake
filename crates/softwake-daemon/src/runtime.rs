@@ -28,7 +28,7 @@ use crate::capture::{CaptureBackend, CaptureKind};
 use crate::dispatch::{
     CancelledTool, ConfirmedTool, DispatchError, Hands, PendingToolCall, RanTool, RequestOutcome,
 };
-use crate::pcm::{PcmEngine, score_frame};
+use crate::pcm::{PcmEngine, score_frame_detailed};
 use crate::soul::LoadedSoul;
 
 #[derive(Debug)]
@@ -52,6 +52,10 @@ pub(crate) struct Runtime {
     last_capture_level: Option<f32>,
     /// Rate-limit for mic-energy stderr lines (`PipeWire` path).
     last_energy_log: Option<Instant>,
+    /// Rate-limit for verbose KWS hear lines (`-v` / `-vv`).
+    last_kws_log: Option<Instant>,
+    /// `0` quiet, `1` (`-v`) keyword hear/match, `2` (`-vv`) also mic energy.
+    verbosity: u8,
     soul: LoadedSoul,
     session: TextStubSession,
     hands: Hands,
@@ -96,22 +100,45 @@ impl Runtime {
     /// # Errors
     ///
     /// Returns the backend error when `PipeWire` cannot be opened.
+    #[cfg(test)]
     pub(crate) fn with_capture(
         soul_dir: SoulDir,
         kind: CaptureKind,
     ) -> Result<Self, crate::capture::CaptureError> {
+        Self::with_capture_verbosity(soul_dir, kind, 0)
+    }
+
+    /// Sleep with capture and stderr verbosity (`0` / `-v` / `-vv`).
+    ///
+    /// # Errors
+    ///
+    /// Returns the backend error when `PipeWire` cannot be opened.
+    pub(crate) fn with_capture_verbosity(
+        soul_dir: SoulDir,
+        kind: CaptureKind,
+        verbosity: u8,
+    ) -> Result<Self, crate::capture::CaptureError> {
         let capture = CaptureBackend::open(kind)?;
         let soul = LoadedSoul::open(soul_dir);
         let agent = soul.agent_name();
+        let pcm = PcmEngine::for_agent(&agent);
+        pcm.log_startup(&agent, verbosity);
+        eprintln!(
+            "softwaked: listen state={} capture={}",
+            wire_state(VoiceState::Sleep).as_str(),
+            kind.as_str()
+        );
         Ok(Self {
             machine: Machine::new(CooldownConfig::default()),
             last_tick: Instant::now(),
             capture,
-            pcm: PcmEngine::for_agent(&agent),
+            pcm,
             pcm_agent: agent,
             last_pcm_hit: None,
             last_capture_level: None,
             last_energy_log: None,
+            last_kws_log: None,
+            verbosity,
             soul,
             session: TextStubSession::default(),
             hands: Hands::from_disk(),
@@ -726,7 +753,9 @@ impl Runtime {
                     );
                 }
             }
-            hit = score_frame(&mut self.pcm, &frame);
+            let detail = score_frame_detailed(&mut self.pcm, &frame);
+            hit = detail.hit;
+            self.log_kws_observation(&detail, level);
             scored = true;
         }
         if scored {
@@ -749,10 +778,61 @@ impl Runtime {
                 );
             }
         }
+        if energy_seen
+            && self.verbosity >= 2
+            && matches!(hit, PhraseHit::None)
+            && self.capture.kind() == CaptureKind::PipeWire
+            && wire_state(self.machine.state()) == WireState::Sleep
+            && self.pcm.weights_loaded()
+        {
+            let now = Instant::now();
+            let should_log = self
+                .last_energy_log
+                .is_none_or(|previous| now.duration_since(previous).as_secs() >= 2);
+            if should_log {
+                self.last_energy_log = Some(now);
+                eprintln!(
+                    "softwaked: KWS listening (sleep) mic_rms={:.3} wake_phrases=[{}] — no keyword match yet",
+                    self.last_capture_level.unwrap_or(0.0),
+                    self.pcm.wake_phrases().join(", ")
+                );
+            }
+        }
         if !self.capture.is_running() {
             self.last_capture_level = None;
         }
         self.apply_pcm_hit(hit)
+    }
+
+    /// Log one KWS observation when verbosity asks for it.
+    fn log_kws_observation(&mut self, detail: &softwake_wake::SpotDetail, level: f32) {
+        if self.verbosity == 0 {
+            return;
+        }
+        let Some(keyword) = detail.keyword.as_deref() else {
+            return;
+        };
+        let now = Instant::now();
+        // Always log a real keyword immediately once; rate-limit repeats.
+        let should_log = detail.hit != PhraseHit::None
+            || self
+                .last_kws_log
+                .is_none_or(|previous| now.duration_since(previous).as_millis() >= 250);
+        if !should_log {
+            return;
+        }
+        self.last_kws_log = Some(now);
+        let match_label = match detail.hit {
+            PhraseHit::Wake => "match=wake",
+            PhraseHit::Sleep => "match=sleep",
+            PhraseHit::None => "match=none",
+        };
+        eprintln!(
+            "softwaked: KWS heard keyword=`{keyword}` {match_label} state={} mic_rms={level:.3} wake=[{}] sleep=[{}]",
+            wire_state(self.machine.state()).as_str(),
+            self.pcm.wake_phrases().join(", "),
+            self.pcm.sleep_phrases().join(", ")
+        );
     }
 
     /// Rebuild the PCM detector after a soul / profile reload.
@@ -766,6 +846,7 @@ impl Runtime {
             return;
         }
         self.pcm = PcmEngine::for_agent(&agent);
+        self.pcm.log_startup(&agent, self.verbosity);
         self.pcm_agent = agent;
     }
 
