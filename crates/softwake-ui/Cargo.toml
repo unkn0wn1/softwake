@@ -29,6 +29,17 @@ softwake-skills.workspace = true
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "=2.5.5"
 url = "2"
+argon2 = { workspace = true }
+base64 = { workspace = true }
+chacha20poly1305 = { workspace = true }
+rand = { workspace = true }
+zeroize = { workspace = true }
+keyring = { version = "=3.6.3", default-features = false, features = [
+    "sync-secret-service",
+    "crypto-rust",
+    "apple-native",
+    "windows-native",
+] }
 
 [features]
 default = ["custom-protocol", "live-http"]

@@ -10,6 +10,20 @@
     <div id="capsule" class="capsule" role="button" tabindex="0" aria-expanded="false" aria-label="Softwake listening capsule">
       <canvas id="bloom" width="120" height="120" aria-hidden="true"></canvas>
       <div id="strip" class="strip" hidden>
+      <div id="vault-gate" class="vault-gate" hidden>
+        <p id="vault-title" class="vault-title">Chat lock</p>
+        <p id="vault-hint" class="vault-hint"></p>
+        <label class="vault-field" id="vault-pass-wrap" hidden>
+          <span class="sr-only">Passphrase</span>
+          <input id="vault-pass" type="password" autocomplete="current-password" placeholder="Passphrase" />
+        </label>
+        <p id="vault-error" class="vault-error" role="status" hidden></p>
+        <div class="vault-actions">
+          <button type="button" id="vault-unlock" hidden>Unlock</button>
+          <button type="button" id="vault-set" hidden>Set passphrase</button>
+          <button type="button" id="vault-skip" hidden>Skip (plaintext)</button>
+        </div>
+      </div>
         <div id="log" class="log" role="log" aria-live="polite" aria-relevant="additions"></div>
         <p id="live" class="live" hidden></p>
         <div id="hud-pending" hidden>

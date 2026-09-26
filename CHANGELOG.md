@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Per-profile HUD chat history (`profiles/<id>/hud-chat.json`, display only) with optional softwake-ui passphrase unlock (Argon2id + ChaCha20-Poly1305) and OS keyring wrap (`softwake` / `ui-data-key`). See [ADR 0025](docs/ADR-0025-hud-chat-unlock.md).
 - Settings left-nav pane switching works again. Email OAuth (#69) used Google/Microsoft Connect controls in `app.js` without declaring their DOM refs, so a top-level `ReferenceError` aborted the script before nav click handlers registered (tabs highlighted on focus but stayed on Status).
 - Per-profile Softwake schedules (`schedules.json`): once / daily / cron subset, confirm-gated `schedule` tool (Ask default), Settings → Timers, daemon tick with notify + fixed TTS fire (any voice state while softwaked runs). See [ADR-0024](docs/ADR-0024-timers-cron.md).
 

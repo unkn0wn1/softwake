@@ -1742,3 +1742,100 @@ refresh();
 setInterval(refresh, 1000);
 refreshProviders();
 refreshEmail();
+
+
+/* --- Chat lock (HUD history passphrase vault) --- */
+const chatLockStatus = document.querySelector("#chat-lock-status");
+const chatLockWarning = document.querySelector("#chat-lock-warning");
+const chatLockPass = document.querySelector("#chat-lock-pass");
+const chatLockKeyring = document.querySelector("#chat-lock-keyring");
+const chatLockSet = document.querySelector("#chat-lock-set");
+const chatLockLock = document.querySelector("#chat-lock-lock");
+const chatLockError = document.querySelector("#chat-lock-error");
+
+function applyChatLockStatus(snap) {
+  if (!chatLockStatus || !snap) {
+    return;
+  }
+  const mode = snap.mode || "unset";
+  const unlocked = !!snap.unlocked;
+  const parts = ["Mode: " + mode];
+  if (mode === "passphrase") {
+    parts.push(unlocked ? "unlocked" : "locked");
+  }
+  if (snap.keyring_wrap) {
+    parts.push(snap.keyring_available ? "keyring wrap on" : "keyring wrap on (unavailable)");
+  }
+  chatLockStatus.textContent = parts.join(" · ");
+  if (chatLockWarning) {
+    chatLockWarning.hidden = !(snap.plaintext_warning && mode !== "passphrase");
+  }
+  if (chatLockKeyring) {
+    chatLockKeyring.checked = !!snap.keyring_wrap || mode === "unset";
+    chatLockKeyring.disabled = mode === "unset";
+  }
+  if (chatLockError) {
+    chatLockError.textContent = "";
+  }
+}
+
+async function refreshChatLock() {
+  if (!chatLockStatus) {
+    return;
+  }
+  try {
+    const snap = await invoke("ui_vault_status");
+    applyChatLockStatus(snap);
+  } catch (error) {
+    if (chatLockError) {
+      chatLockError.textContent = errorText(error, "could not read chat lock");
+    }
+  }
+}
+
+if (chatLockSet) {
+  chatLockSet.addEventListener("click", () => {
+    const passphrase = chatLockPass ? chatLockPass.value : "";
+    const keyringWrap = chatLockKeyring ? !!chatLockKeyring.checked : false;
+    invoke("ui_vault_set_passphrase", { passphrase, keyringWrap })
+      .then((snap) => {
+        applyChatLockStatus(snap);
+        if (chatLockPass) {
+          chatLockPass.value = "";
+        }
+      })
+      .catch((error) => {
+        if (chatLockError) {
+          chatLockError.textContent = errorText(error, "could not set passphrase");
+        }
+      });
+  });
+}
+
+if (chatLockLock) {
+  chatLockLock.addEventListener("click", () => {
+    invoke("ui_vault_lock")
+      .then((snap) => applyChatLockStatus(snap))
+      .catch((error) => {
+        if (chatLockError) {
+          chatLockError.textContent = errorText(error, "could not lock");
+        }
+      });
+  });
+}
+
+if (chatLockKeyring) {
+  chatLockKeyring.addEventListener("change", () => {
+    const enabled = !!chatLockKeyring.checked;
+    invoke("ui_vault_set_keyring_wrap", { enabled })
+      .then((snap) => applyChatLockStatus(snap))
+      .catch((error) => {
+        if (chatLockError) {
+          chatLockError.textContent = errorText(error, "could not update keyring wrap");
+        }
+        void refreshChatLock();
+      });
+  });
+}
+
+void refreshChatLock();

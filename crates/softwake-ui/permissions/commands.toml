@@ -317,3 +317,48 @@ commands.allow = ["timers_upsert"]
 identifier = "allow-timers-delete"
 description = "Delete a timer."
 commands.allow = ["timers_delete"]
+
+[[permission]]
+identifier = "allow-hud-chat-snapshot"
+description = "Load per-profile HUD chat history for display."
+commands.allow = ["hud_chat_snapshot"]
+
+[[permission]]
+identifier = "allow-hud-chat-save"
+description = "Persist per-profile HUD chat history."
+commands.allow = ["hud_chat_save"]
+
+[[permission]]
+identifier = "allow-ui-vault-status"
+description = "Read softwake-ui chat vault lock status."
+commands.allow = ["ui_vault_status"]
+
+[[permission]]
+identifier = "allow-ui-vault-skip-plaintext"
+description = "Keep HUD chat history in plaintext until a passphrase is set."
+commands.allow = ["ui_vault_skip_plaintext"]
+
+[[permission]]
+identifier = "allow-ui-vault-set-passphrase"
+description = "Set or change the softwake-ui chat vault passphrase."
+commands.allow = ["ui_vault_set_passphrase"]
+
+[[permission]]
+identifier = "allow-ui-vault-unlock"
+description = "Unlock the softwake-ui chat vault with a passphrase."
+commands.allow = ["ui_vault_unlock"]
+
+[[permission]]
+identifier = "allow-ui-vault-try-keyring"
+description = "Try OS keyring auto-unlock for the softwake-ui chat vault."
+commands.allow = ["ui_vault_try_keyring"]
+
+[[permission]]
+identifier = "allow-ui-vault-lock"
+description = "Lock the softwake-ui chat vault in this process."
+commands.allow = ["ui_vault_lock"]
+
+[[permission]]
+identifier = "allow-ui-vault-set-keyring-wrap"
+description = "Enable or disable OS keyring wrap for the chat vault data key."
+commands.allow = ["ui_vault_set_keyring_wrap"]

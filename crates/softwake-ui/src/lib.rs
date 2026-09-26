@@ -10,6 +10,7 @@ mod commands;
 mod email;
 mod email_oauth;
 mod ensure_daemon;
+mod hud_chat;
 mod hud_pos;
 mod kws_prefs;
 mod oauth_open;
@@ -22,6 +23,7 @@ mod timers;
 mod tools;
 mod tray;
 mod ui_prefs;
+mod ui_vault;
 mod utterance_prefs;
 
 use tauri::{
@@ -34,9 +36,11 @@ use tauri::{
 ///
 /// Panics when the window runtime cannot start. That ends the process; it is
 /// not a voice-state error.
+#[allow(clippy::too_many_lines)] // generate_handler list grows with each Settings/HUD command.
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .manage(ui_vault::VaultState::default())
         .invoke_handler(tauri::generate_handler![
             commands::status,
             commands::hibernate,
@@ -56,6 +60,15 @@ pub fn run() {
             commands::hud_start_drag,
             commands::hud_save_position,
             commands::hud_reset_position,
+            hud_chat::hud_chat_snapshot,
+            hud_chat::hud_chat_save,
+            ui_vault::ui_vault_status,
+            ui_vault::ui_vault_skip_plaintext,
+            ui_vault::ui_vault_set_passphrase,
+            ui_vault::ui_vault_unlock,
+            ui_vault::ui_vault_try_keyring,
+            ui_vault::ui_vault_lock,
+            ui_vault::ui_vault_set_keyring_wrap,
             providers::provider_snapshot,
             providers::provider_select,
             providers::provider_set_key,
@@ -376,6 +389,15 @@ mod tests {
         "hud_start_drag",
         "hud_save_position",
         "hud_reset_position",
+        "hud_chat_snapshot",
+        "hud_chat_save",
+        "ui_vault_status",
+        "ui_vault_skip_plaintext",
+        "ui_vault_set_passphrase",
+        "ui_vault_unlock",
+        "ui_vault_try_keyring",
+        "ui_vault_lock",
+        "ui_vault_set_keyring_wrap",
         "provider_snapshot",
         "provider_select",
         "provider_set_key",
@@ -442,6 +464,15 @@ mod tests {
         "allow-hud-start-drag",
         "allow-hud-save-position",
         "allow-hud-reset-position",
+        "allow-hud-chat-snapshot",
+        "allow-hud-chat-save",
+        "allow-ui-vault-status",
+        "allow-ui-vault-skip-plaintext",
+        "allow-ui-vault-set-passphrase",
+        "allow-ui-vault-unlock",
+        "allow-ui-vault-try-keyring",
+        "allow-ui-vault-lock",
+        "allow-ui-vault-set-keyring-wrap",
         "allow-provider-snapshot",
         "allow-provider-select",
         "allow-provider-set-key",
