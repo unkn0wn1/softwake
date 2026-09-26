@@ -99,7 +99,7 @@ mod tests {
         assert_eq!(SOFT_RESET_AFTER_SAMPLES, 16_000 * 5);
         assert_eq!(HARD_RESET_AFTER_SAMPLES, 160_000);
         assert_eq!(HARD_RESET_AFTER_SAMPLES, 16_000 * 10);
-        assert!(HARD_RESET_AFTER_SAMPLES > SOFT_RESET_AFTER_SAMPLES);
+        const { assert!(HARD_RESET_AFTER_SAMPLES > SOFT_RESET_AFTER_SAMPLES) };
     }
 
     #[test]
