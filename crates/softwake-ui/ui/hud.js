@@ -68,6 +68,8 @@ let profileId = "";
 let vaultUnlocked = false;
 let chatPersistReady = false;
 let chatSaveTimer = null;
+/** True after we successfully dispatched SeedChat for this awake period. */
+let sessionHudSeeded = false;
 
 function invoke(command, args) {
   const core = window.__TAURI__ && window.__TAURI__.core;
@@ -494,6 +496,8 @@ async function loadChatForActiveProfile() {
     }
     replaceTurns((snap && snap.turns) || []);
     chatPersistReady = true;
+    // Wake may have raced ahead of unlock/load; seed once turns are ready.
+    maybeSeedSessionFromHud();
   } catch (error) {
     chatPersistReady = false;
     const line = errorText(error, "could not load chat history");
@@ -922,8 +926,18 @@ function applyContextMeter(snap) {
 }
 
 
-function seedSessionFromHud() {
-  if (!vaultUnlocked || !turns.length) {
+/**
+ * Dispatch SeedChat once when awake + vault unlocked + turns loaded.
+ * Not only on the woke edge — unlock/load often finish after wake for encrypted vaults.
+ */
+function maybeSeedSessionFromHud() {
+  if (sessionHudSeeded) {
+    return;
+  }
+  if (state !== "awake") {
+    return;
+  }
+  if (!vaultUnlocked || !chatPersistReady || !turns.length) {
     return;
   }
   const payload = turns
@@ -936,9 +950,17 @@ function seedSessionFromHud() {
   if (!payload.length) {
     return;
   }
+  // Latch before the IPC round-trip so overlapping refresh/load calls do not double-send.
+  sessionHudSeeded = true;
   invoke("hud_seed_session", { turns: payload }).catch(() => {
-    // Seed is best-effort; plaintext softwaked path may already have filled the session.
+    // Allow retry (session may not be open yet; plaintext softwaked may already have seeded).
+    sessionHudSeeded = false;
   });
+}
+
+/** @deprecated name kept for unlock handlers; delegates to maybeSeedSessionFromHud */
+function seedSessionFromHud() {
+  maybeSeedSessionFromHud();
 }
 
 async function refresh() {
@@ -952,8 +974,12 @@ async function refresh() {
     const woke = nextState === "awake" && previousVoiceState !== "awake";
     state = nextState;
     previousVoiceState = nextState;
-    if (woke) {
-      seedSessionFromHud();
+    if (nextState !== "awake") {
+      sessionHudSeeded = false;
+    }
+    // Seed whenever awake+unlocked+turns — not only on the woke edge (vault race).
+    if (woke || nextState === "awake") {
+      maybeSeedSessionFromHud();
     }
     captureRunning = !!snap.capture_running;
     level = typeof snap.level === "number" ? snap.level : 0.02;

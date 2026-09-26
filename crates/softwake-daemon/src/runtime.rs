@@ -1747,7 +1747,7 @@ impl Runtime {
         };
         self.session = TextStubSession::open(instructions.to_owned());
         // Replay plaintext HUD history into the fresh session (encrypted vault
-        // skips here; softwake-ui may SeedChat after unlock).
+        // returns empty without latching; softwake-ui SeedChat after unlock/load).
         let seeded = crate::hud_seed::seed_session(
             &mut self.session,
             crate::hud_seed::load_plaintext_hud_turns(),
