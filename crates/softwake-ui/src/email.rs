@@ -12,6 +12,10 @@ use softwake_providers::{SecretBag, SecretStore, update_bag};
 
 /// Snapshot returned to the window. No secrets.
 #[derive(Debug, Clone, Serialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "snapshot mirrors Settings checkboxes and connection flags"
+)]
 pub struct EmailSnapshot {
     /// Operator opt-in. Default false.
     pub live_enabled: bool,
@@ -35,6 +39,22 @@ pub struct EmailSnapshot {
     pub storage_backend: String,
     /// Storage status. Never a secret.
     pub storage_message: String,
+    /// Whether a Google account is connected.
+    pub google_connected: bool,
+    /// Connected Google account email (empty when disconnected).
+    pub google_email: String,
+    /// Whether a Microsoft account is connected.
+    pub microsoft_connected: bool,
+    /// Connected Microsoft account email (empty when disconnected).
+    pub microsoft_email: String,
+    /// `none`, `google`, or `microsoft` while Connect is in flight.
+    pub oauth_pending: String,
+    /// Operator-facing pending status. Never a token.
+    pub oauth_message: String,
+    /// Authorize URL when pending (for a manual open link). Never a token.
+    pub oauth_authorize_url: String,
+    /// Last OAuth error. Never a token.
+    pub oauth_error: String,
 }
 
 fn open_settings() -> Result<FileEmailSettings, String> {
@@ -59,6 +79,7 @@ fn snapshot_from(
     backend: &str,
     message: &str,
 ) -> EmailSnapshot {
+    let oauth = crate::email_oauth::EmailOauthView::from_bag(bag);
     EmailSnapshot {
         live_enabled: settings.live_enabled,
         smtp_host: settings.smtp_host.clone(),
@@ -71,6 +92,14 @@ fn snapshot_from(
         last_test_message: settings.last_test_message.clone(),
         storage_backend: backend.to_owned(),
         storage_message: message.to_owned(),
+        google_connected: oauth.google_connected,
+        google_email: oauth.google_email,
+        microsoft_connected: oauth.microsoft_connected,
+        microsoft_email: oauth.microsoft_email,
+        oauth_pending: oauth.oauth_pending,
+        oauth_message: oauth.oauth_message,
+        oauth_authorize_url: oauth.oauth_authorize_url,
+        oauth_error: oauth.oauth_error,
     }
 }
 

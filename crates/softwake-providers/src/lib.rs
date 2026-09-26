@@ -7,6 +7,7 @@
 //! [ADR 0013](../../docs/ADR-0013-session-provider.md), and
 //! [ADR 0021](../../docs/ADR-0021-multi-turn-compact.md).
 
+mod account_oauth;
 mod chat;
 mod constants;
 mod context;
@@ -14,6 +15,7 @@ mod handle;
 mod ids;
 mod models;
 mod oauth;
+mod pkce;
 mod probe;
 mod registry;
 mod secrets;
@@ -27,6 +29,15 @@ mod voice;
 #[cfg(feature = "live-http")]
 pub mod live;
 
+pub use account_oauth::{
+    AccountConnection, AccountProvider, GOOGLE_AUTHORIZE_URL, GOOGLE_EMAIL_SCOPES,
+    GOOGLE_REVOKE_URL, GOOGLE_TOKEN_URL, GOOGLE_USERINFO_URL, MICROSOFT_AUTHORIZE_URL,
+    MICROSOFT_EMAIL_SCOPES, MICROSOFT_PROFILE_URL, MICROSOFT_TOKEN_URL, OAUTH_CLIENT_MISSING,
+    PkceStart, exchange_and_profile, google_authorize_url, microsoft_authorize_url,
+    parse_google_profile, parse_microsoft_profile, parse_token_json, publisher_google_client_id,
+    publisher_google_client_secret, publisher_microsoft_client_id, refresh_token_body,
+    revoke_google_refresh, token_exchange_body,
+};
 pub use chat::{
     CHAT_MAX_TOKENS, COMPACT_SYSTEM, ChatError, ChatMessage, ChatRole, PrepareError, PreparedChat,
     complete_chat, complete_compact, extractive_summary, missing_credential_message, prepare_chat,
@@ -52,6 +63,7 @@ pub use oauth::{
     merge_refresh, parse_device_poll, parse_device_start, parse_token_response, refresh_body,
     token_poll_body,
 };
+pub use pkce::{code_challenge, code_verifier, oauth_state};
 pub use probe::{
     ProbeError, TestOutcome, apply_test_outcome, ensure_fresh_access, poll_device_code,
     resolve_bearer, run_test, start_device_code,

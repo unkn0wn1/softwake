@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::account_oauth::AccountConnection;
 use crate::oauth::OAuthTokenSet;
 use crate::secrets_file::{self, FileSecretStore};
 use crate::secrets_keyring::{self, KeyringSecretStore};
@@ -81,6 +82,12 @@ pub struct SecretBag {
     /// Saved SMTP password for opt-in live email.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email_smtp_password: Option<String>,
+    /// Google account connections (Email OAuth). At most one in the Email pane.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub google_connections: Vec<AccountConnection>,
+    /// Microsoft account connections (Email OAuth). At most one in the Email pane.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub microsoft_connections: Vec<AccountConnection>,
 }
 
 fn legacy_version() -> u32 {
@@ -119,6 +126,8 @@ impl std::fmt::Debug for SecretBag {
                 "email_smtp_password",
                 &redact_secret(self.email_smtp_password.as_ref()),
             )
+            .field("google_connections", &self.google_connections)
+            .field("microsoft_connections", &self.microsoft_connections)
             .finish()
     }
 }
@@ -138,6 +147,8 @@ impl SecretBag {
             openrouter_api_key: None,
             openai_compatible_api_key: None,
             email_smtp_password: None,
+            google_connections: Vec::new(),
+            microsoft_connections: Vec::new(),
         }
     }
 
@@ -645,6 +656,12 @@ pub(crate) fn bag_has_secret(bag: &SecretBag) -> bool {
         || bag.xai_oauth.as_ref().is_some_and(|tokens| {
             !tokens.access_token.is_empty() || !tokens.refresh_token.is_empty()
         })
+        || bag.google_connections.iter().any(connection_has_secret)
+        || bag.microsoft_connections.iter().any(connection_has_secret)
+}
+
+fn connection_has_secret(connection: &AccountConnection) -> bool {
+    !connection.access_token.is_empty() || !connection.refresh_token.is_empty()
 }
 
 /// Keyring item body. No version and no backend fields.
@@ -662,6 +679,10 @@ pub(crate) struct SecretPayload {
     pub(crate) email_smtp_password: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) xai_oauth: Option<OAuthTokenSet>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) google_connections: Vec<AccountConnection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) microsoft_connections: Vec<AccountConnection>,
 }
 
 pub(crate) fn encode_payload(bag: &SecretBag) -> Result<String, SecretStoreError> {
@@ -672,6 +693,8 @@ pub(crate) fn encode_payload(bag: &SecretBag) -> Result<String, SecretStoreError
         openai_compatible_api_key: bag.openai_compatible_api_key.clone(),
         email_smtp_password: bag.email_smtp_password.clone(),
         xai_oauth: bag.xai_oauth.clone(),
+        google_connections: bag.google_connections.clone(),
+        microsoft_connections: bag.microsoft_connections.clone(),
     };
     serde_json::to_string(&payload).map_err(|_| SecretStoreError::Keyring)
 }
@@ -698,6 +721,8 @@ pub(crate) fn decode_payload(path: &Path, json: &str) -> Result<SecretBag, Secre
         openrouter_api_key: payload.openrouter_api_key,
         openai_compatible_api_key: payload.openai_compatible_api_key,
         email_smtp_password: payload.email_smtp_password,
+        google_connections: payload.google_connections,
+        microsoft_connections: payload.microsoft_connections,
     })
 }
 

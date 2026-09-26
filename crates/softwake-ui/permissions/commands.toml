@@ -287,3 +287,18 @@ commands.allow = ["skills_save"]
 identifier = "allow-skills-delete"
 description = "Delete a Softwake skill from Settings."
 commands.allow = ["skills_delete"]
+
+[[permission]]
+identifier = "allow-email-oauth-connect"
+description = "Start Google or Microsoft Email OAuth."
+commands.allow = ["email_oauth_connect"]
+
+[[permission]]
+identifier = "allow-email-oauth-disconnect"
+description = "Disconnect Google or Microsoft Email OAuth."
+commands.allow = ["email_oauth_disconnect"]
+
+[[permission]]
+identifier = "allow-email-oauth-cancel"
+description = "Cancel an in-flight Email OAuth connect."
+commands.allow = ["email_oauth_cancel"]

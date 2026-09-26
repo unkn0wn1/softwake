@@ -8,6 +8,7 @@
 
 mod commands;
 mod email;
+mod email_oauth;
 mod ensure_daemon;
 mod hud_pos;
 mod kws_prefs;
@@ -73,6 +74,9 @@ pub fn run() {
             email::email_save,
             email::email_clear_password,
             email::email_test,
+            email_oauth::email_oauth_connect,
+            email_oauth::email_oauth_disconnect,
+            email_oauth::email_oauth_cancel,
             profiles::profiles_snapshot,
             profiles::profile_create,
             profiles::profile_rename,
@@ -387,6 +391,9 @@ mod tests {
         "email_save",
         "email_clear_password",
         "email_test",
+        "email_oauth_connect",
+        "email_oauth_disconnect",
+        "email_oauth_cancel",
         "profiles_snapshot",
         "profile_create",
         "profile_rename",
@@ -445,6 +452,9 @@ mod tests {
         "allow-email-save",
         "allow-email-clear-password",
         "allow-email-test",
+        "allow-email-oauth-connect",
+        "allow-email-oauth-disconnect",
+        "allow-email-oauth-cancel",
         "allow-profiles-snapshot",
         "allow-profile-create",
         "allow-profile-rename",
@@ -501,6 +511,14 @@ mod tests {
         assert!(
             capability.contains("https://auth.x.ai/*"),
             "capability missing https://auth.x.ai/*"
+        );
+        assert!(
+            capability.contains("https://accounts.google.com/*"),
+            "capability missing https://accounts.google.com/*"
+        );
+        assert!(
+            capability.contains("https://login.microsoftonline.com/*"),
+            "capability missing https://login.microsoftonline.com/*"
         );
         assert!(
             !capability.contains("opener:default"),

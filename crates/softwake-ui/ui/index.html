@@ -324,11 +324,32 @@
         <section id="pane-email" class="pane glass hidden" hidden aria-labelledby="email-title">
           <h2 id="email-title">Email</h2>
           <p class="meta">
-            Live email is off by default. Softwake still uses the in-memory mock outbox until you
-            enable live email. Sending stays confirm-gated on the Status pane; this pane never
-            sends mail. Draft-only mode stores a local draft after confirm. Real SMTP is not wired
-            in this scaffold.
+            Connect Google or Microsoft for mail, calendar, and drive. Tokens stay in the secret
+            bag (OS keyring when available). Live send/list stay draft-gated; this pane never
+            sends mail. SMTP below is optional for non-OAuth setups.
           </p>
+          <h3 class="section-title">Accounts</h3>
+          <div class="stack" id="email-oauth-accounts">
+            <div class="row" style="align-items:center;gap:0.75rem;flex-wrap:wrap">
+              <strong>Google</strong>
+              <span id="email-google-status" class="meta">Not connected</span>
+              <button type="button" class="btn-primary" id="email-google-connect">Connect</button>
+              <button type="button" id="email-google-disconnect">Disconnect</button>
+            </div>
+            <div class="row" style="align-items:center;gap:0.75rem;flex-wrap:wrap">
+              <strong>Microsoft</strong>
+              <span id="email-microsoft-status" class="meta">Not connected</span>
+              <button type="button" class="btn-primary" id="email-microsoft-connect">Connect</button>
+              <button type="button" id="email-microsoft-disconnect">Disconnect</button>
+            </div>
+            <p id="email-oauth-pending" class="meta" role="status"></p>
+            <p id="email-oauth-url-line" class="detail hidden">
+              <a id="email-oauth-link" target="_blank" rel="noopener noreferrer"></a>
+              <button type="button" id="email-oauth-cancel">Cancel</button>
+            </p>
+            <p id="email-oauth-error" class="error" role="status"></p>
+          </div>
+          <h3 class="section-title">SMTP (optional)</h3>
           <label class="field row-check">
             <input id="email-live-enabled" type="checkbox" />
             <span>Enable live email (opt-in)</span>

@@ -45,6 +45,9 @@
     "allow-email-save",
     "allow-email-clear-password",
     "allow-email-test",
+    "allow-email-oauth-connect",
+    "allow-email-oauth-disconnect",
+    "allow-email-oauth-cancel",
     "allow-profiles-snapshot",
     "allow-profile-create",
     "allow-profile-rename",
@@ -71,6 +74,12 @@
         },
         {
           "url": "https://auth.x.ai/*"
+        },
+        {
+          "url": "https://accounts.google.com/*"
+        },
+        {
+          "url": "https://login.microsoftonline.com/*"
         }
       ]
     },

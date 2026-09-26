@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::account_oauth::AccountConnection;
 use crate::oauth::OAuthTokenSet;
 use crate::secrets::{
     CURRENT_VERSION, KEYRING_SERVICE, KEYRING_USER, MAX_SECRETS_BYTES, POINTER_IDENTITY_MESSAGE,
@@ -25,6 +26,8 @@ const SECRET_KEYS: &[&str] = &[
     "openai_compatible_api_key",
     "email_smtp_password",
     "xai_oauth",
+    "google_connections",
+    "microsoft_connections",
 ];
 
 /// Parsed secrets file.
@@ -253,6 +256,8 @@ pub(crate) fn write_plaintext(path: &Path, bag: &SecretBag) -> Result<(), Secret
         openai_compatible_api_key: bag.openai_compatible_api_key.clone(),
         email_smtp_password: bag.email_smtp_password.clone(),
         xai_oauth: bag.xai_oauth.clone(),
+        google_connections: bag.google_connections.clone(),
+        microsoft_connections: bag.microsoft_connections.clone(),
     };
     let body = serde_json::to_vec_pretty(&document).map_err(|_| SecretStoreError::Invalid {
         path: path.to_owned(),
@@ -299,6 +304,10 @@ struct PlaintextFile {
     email_smtp_password: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     xai_oauth: Option<OAuthTokenSet>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    google_connections: Vec<AccountConnection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    microsoft_connections: Vec<AccountConnection>,
 }
 
 #[derive(Serialize)]
