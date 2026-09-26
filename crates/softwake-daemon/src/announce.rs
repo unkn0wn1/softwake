@@ -131,11 +131,18 @@ fn speak_now(system: &str, state: VoiceState, prompt: &str, profile: &str, verbo
         }
     };
     if let Err(message) = crate::talk::speak_reply(&ready, &line) {
-        log_skip(
-            verbosity,
-            profile,
-            &format!("state voice skipped: {message}"),
-        );
+        let hint = if message.contains("rejected the credentials") {
+            format!(
+                "state voice skipped: {message} Re-run Providers Test or re-sign in (xAI OAuth)."
+            )
+        } else if message.contains("Could not reach the voice service") {
+            format!(
+                "state voice skipped: {message} Check network, or re-run Providers Test if OAuth expired."
+            )
+        } else {
+            format!("state voice skipped: {message}")
+        };
+        log_skip(verbosity, profile, &hint);
     }
 }
 
