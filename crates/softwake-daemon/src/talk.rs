@@ -26,7 +26,7 @@ pub(crate) fn talk_while(state: &str) -> String {
 
 /// Hibernate refuses before any buffer work.
 pub(crate) const TALK_HIBERNATING: &str =
-    "Softwake is hibernating — leave hibernate from Settings (Wake) or the tray first";
+    "Softwake is hibernating — leave hibernate from Settings (Resume) first";
 
 /// Utterance captured while the mic button is held.
 #[derive(Debug, Default)]

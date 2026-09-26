@@ -19,7 +19,7 @@
 - A compact, undecorated, always-on-top corner window sits above other apps without dominating the screen.
 - While capture is running (sleep or awake listening), the capsule shows **blooming multi-colour particles** (not stars). Density and brightness scale with a **level** input. Quiet is sparse; louder is denser and brighter. Sleep prefers a cooler palette; awake prefers a warmer one when both are easy to distinguish.
 - Clicking the capsule slides out a **chat / type strip**. After idle, the strip fades so only the listening particles remain.
-- Submitting a line uses the existing awake `ask` path (`Client::call_ask`). From sleep, the HUD may send `wake` then `ask` when the soul pack allows awake. Hibernate must be left first (`wake_from_ui` / Settings Wake).
+- Submitting a line uses the existing awake `ask` path (`Client::call_ask`). From sleep, the HUD may send `wake` then `ask` when the soul pack allows awake. Hibernate must be left first (`wake_from_ui` / Settings Resume).
 
 ### Level input (v1)
 
