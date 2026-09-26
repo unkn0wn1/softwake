@@ -18,6 +18,7 @@ mod playback_prefs;
 mod profiles;
 mod providers;
 mod skills;
+mod timers;
 mod tools;
 mod tray;
 mod ui_prefs;
@@ -87,6 +88,9 @@ pub fn run() {
             tools::tools_save,
             tools::tools_set_permission,
             skills::skills_snapshot,
+            timers::timers_snapshot,
+            timers::timers_upsert,
+            timers::timers_delete,
             skills::skills_save,
             skills::skills_delete,
             ui_prefs::ui_prefs_snapshot,
@@ -404,6 +408,9 @@ mod tests {
         "tools_save",
         "tools_set_permission",
         "skills_snapshot",
+        "timers_snapshot",
+        "timers_upsert",
+        "timers_delete",
         "skills_save",
         "skills_delete",
         "ui_prefs_snapshot",

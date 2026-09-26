@@ -302,3 +302,18 @@ commands.allow = ["email_oauth_disconnect"]
 identifier = "allow-email-oauth-cancel"
 description = "Cancel an in-flight Email OAuth connect."
 commands.allow = ["email_oauth_cancel"]
+
+[[permission]]
+identifier = "allow-timers-snapshot"
+description = "Read Timers Settings."
+commands.allow = ["timers_snapshot"]
+
+[[permission]]
+identifier = "allow-timers-upsert"
+description = "Create or update a timer."
+commands.allow = ["timers_upsert"]
+
+[[permission]]
+identifier = "allow-timers-delete"
+description = "Delete a timer."
+commands.allow = ["timers_delete"]

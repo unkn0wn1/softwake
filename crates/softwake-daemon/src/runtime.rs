@@ -183,6 +183,13 @@ impl Runtime {
             talk_transcript: None,
             mode_confirm: crate::mode_confirm::ModeConfirm::default(),
         };
+        #[cfg(test)]
+        {
+            // Pin Tools Settings so a developer tools.json cannot change unit/e2e gates.
+            runtime
+                .hands
+                .set_tools_settings_for_test(Some(softwake_tools::ToolsSettings::default()));
+        }
         // Serve starts in sleep, so the probe is on even at verbosity 0.
         runtime.sync_near_miss_probe();
         Ok(runtime)
@@ -327,6 +334,9 @@ impl Runtime {
         if let Some(outcome) = self.try_shell_ask(text) {
             return outcome;
         }
+        if let Some(outcome) = self.try_schedule_ask(text) {
+            return outcome;
+        }
         if let Some(outcome) = self.try_skill_ask(text) {
             return outcome;
         }
@@ -440,6 +450,15 @@ impl Runtime {
         ))
     }
 
+    /// Fire a schedule reminder: notify sink + fixed TTS + HUD status line.
+    ///
+    /// Runs in any voice state while softwaked is up.
+    pub(crate) fn fire_schedule_reminder(&mut self, notify_line: String, speak_line: String) {
+        self.hands.push_notification(notify_line.clone());
+        self.speak_fixed_line(&speak_line);
+        self.retain_status_text(Some(speak_line), Some(notify_line));
+    }
+
     fn speak_fixed_line(&mut self, line: &str) {
         #[cfg(test)]
         {
@@ -531,6 +550,23 @@ impl Runtime {
         let step = self
             .hands
             .request(&self.machine, softwake_tools::SKILL_SAVE_TOOL, &args);
+        Some(self.outcome_for_request(step))
+    }
+
+    /// When `schedule` is not deny, turn clear reminder lines into a tool call.
+    fn try_schedule_ask(&mut self, text: &str) -> Option<Outcome> {
+        if self
+            .hands
+            .tools_settings()
+            .permission(softwake_tools::SCHEDULE_TOOL)
+            == softwake_tools::ToolPermission::Deny
+        {
+            return None;
+        }
+        let args = crate::schedule_intent::propose_schedule(text)?;
+        let step = self
+            .hands
+            .request(&self.machine, softwake_tools::SCHEDULE_TOOL, &args);
         Some(self.outcome_for_request(step))
     }
 

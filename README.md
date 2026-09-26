@@ -410,3 +410,4 @@ cargo test -p softwake-daemon --features pipewire-capture
 | [docs/ADR-0015-tray-hud.md](docs/ADR-0015-tray-hud.md) | System tray and always-on-top HUD |
 | [docs/ADR-0016-capture-level-hud.md](docs/ADR-0016-capture-level-hud.md) | Capture level on Status → HUD particles |
 | [docs/ADR-0023-email-oauth.md](docs/ADR-0023-email-oauth.md) | Email OAuth: Google / Microsoft Connect on Settings → Email; PKCE + secret bag |
+| [docs/ADR-0024-timers-cron.md](docs/ADR-0024-timers-cron.md) | Per-profile timers / cron; confirm-gated `schedule`; Settings → Timers |

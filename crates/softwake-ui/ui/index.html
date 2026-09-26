@@ -18,6 +18,7 @@
         </div>
         <button type="button" class="nav" id="nav-providers" data-pane="providers">Providers</button>
         <button type="button" class="nav" id="nav-tools" data-pane="tools">Tools</button>
+        <button type="button" class="nav" id="nav-timers" data-pane="timers">Timers</button>
         <button type="button" class="nav" id="nav-skills" data-pane="skills">Skills</button>
         <button type="button" class="nav" id="nav-email" data-pane="email">Email</button>
         <button type="button" class="nav" id="nav-status" data-pane="status" aria-current="page">Status</button>
@@ -283,6 +284,56 @@
         </section>
 
         
+        
+        <section id="pane-timers" class="pane glass hidden" hidden aria-labelledby="timers-title">
+          <h2 id="timers-title">Timers</h2>
+          <p class="lede">
+            Per-profile reminders and cron-like schedules. Softwake owns these files (not system crontab).
+            Times use the host local wall clock (Asia/Bangkok when the host TZ is Asia/Bangkok).
+            Fires while softwaked is running in any voice state; OS suspend skips until catch-up.
+          </p>
+          <label class="row">
+            <input type="checkbox" id="timers-show-all" />
+            <span>Show all profiles</span>
+          </label>
+          <p id="timers-active" class="meta">Active profile: …</p>
+          <div class="field">
+            <label for="timers-list">Schedules</label>
+            <select id="timers-list" aria-label="Schedule list" size="8"></select>
+          </div>
+          <div class="field">
+            <label for="timers-kind">Kind</label>
+            <select id="timers-kind">
+              <option value="daily">daily</option>
+              <option value="once">once</option>
+              <option value="cron">cron</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="timers-when">When</label>
+            <input id="timers-when" type="text" autocomplete="off" spellcheck="false" placeholder="07:30 or 2026-09-27T07:30 or 0 9 * * 1-5" />
+          </div>
+          <div class="field">
+            <label for="timers-title-input">Title</label>
+            <input id="timers-title-input" type="text" maxlength="120" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="timers-message">Message</label>
+            <input id="timers-message" type="text" maxlength="500" autocomplete="off" />
+          </div>
+          <label class="row">
+            <input type="checkbox" id="timers-enabled" checked />
+            <span>Enabled</span>
+          </label>
+          <div class="row gap">
+            <button type="button" class="btn" id="timers-new">New</button>
+            <button type="button" class="btn" id="timers-save">Save</button>
+            <button type="button" class="btn" id="timers-delete">Delete</button>
+          </div>
+          <p id="timers-status" class="meta" aria-live="polite"></p>
+          <p id="timers-error" class="error" role="alert"></p>
+        </section>
+
         <section id="pane-skills" class="pane glass hidden" hidden aria-labelledby="skills-title">
           <h2 id="skills-title">Skills</h2>
           <p class="meta">

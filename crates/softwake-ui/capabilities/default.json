@@ -85,6 +85,9 @@
     },
     "allow-skills-snapshot",
     "allow-skills-save",
-    "allow-skills-delete"
+    "allow-skills-delete",
+    "allow-timers-snapshot",
+    "allow-timers-upsert",
+    "allow-timers-delete"
   ]
 }
