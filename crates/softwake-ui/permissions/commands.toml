@@ -24,6 +24,11 @@ description = "Ask the daemon to record a soul reload."
 commands.allow = ["reload_soul"]
 
 [[permission]]
+identifier = "allow-set-voice-test"
+description = "Turn voice test mode on or off. Microphone speech is not sent to chat."
+commands.allow = ["set_voice_test"]
+
+[[permission]]
 identifier = "allow-confirm-tool"
 description = "Confirm a pending tool."
 commands.allow = ["confirm_tool"]

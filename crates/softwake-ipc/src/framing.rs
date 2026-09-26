@@ -213,6 +213,7 @@ mod tests {
                     context_used: None,
                     context_limit: None,
                     context_compacted: false,
+                    voice_test: false,
                 }),
             }),
             line(&ServerMessage::Event {

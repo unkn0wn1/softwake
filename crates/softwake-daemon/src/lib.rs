@@ -14,6 +14,7 @@
 //! Sleep and hibernate refuse every tool. Confirming `email_send` appends one
 //! in-memory message and does not open a socket.
 
+mod announce;
 mod capture;
 mod chat;
 mod cli;
@@ -27,6 +28,7 @@ mod serve;
 mod shell_intent;
 mod soul;
 mod talk;
+mod verbose_log;
 
 #[cfg(test)]
 mod e2e;

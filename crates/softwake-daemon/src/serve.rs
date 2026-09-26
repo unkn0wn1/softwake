@@ -64,15 +64,19 @@ pub(crate) fn run(
     soul_dir: SoulDir,
     capture: CaptureKind,
     verbosity: u8,
+    voice_test: bool,
 ) -> Result<(), ServeError> {
     let path = resolve_socket_path(socket)?;
-    let handle = spawn(path.clone(), soul_dir, capture, verbosity)?;
+    let handle = spawn(path.clone(), soul_dir, capture, verbosity, voice_test)?;
     println!("softwaked serve");
     println!("listening: {}", path.display());
     println!("protocol: {PROTOCOL_VERSION}");
     println!("capture: {}", capture.as_str());
     if verbosity > 0 {
         println!("verbose: {verbosity}");
+    }
+    if voice_test {
+        println!("voice test: on");
     }
     handle.wait()
 }
@@ -87,11 +91,12 @@ pub(crate) fn spawn(
     soul_dir: SoulDir,
     capture: CaptureKind,
     verbosity: u8,
+    voice_test: bool,
 ) -> Result<ServeHandle, ServeError> {
     // Build the runtime *before* binding. A sticky Secret Service Unlock (or any
     // other init stall) must not leave a listening socket that queues clients
     // forever with no accept thread.
-    let shared = Arc::new(Shared::new(soul_dir, capture, verbosity)?);
+    let shared = Arc::new(Shared::new(soul_dir, capture, verbosity, voice_test)?);
     #[cfg(test)]
     let shared_for_handle = Arc::clone(&shared);
     let listener = Listener::bind(&path)?;
@@ -267,11 +272,14 @@ impl Shared {
         soul_dir: SoulDir,
         capture: CaptureKind,
         verbosity: u8,
+        voice_test: bool,
     ) -> Result<Self, crate::capture::CaptureError> {
+        let mut runtime = Runtime::with_capture_verbosity(soul_dir, capture, verbosity)?;
+        if voice_test {
+            let _ = runtime.set_voice_test(true);
+        }
         Ok(Self {
-            runtime: Mutex::new(Runtime::with_capture_verbosity(
-                soul_dir, capture, verbosity,
-            )?),
+            runtime: Mutex::new(runtime),
             last_status: Mutex::new(None),
             subscribers: Mutex::new(Vec::new()),
             clients: Mutex::new(Vec::new()),
@@ -449,6 +457,10 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
             let outcome = lock(&shared.runtime).talk_stop();
             reply(shared, tx, id, outcome)
         }
+        Ok(ClientMessage::SetVoiceTest { id, enabled }) => {
+            let outcome = lock(&shared.runtime).set_voice_test(enabled);
+            reply(shared, tx, id, outcome)
+        }
         Ok(ClientMessage::Hello { .. }) => false,
         Err(error) if error.is_disconnect() => false,
         Err(error) => {
@@ -501,6 +513,7 @@ fn publish_thinking(shared: &Shared, detail: &str) {
             context_used: None,
             context_limit: None,
             context_compacted: false,
+            voice_test: false,
         });
     }
 }
@@ -549,6 +562,7 @@ fn placeholder_status() -> Status {
         context_used: None,
         context_limit: None,
         context_compacted: false,
+        voice_test: false,
     }
 }
 

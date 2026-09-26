@@ -41,11 +41,11 @@ pub(crate) fn decide(from: VoiceState, event: Event) -> Result<Decision, StateEr
             to: VoiceState::Sleep,
             effects: RELEASE,
         }),
-        (VoiceState::Sleep, Event::UiHibernate) => Ok(Decision {
+        (VoiceState::Sleep, Event::UiHibernate | Event::HibernatePhrase) => Ok(Decision {
             to: VoiceState::Hibernate,
             effects: STOP_CAPTURE,
         }),
-        (VoiceState::Awake, Event::UiHibernate) => Ok(Decision {
+        (VoiceState::Awake, Event::UiHibernate | Event::HibernatePhrase) => Ok(Decision {
             to: VoiceState::Hibernate,
             effects: RELEASE_AND_STOP,
         }),
@@ -66,7 +66,7 @@ pub(crate) fn decide(from: VoiceState, event: Event) -> Result<Decision, StateEr
             event,
             "already awake; a wake phrase does not open a second session",
         )),
-        (VoiceState::Hibernate, Event::WakePhrase) => Err(illegal(
+        (VoiceState::Hibernate, Event::WakePhrase | Event::HibernatePhrase) => Err(illegal(
             from,
             event,
             "hibernate does not capture audio; only the UI can leave hibernate",
@@ -129,6 +129,18 @@ mod tests {
                 &[Effect::ReleaseActingResources, Effect::StopCapture][..],
             ),
             (
+                VoiceState::Sleep,
+                Event::HibernatePhrase,
+                VoiceState::Hibernate,
+                &[Effect::StopCapture][..],
+            ),
+            (
+                VoiceState::Awake,
+                Event::HibernatePhrase,
+                VoiceState::Hibernate,
+                &[Effect::ReleaseActingResources, Effect::StopCapture][..],
+            ),
+            (
                 VoiceState::Hibernate,
                 Event::UiResume,
                 VoiceState::Sleep,
@@ -182,6 +194,11 @@ mod tests {
                 VoiceState::Hibernate,
                 Event::UiHibernate,
                 "already hibernating",
+            ),
+            (
+                VoiceState::Hibernate,
+                Event::HibernatePhrase,
+                "hibernate does not capture audio; only the UI can leave hibernate",
             ),
         ];
 

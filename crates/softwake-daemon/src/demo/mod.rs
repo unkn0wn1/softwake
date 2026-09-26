@@ -522,6 +522,7 @@ impl Demo {
             budget,
             compact,
             complete,
+            |_| {},
         ) {
             Ok(ok) => {
                 if ok.context.compacted {
@@ -613,6 +614,7 @@ impl Demo {
         match hit {
             PhraseHit::Wake => lines.extend(self.transition(Event::WakePhrase)),
             PhraseHit::Sleep => lines.extend(self.transition(Event::SleepPhrase)),
+            PhraseHit::Hibernate => lines.extend(self.transition(Event::HibernatePhrase)),
             PhraseHit::None => self.push_verbose(&mut lines, "transition: none"),
         }
         self.with_status(lines)

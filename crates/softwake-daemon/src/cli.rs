@@ -42,6 +42,7 @@ where
             soul_dir,
             capture,
             verbosity,
+            voice_test,
         }) => {
             let dir = match resolve_soul_dir(soul_dir.as_deref()) {
                 Ok(dir) => dir,
@@ -52,7 +53,7 @@ where
             };
             let verbosity =
                 merge_serve_verbosity(verbosity, env::var("SOFTWAKE_LOG").ok().as_deref());
-            match serve::run(socket.as_deref(), dir, capture, verbosity) {
+            match serve::run(socket.as_deref(), dir, capture, verbosity, voice_test) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
                     eprintln!("softwaked: {error}");
@@ -158,6 +159,10 @@ fn debug_log_requested(value: Option<&str>) -> bool {
     matches!(value.map(str::trim), Some("debug"))
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "operator usage text is one string the help test matches"
+)]
 fn help_text() -> &'static str {
     r#"softwaked — Softwake daemon
 
@@ -170,8 +175,10 @@ Usage:
   softwaked demo --soul-dir PATH
   softwaked serve           listen for ctl and UI clients
   softwaked --serve         same as serve
-  softwaked serve -v        KWS hear/match logs (keyword + wake/sleep)
+  softwaked serve -v        KWS hear/match logs (keyword + wake/sleep/hibernate) and context size
   softwaked serve -vv       also mic-energy lines while sleeping
+  softwaked serve --voice-test
+                            phrase transitions and state voice; mic speech is not sent to chat
   softwaked -vv serve       same leading verbosity before serve
   softwaked serve --socket PATH
   softwaked serve --soul-dir PATH
@@ -182,6 +189,8 @@ Usage:
   softwaked ctl wake        enter awake from sleep (valid soul pack required)
   softwaked ctl sleep       sleep from awake
   softwaked ctl reload-soul re-read the soul pack; it applies on the next awake
+  softwaked ctl voice-test [on|off]
+                            show or set voice test mode (default off; not saved)
   softwaked ctl tool NAME [ARG...]
                             run one tool while awake, or stage a confirm-gated tool
   softwaked ctl confirm-tool ID
@@ -220,6 +229,18 @@ glossary.md are present, non-empty, and valid UTF-8. glossary.md must
 parse as an alias map. Each file is at most 1 MiB. Hibernate, sleep,
 and resume still run when the pack is missing. reload-soul reads the
 files again; the new text applies on the next awake.
+
+Voice phrases add bare "hi" (wake), bare "sleep" (sleep), and "deep sleep"
+(hibernate). Existing profile and product phrases stay. "deep sleep" stops
+listening. Only ctl resume or the UI Resume button leaves hibernate, and that
+lands in sleep. ctl wake still enters awake from sleep when the soul pack is
+valid. --voice-test keeps those phrase transitions and the short state voice,
+and does not send microphone speech to the chat model. Typed ctl ask still
+works. The flag clears when serve exits.
+
+At -v, KWS lines include profile=<name> (and id=<id> when they differ) and
+context lines show sent / before_compact sizes. A compact line shows before,
+after, and the real compact threshold.
 
 Serve owns the voice-state machine and capture. Default capture is mock.
 `--capture pipewire` (or SOFTWAKE_CAPTURE=pipewire) opens the default
@@ -283,6 +304,8 @@ enum Mode {
         capture: CaptureKind,
         /// `0` quiet, `1` (`-v`), `2` (`-vv`).
         verbosity: u8,
+        /// Phrase lab: no microphone speech is sent to chat. Default off.
+        voice_test: bool,
     },
     Ctl {
         socket: Option<PathBuf>,
@@ -356,6 +379,7 @@ fn parse_serve_flags(
     let mut soul_dir = None;
     let mut capture_flag = None;
     let mut verbosity = leading_verbosity;
+    let mut voice_test = false;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -363,6 +387,12 @@ fn parse_serve_flags(
             "--soul-dir" => take_value("serve", "--soul-dir", &mut args, &mut soul_dir)?,
             "--verbose" | "-v" => verbosity = verbosity.saturating_add(1).min(2),
             "-vv" => verbosity = 2,
+            "--voice-test" => {
+                if voice_test {
+                    return Err("serve accepts one --voice-test".to_owned());
+                }
+                voice_test = true;
+            }
             "--capture" => {
                 if capture_flag.is_some() {
                     return Err("serve accepts one --capture".to_owned());
@@ -384,6 +414,7 @@ fn parse_serve_flags(
         soul_dir,
         capture,
         verbosity,
+        voice_test,
     })
 }
 
@@ -427,7 +458,7 @@ fn parse_ctl(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
 fn ctl_command(positional: &[String]) -> Result<CtlAction, String> {
     match positional {
         [] => Err(
-            "ctl needs a command: status, hibernate, resume, wake, sleep, reload-soul, tool, confirm-tool, cancel-tool, ask, chat"
+            "ctl needs a command: status, hibernate, resume, wake, sleep, reload-soul, voice-test, tool, confirm-tool, cancel-tool, ask, chat"
                 .to_owned(),
         ),
         [name] if name == "tool" => Err("ctl tool needs a tool name".to_owned()),
@@ -435,6 +466,19 @@ fn ctl_command(positional: &[String]) -> Result<CtlAction, String> {
             Err(format!("ctl {name} needs a pending id"))
         }
         [name] if name == "ask" || name == "chat" => Err(format!("ctl {name} needs text")),
+        [name] if name == "voice-test" => Ok(CtlAction::VoiceTest { enabled: None }),
+        [name, value] if name == "voice-test" => match value.as_str() {
+            "on" => Ok(CtlAction::VoiceTest {
+                enabled: Some(true),
+            }),
+            "off" => Ok(CtlAction::VoiceTest {
+                enabled: Some(false),
+            }),
+            other => Err(format!("ctl voice-test expects on or off (got {other})")),
+        },
+        [name, _, extra, ..] if name == "voice-test" => {
+            Err(format!("ctl voice-test takes one of on or off (got extra {extra})"))
+        }
         [name, tool_name, tool_args @ ..] if name == "tool" => Ok(CtlAction::Tool {
             name: tool_name.to_ascii_lowercase(),
             args: tool_args.to_vec(),
@@ -647,6 +691,7 @@ mod tests {
                 soul_dir: None,
                 capture: CaptureKind::Mock,
                 verbosity: 0,
+                voice_test: false,
             })
         );
         assert_eq!(
@@ -662,6 +707,7 @@ mod tests {
                 soul_dir: Some(PathBuf::from("/tmp/soul")),
                 capture: CaptureKind::Mock,
                 verbosity: 0,
+                voice_test: false,
             })
         );
         assert_eq!(
@@ -737,6 +783,7 @@ mod tests {
                 soul_dir: None,
                 capture: CaptureKind::Mock,
                 verbosity: 1,
+                voice_test: false,
             })
         );
         assert_eq!(
@@ -746,6 +793,7 @@ mod tests {
                 soul_dir: None,
                 capture: CaptureKind::Mock,
                 verbosity: 2,
+                voice_test: false,
             })
         );
         assert_eq!(
@@ -755,6 +803,7 @@ mod tests {
                 soul_dir: None,
                 capture: CaptureKind::Mock,
                 verbosity: 2,
+                voice_test: false,
             })
         );
         assert_eq!(
@@ -764,7 +813,63 @@ mod tests {
                 soul_dir: None,
                 capture: CaptureKind::Mock,
                 verbosity: 2,
+                voice_test: false,
             })
+        );
+    }
+
+    #[test]
+    fn voice_test_flag_defaults_off_and_ctl_parses_on_off() {
+        assert_eq!(
+            parse_args(["serve".to_owned(), "--voice-test".to_owned()]),
+            Ok(Mode::Serve {
+                socket: None,
+                soul_dir: None,
+                capture: CaptureKind::Mock,
+                verbosity: 0,
+                voice_test: true,
+            })
+        );
+        assert!(
+            parse_args([
+                "serve".to_owned(),
+                "--voice-test".to_owned(),
+                "--voice-test".to_owned()
+            ])
+            .is_err()
+        );
+        assert_eq!(
+            parse_args(["ctl".to_owned(), "voice-test".to_owned()]),
+            Ok(Mode::Ctl {
+                socket: None,
+                command: CtlAction::VoiceTest { enabled: None },
+            })
+        );
+        assert_eq!(
+            parse_args(["ctl".to_owned(), "voice-test".to_owned(), "on".to_owned()]),
+            Ok(Mode::Ctl {
+                socket: None,
+                command: CtlAction::VoiceTest {
+                    enabled: Some(true),
+                },
+            })
+        );
+        assert_eq!(
+            parse_args(["ctl".to_owned(), "voice-test".to_owned(), "off".to_owned()]),
+            Ok(Mode::Ctl {
+                socket: None,
+                command: CtlAction::VoiceTest {
+                    enabled: Some(false),
+                },
+            })
+        );
+        assert!(
+            parse_args([
+                "ctl".to_owned(),
+                "voice-test".to_owned(),
+                "maybe".to_owned()
+            ])
+            .is_err()
         );
     }
 

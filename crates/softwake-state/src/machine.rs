@@ -176,7 +176,9 @@ impl Machine {
             Event::SleepPhrase | Event::UiSleep | Event::UiResume => PhraseGate::BlockWake {
                 until: self.now.saturating_add(self.config.post_sleep),
             },
-            Event::UiHibernate => PhraseGate::Open,
+            // Mic is about to stop, so a phrase loop cannot carry hibernate
+            // into awake. Same gate as the UI hibernate button.
+            Event::UiHibernate | Event::HibernatePhrase => PhraseGate::Open,
         };
     }
 }
@@ -268,6 +270,7 @@ mod tests {
             (VoiceState::Hibernate, Event::SleepPhrase),
             (VoiceState::Hibernate, Event::UiSleep),
             (VoiceState::Hibernate, Event::UiHibernate),
+            (VoiceState::Hibernate, Event::HibernatePhrase),
         ];
         for (state, event) in cases {
             let mut machine = machine_in(state);
@@ -404,6 +407,54 @@ mod tests {
             machine.apply(Event::WakePhrase).expect("later wake").to,
             VoiceState::Awake
         );
+    }
+
+    #[test]
+    fn hibernate_phrase_from_sleep_and_awake_stops_capture() {
+        let mut asleep = machine_in(VoiceState::Sleep);
+        let applied = asleep
+            .apply(Event::HibernatePhrase)
+            .expect("hibernate from sleep");
+        assert_eq!(applied.to, VoiceState::Hibernate);
+        assert_eq!(applied.effects, &[Effect::StopCapture]);
+        assert!(!asleep.state().allows_capture());
+        assert!(!asleep.state().allows_tool_dispatch());
+
+        let mut awake = machine_in(VoiceState::Awake);
+        let applied = awake
+            .apply(Event::HibernatePhrase)
+            .expect("hibernate from awake");
+        assert_eq!(
+            applied.effects,
+            &[Effect::ReleaseActingResources, Effect::StopCapture]
+        );
+        assert_eq!(awake.state(), VoiceState::Hibernate);
+        assert!(!awake.state().allows_capture());
+        assert_eq!(accepted_dispatches(&awake, 4), 0);
+    }
+
+    #[test]
+    fn hibernate_phrase_cannot_leave_hibernate() {
+        let mut machine = machine_in(VoiceState::Hibernate);
+        let error = machine
+            .apply(Event::HibernatePhrase)
+            .expect_err("voice cannot leave hibernate");
+        assert!(matches!(error, StateError::IllegalTransition { .. }));
+        assert_eq!(machine.state(), VoiceState::Hibernate);
+        let resumed = machine.apply(Event::UiResume).expect("ui resume");
+        assert_eq!(resumed.to, VoiceState::Sleep);
+        assert!(!resumed.effects.contains(&Effect::OpenSession));
+    }
+
+    #[test]
+    fn post_wake_cooldown_does_not_block_hibernate_phrase() {
+        let mut machine = Machine::new(CooldownConfig::default());
+        machine.apply(Event::WakePhrase).expect("wake");
+        let applied = machine
+            .apply(Event::HibernatePhrase)
+            .expect("deep sleep during post-wake cooldown");
+        assert_eq!(applied.to, VoiceState::Hibernate);
+        assert!(!machine.state().allows_capture());
     }
 
     #[test]

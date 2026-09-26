@@ -114,6 +114,34 @@ impl LoadedSoul {
         }
     }
 
+    /// Directory basename of the loaded pack. Empty when the path has no name.
+    ///
+    /// This is the profile id when the directory is `profiles/<id>`. A
+    /// `--soul-dir` that is not a profile folder still reports that basename.
+    /// Nothing here is invented.
+    pub(crate) fn profile_id(&self) -> String {
+        self.dir
+            .path()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("")
+            .to_owned()
+    }
+
+    /// `profile=<name>` plus `id=<id>` when the id is present and differs.
+    ///
+    /// The name is [`Self::agent_name`]: the loaded profile name, or the
+    /// product default `Softwake` when that name is blank.
+    pub(crate) fn profile_log_token(&self) -> String {
+        let name = self.agent_name();
+        let id = self.profile_id();
+        if id.is_empty() || id.eq_ignore_ascii_case(&name) {
+            format!("profile={name}")
+        } else {
+            format!("profile={name} id={id}")
+        }
+    }
+
     pub(crate) fn applied_instructions(&self) -> Option<&str> {
         self.applied.as_deref()
     }

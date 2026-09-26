@@ -96,6 +96,12 @@ pub enum Event {
     WakePhrase,
     /// The local wake engine accepted a sleep phrase.
     SleepPhrase,
+    /// The local wake engine accepted the hibernate phrase (`deep sleep`).
+    ///
+    /// Legal from sleep and from awake. Lands in hibernate and stops capture.
+    /// It does not leave hibernate: only [`Self::UiResume`] does that, and
+    /// resume lands in sleep.
+    HibernatePhrase,
     /// The UI asked to end the acting session and return to sleep.
     UiSleep,
     /// The UI asked to hibernate. Legal from sleep and from awake.
@@ -115,6 +121,7 @@ impl Event {
         match self {
             Self::WakePhrase => "wake phrase",
             Self::SleepPhrase => "sleep phrase",
+            Self::HibernatePhrase => "hibernate phrase",
             Self::UiSleep => "UI sleep",
             Self::UiHibernate => "UI hibernate",
             Self::UiResume => "UI resume",

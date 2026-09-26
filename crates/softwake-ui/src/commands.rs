@@ -57,6 +57,22 @@ pub fn sleep() -> Result<Status, String> {
     call(Command::Sleep)
 }
 
+/// Turn voice test mode on or off for the running daemon.
+///
+/// Phrases and the short state voice still run. Microphone speech is not sent
+/// to chat. The flag clears when that daemon process exits.
+///
+/// # Errors
+///
+/// Returns the daemon or socket error as text.
+#[tauri::command]
+pub fn set_voice_test(enabled: bool) -> Result<Status, String> {
+    let mut client = connect()?;
+    client
+        .set_voice_test(enabled)
+        .map_err(|error| error.to_string())
+}
+
 /// Ask the daemon to re-read the soul pack. It applies on the next awake.
 ///
 /// # Errors

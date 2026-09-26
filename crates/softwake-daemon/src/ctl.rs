@@ -51,6 +51,11 @@ pub(crate) enum CtlAction {
         /// User line. Blank text is rejected before connect.
         text: String,
     },
+    /// `ctl voice-test` with no argument prints the flag. `on` / `off` sets it.
+    VoiceTest {
+        /// `None` reads status. `Some` sets the flag for this daemon process.
+        enabled: Option<bool>,
+    },
 }
 
 impl CtlAction {
@@ -86,6 +91,10 @@ pub(crate) fn run(path: &Path, action: &CtlAction) -> Result<String, CallError> 
         CtlAction::ConfirmTool { pending_id } => call_confirm(path, pending_id)?,
         CtlAction::CancelTool { pending_id } => call_cancel(path, pending_id)?,
         CtlAction::Ask { text } | CtlAction::Chat { text } => call_ask(path, text)?,
+        CtlAction::VoiceTest { enabled } => match enabled {
+            None => call(path, Command::GetStatus)?,
+            Some(enabled) => call_voice_test(path, *enabled)?,
+        },
     };
     Ok(format_status(&status))
 }
@@ -108,6 +117,16 @@ pub(crate) fn call(path: &Path, command: Command) -> Result<Status, CallError> {
 pub(crate) fn call_tool(path: &Path, name: &str, args: &[String]) -> Result<Status, CallError> {
     let mut client = Client::connect(path)?;
     client.call_tool(name, args)
+}
+
+/// Connect and set voice test mode.
+///
+/// # Errors
+///
+/// Returns [`CallError`] when the daemon cannot be reached or rejects the update.
+pub(crate) fn call_voice_test(path: &Path, enabled: bool) -> Result<Status, CallError> {
+    let mut client = Client::connect(path)?;
+    client.set_voice_test(enabled)
 }
 
 /// Connect and send one ask.
@@ -175,8 +194,9 @@ pub(crate) fn format_status(status: &Status) -> String {
         },
         None => "unknown".to_owned(),
     };
+    let voice_test = if status.voice_test { "on" } else { "off" };
     let mut text = format!(
-        "state: {}\ncapture: {capture}\nsoul: {soul}\nsoul reload: {reload}\n",
+        "state: {}\ncapture: {capture}\nsoul: {soul}\nsoul reload: {reload}\nvoice test: {voice_test}\n",
         status.state
     );
     if let Some(level) = status.capture_level {

@@ -37,6 +37,7 @@ pub fn run() {
             commands::resume,
             commands::sleep,
             commands::reload_soul,
+            commands::set_voice_test,
             commands::confirm_tool,
             commands::cancel_tool,
             commands::wake,

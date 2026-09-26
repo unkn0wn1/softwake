@@ -47,13 +47,13 @@ impl PcmEngine {
             let detector = softwake_wake::SherpaKwsDetector::for_agent(agent_name);
             if detector.weights_loaded() {
                 eprintln!(
-                    "softwaked: KWS weights loaded from {} (agent `{agent_name}`)",
+                    "softwaked: KWS profile={agent_name} weights loaded from {}",
                     detector.model_dir().display()
                 );
                 return Self::Sherpa(detector);
             }
             eprintln!(
-                "softwaked: sherpa-kws built but weights missing under {} — voice wake idle; run scripts/install-kws-weights.sh (see README)",
+                "softwaked: KWS profile={agent_name} weights missing under {} — voice wake idle; run scripts/install-kws-weights.sh (see README)",
                 softwake_wake::SherpaKwsDetector::default_model_dir().display()
             );
         }
@@ -109,6 +109,18 @@ impl PcmEngine {
         }
     }
 
+    /// Configured hibernate phrases when sherpa is loaded; empty for null.
+    #[must_use]
+    pub(crate) fn hibernate_phrases(&self) -> &[String] {
+        match self {
+            Self::Null(_) => &[],
+            #[cfg(feature = "sherpa-kws")]
+            Self::Sherpa(detector) => detector.hibernate_phrases(),
+            #[cfg(test)]
+            Self::Scripted(_) => &[],
+        }
+    }
+
     /// Model directory when sherpa is in use.
     #[must_use]
     pub(crate) fn model_dir_display(&self) -> String {
@@ -128,6 +140,7 @@ impl PcmEngine {
             Self::Null(detector) => SpotDetail {
                 hit: detector.push_samples(samples),
                 keyword: None,
+                silence_reset: false,
             },
             #[cfg(feature = "sherpa-kws")]
             Self::Sherpa(detector) => detector.push_samples_detailed(samples),
@@ -137,9 +150,14 @@ impl PcmEngine {
                 let keyword = match hit {
                     PhraseHit::Wake => Some("scripted-wake".to_owned()),
                     PhraseHit::Sleep => Some("scripted-sleep".to_owned()),
+                    PhraseHit::Hibernate => Some("scripted-hibernate".to_owned()),
                     PhraseHit::None => None,
                 };
-                SpotDetail { hit, keyword }
+                SpotDetail {
+                    hit,
+                    keyword,
+                    silence_reset: false,
+                }
             }
         }
     }
@@ -151,14 +169,16 @@ impl PcmEngine {
     }
 
     /// One-shot startup summary (profile phrases, backend, weights).
-    pub(crate) fn log_startup(&self, agent_name: &str, verbosity: u8) {
+    ///
+    /// `profile` is already `profile=<name>` or `profile=<name> id=<id>`.
+    pub(crate) fn log_startup(&self, profile: &str, verbosity: u8) {
         let feature = if cfg!(feature = "sherpa-kws") {
             "sherpa-kws"
         } else {
             "off"
         };
         eprintln!(
-            "softwaked: KWS startup agent=`{agent_name}` backend={} feature={feature} weights_loaded={}",
+            "softwaked: KWS {profile} startup backend={} feature={feature} weights_loaded={}",
             self.backend_name(),
             self.weights_loaded()
         );
@@ -168,28 +188,30 @@ impl PcmEngine {
         if verbosity >= 1 || self.weights_loaded() {
             let wake = self.wake_phrases();
             let sleep = self.sleep_phrases();
-            if wake.is_empty() && sleep.is_empty() {
+            let hibernate = self.hibernate_phrases();
+            if wake.is_empty() && sleep.is_empty() && hibernate.is_empty() {
                 eprintln!(
-                    "softwaked: KWS phrases=(none — null detector; say-configured wake phrases will not match)"
+                    "softwaked: KWS {profile} phrases=(none — null detector; say-configured wake phrases will not match)"
                 );
             } else {
                 eprintln!(
-                    "softwaked: KWS wake_phrases=[{}] sleep_phrases=[{}]",
+                    "softwaked: KWS {profile} wake_phrases=[{}] sleep_phrases=[{}] hibernate_phrases=[{}]",
                     wake.join(", "),
-                    sleep.join(", ")
+                    sleep.join(", "),
+                    hibernate.join(", ")
                 );
             }
-            self.log_registered_keywords(verbosity);
+            self.log_registered_keywords(profile, verbosity);
         }
         if verbosity >= 1 {
             eprintln!(
-                "softwaked: KWS verbose={verbosity} (-v logs keyword hear/match; -vv also logs mic energy while sleeping)"
+                "softwaked: KWS {profile} verbose={verbosity} (-v logs keyword hear/match; -vv also logs mic energy while sleeping)"
             );
         }
     }
 
     /// Log which phrases actually entered sherpa `keywords_buf` vs encode skips.
-    fn log_registered_keywords(&self, verbosity: u8) {
+    fn log_registered_keywords(&self, profile: &str, verbosity: u8) {
         #[cfg(feature = "sherpa-kws")]
         {
             if let Self::Sherpa(detector) = self {
@@ -197,21 +219,21 @@ impl PcmEngine {
                 let skipped = detector.skipped_phrases();
                 if verbosity >= 1 || !skipped.is_empty() || detector.weights_loaded() {
                     eprintln!(
-                        "softwaked: KWS keywords registered=[{}] skipped=[{}]",
+                        "softwaked: KWS {profile} keywords registered=[{}] skipped=[{}]",
                         registered.join(", "),
                         skipped.join(", ")
                     );
                 }
                 for phrase in skipped {
                     eprintln!(
-                        "softwaked: KWS skipped unencodable phrase=`{phrase}` (not in sherpa keywords_buf)"
+                        "softwaked: KWS {profile} skipped unencodable phrase=`{phrase}` (not in sherpa keywords_buf)"
                     );
                 }
             }
         }
         #[cfg(not(feature = "sherpa-kws"))]
         {
-            let _ = (self, verbosity);
+            let _ = (self, profile, verbosity);
         }
     }
 }

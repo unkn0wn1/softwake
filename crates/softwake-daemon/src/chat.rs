@@ -92,10 +92,33 @@ pub(crate) fn appendix_for_ask(
 /// Context usage recorded for Status after one ask.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AskContext {
+    /// Tokens about to be sent (after compaction, when it ran).
     pub(crate) used: u32,
+    /// Tokens estimated before compaction.
+    pub(crate) before_compact: u32,
     pub(crate) limit: u32,
     pub(crate) percent: u8,
     pub(crate) compacted: bool,
+    /// Resolved Settings compact percent (not a hardcoded 80).
+    pub(crate) threshold_percent: u8,
+}
+
+/// `softwaked: context profile=… sent=… before_compact=… limit=… (N%)`
+#[must_use]
+pub(crate) fn format_context_sent_line(profile: &str, context: &AskContext) -> String {
+    format!(
+        "softwaked: context {profile} sent={} before_compact={} limit={} ({}%)",
+        context.used, context.before_compact, context.limit, context.percent
+    )
+}
+
+/// `softwaked: compact profile=… before=… after=… threshold=N%`
+#[must_use]
+pub(crate) fn format_compact_line(profile: &str, context: &AskContext) -> String {
+    format!(
+        "softwaked: compact {profile} before={} after={} threshold={}%",
+        context.before_compact, context.used, context.threshold_percent
+    )
 }
 
 /// Successful ask with context accounting.
@@ -162,6 +185,7 @@ pub(crate) fn perform_ask(
     budget: ContextBudget,
     compact: impl FnOnce(&[SessionMessage]) -> Result<String, String>,
     complete: impl FnOnce(&str, &[SessionMessage]) -> Result<String, String>,
+    mut trace: impl FnMut(&AskContext),
 ) -> Result<AskOk, AskReject> {
     if text.trim().is_empty() {
         return Err(AskReject::NeedsText);
@@ -174,8 +198,8 @@ pub(crate) fn perform_ask(
     };
     let system = assemble_system(instructions, appendix);
     let mut compacted = false;
-    let estimated = estimate_ask_usage(&system, session.messages(), text);
-    if should_compact(estimated, budget.limit, budget.compact_at_percent)
+    let before_compact = estimate_ask_usage(&system, session.messages(), text);
+    if should_compact(before_compact, budget.limit, budget.compact_at_percent)
         && session.messages().len() > budget.keep_recent
     {
         let prefix_len = session.messages().len() - budget.keep_recent;
@@ -193,10 +217,13 @@ pub(crate) fn perform_ask(
     let used = estimate_ask_usage(&system, session.messages(), text);
     let context = AskContext {
         used,
+        before_compact,
         limit: budget.limit,
         percent: usage_percent(used, budget.limit),
         compacted,
+        threshold_percent: budget.compact_at_percent,
     };
+    trace(&context);
     match session.ask(text, appendix, complete) {
         Ok(reply) => Ok(AskOk { reply, context }),
         Err(SessionError::Empty) => Err(AskReject::NeedsText),
@@ -298,6 +325,22 @@ impl DiskChat {
     pub(crate) fn prepared_tts_voice(&self) -> &str {
         &self.tts_voice
     }
+}
+
+/// One completion that is not recorded on a session.
+///
+/// `complete` receives the soul system text and exactly one user message.
+///
+/// # Errors
+///
+/// Whatever `complete` returns.
+pub(crate) fn complete_oneshot(
+    system: &str,
+    prompt: &str,
+    complete: impl FnOnce(&str, &[softwake_providers::ChatMessage]) -> Result<String, String>,
+) -> Result<String, String> {
+    let (system, messages) = crate::announce::oneshot_messages(system, prompt);
+    complete(&system, &messages)
 }
 
 /// Finish a prepared disk chat.
@@ -602,8 +645,29 @@ pub(crate) use fixture::{
 
 #[cfg(test)]
 mod tests {
+    use super::{AskContext, format_compact_line, format_context_sent_line};
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn context_lines_show_sent_and_pre_compact_sizes() {
+        let context = AskContext {
+            used: 1200,
+            before_compact: 4500,
+            limit: 8000,
+            percent: 15,
+            compacted: true,
+            threshold_percent: 70,
+        };
+        assert_eq!(
+            format_context_sent_line("profile=sally", &context),
+            "softwaked: context profile=sally sent=1200 before_compact=4500 limit=8000 (15%)"
+        );
+        assert_eq!(
+            format_compact_line("profile=sally", &context),
+            "softwaked: compact profile=sally before=4500 after=1200 threshold=70%"
+        );
+    }
 
     use softwake_providers::{
         FileProviderSettings, ProviderHandle, ProviderId, ProviderSettings, TestReport,

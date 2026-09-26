@@ -12,6 +12,7 @@
     "allow-resume",
     "allow-sleep",
     "allow-reload-soul",
+    "allow-set-voice-test",
     "allow-confirm-tool",
     "allow-cancel-tool",
     "allow-wake",
