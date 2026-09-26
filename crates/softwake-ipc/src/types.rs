@@ -528,6 +528,18 @@ pub enum Event {
     },
 }
 
+/// One HUD turn carried on [`ClientMessage::SeedChat`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeedChatTurn {
+    /// `"user"` or `"assistant"`.
+    pub role: String,
+    /// Turn body.
+    pub text: String,
+    /// Skip when true (error bubbles).
+    #[serde(default)]
+    pub error: bool,
+}
+
 /// First and later messages from a client.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -666,6 +678,18 @@ pub enum ClientMessage {
     ReloadPlayback {
         /// Client-chosen id. The daemon echoes it and does not interpret it.
         id: u64,
+    },
+    /// Seed the open awake session with prior HUD turns (oldest-first).
+    ///
+    /// No-op when the session already has messages (daemon plaintext seed or a
+    /// prior `SeedChat` won). Skips error bubbles. Additive on protocol
+    /// generation 1. softwake-ui sends this after unlock when history was
+    /// encrypted at rest.
+    SeedChat {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+        /// Prior HUD turns (oldest-first).
+        turns: Vec<SeedChatTurn>,
     },
 }
 
@@ -987,7 +1011,16 @@ mod tests {
         let reload_utterance_json = serde_json::to_string(&reload_utterance).expect("encode");
         assert!(reload_utterance_json.contains("\"type\":\"reload_utterance\""));
         let reload_playback = ClientMessage::ReloadPlayback { id: 17 };
+        let seed = ClientMessage::SeedChat {
+            id: 18,
+            turns: vec![super::SeedChatTurn {
+                role: "user".to_owned(),
+                text: "hi".to_owned(),
+                error: false,
+            }],
+        };
         assert_round_trip(&reload_playback);
+        assert_round_trip(&seed);
         let reload_playback_json = serde_json::to_string(&reload_playback).expect("encode");
         assert!(reload_playback_json.contains("\"type\":\"reload_playback\""));
         let talk_stop_json = serde_json::to_string(&talk_stop).expect("encode");

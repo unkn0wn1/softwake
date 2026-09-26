@@ -3,6 +3,7 @@
 //! File: `$XDG_CONFIG_HOME/softwake/ui-prefs.json` (or `~/.config/softwake/…`).
 //! Text size survives restart; missing file → default `x-small`.
 //! HUD idle collapse survives restart; missing field → 3000 ms.
+//! HUD pin and expanded size survive restart when present.
 
 use std::fs;
 use std::path::PathBuf;
@@ -71,6 +72,43 @@ pub fn clamp_hud_idle_collapse_ms(ms: u32) -> u32 {
     ms.clamp(HUD_IDLE_COLLAPSE_MIN_MS, HUD_IDLE_COLLAPSE_MAX_MS)
 }
 
+/// Default expanded HUD width (logical pixels).
+pub const HUD_EXPANDED_W_DEFAULT: u32 = 520;
+/// Default expanded HUD height (logical pixels).
+pub const HUD_EXPANDED_H_DEFAULT: u32 = 620;
+/// Smallest resizable expanded width.
+pub const HUD_EXPANDED_W_MIN: u32 = 360;
+/// Largest resizable expanded width.
+pub const HUD_EXPANDED_W_MAX: u32 = 1200;
+/// Smallest resizable expanded height.
+pub const HUD_EXPANDED_H_MIN: u32 = 420;
+/// Largest resizable expanded height.
+pub const HUD_EXPANDED_H_MAX: u32 = 1200;
+
+const fn default_hud_expanded_w() -> u32 {
+    HUD_EXPANDED_W_DEFAULT
+}
+
+const fn default_hud_expanded_h() -> u32 {
+    HUD_EXPANDED_H_DEFAULT
+}
+
+const fn default_hud_pinned() -> bool {
+    false
+}
+
+/// Clamp expanded width into [`HUD_EXPANDED_W_MIN`]..=[`HUD_EXPANDED_W_MAX`].
+#[must_use]
+pub fn clamp_hud_expanded_w(width: u32) -> u32 {
+    width.clamp(HUD_EXPANDED_W_MIN, HUD_EXPANDED_W_MAX)
+}
+
+/// Clamp expanded height into [`HUD_EXPANDED_H_MIN`]..=[`HUD_EXPANDED_H_MAX`].
+#[must_use]
+pub fn clamp_hud_expanded_h(height: u32) -> u32 {
+    height.clamp(HUD_EXPANDED_H_MIN, HUD_EXPANDED_H_MAX)
+}
+
 /// Softwake Settings window prefs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UiPrefs {
@@ -81,6 +119,15 @@ pub struct UiPrefs {
     /// collapses, in milliseconds.
     #[serde(default = "default_hud_idle_collapse_ms")]
     pub hud_idle_collapse_ms: u32,
+    /// When true, the expanded HUD stays open (idle collapse is skipped).
+    #[serde(default = "default_hud_pinned")]
+    pub hud_pinned: bool,
+    /// Last expanded HUD width in logical pixels.
+    #[serde(default = "default_hud_expanded_w")]
+    pub hud_expanded_w: u32,
+    /// Last expanded HUD height in logical pixels.
+    #[serde(default = "default_hud_expanded_h")]
+    pub hud_expanded_h: u32,
 }
 
 impl Default for UiPrefs {
@@ -88,6 +135,9 @@ impl Default for UiPrefs {
         Self {
             text_size: TextSize::XSmall,
             hud_idle_collapse_ms: HUD_IDLE_COLLAPSE_DEFAULT_MS,
+            hud_pinned: false,
+            hud_expanded_w: HUD_EXPANDED_W_DEFAULT,
+            hud_expanded_h: HUD_EXPANDED_H_DEFAULT,
         }
     }
 }
@@ -96,6 +146,8 @@ impl Default for UiPrefs {
 #[must_use]
 pub fn normalize(mut prefs: UiPrefs) -> UiPrefs {
     prefs.hud_idle_collapse_ms = clamp_hud_idle_collapse_ms(prefs.hud_idle_collapse_ms);
+    prefs.hud_expanded_w = clamp_hud_expanded_w(prefs.hud_expanded_w);
+    prefs.hud_expanded_h = clamp_hud_expanded_h(prefs.hud_expanded_h);
     prefs
 }
 
@@ -143,6 +195,12 @@ pub struct UiPrefsSnapshot {
     pub text_size: String,
     /// HUD idle collapse delay in milliseconds (already clamped).
     pub hud_idle_collapse_ms: u32,
+    /// Whether the expanded HUD is pinned open.
+    pub hud_pinned: bool,
+    /// Expanded HUD width (logical pixels, clamped).
+    pub hud_expanded_w: u32,
+    /// Expanded HUD height (logical pixels, clamped).
+    pub hud_expanded_h: u32,
 }
 
 impl From<&UiPrefs> for UiPrefsSnapshot {
@@ -150,6 +208,9 @@ impl From<&UiPrefs> for UiPrefsSnapshot {
         Self {
             text_size: prefs.text_size.as_str().to_owned(),
             hud_idle_collapse_ms: clamp_hud_idle_collapse_ms(prefs.hud_idle_collapse_ms),
+            hud_pinned: prefs.hud_pinned,
+            hud_expanded_w: clamp_hud_expanded_w(prefs.hud_expanded_w),
+            hud_expanded_h: clamp_hud_expanded_h(prefs.hud_expanded_h),
         }
     }
 }
@@ -186,6 +247,35 @@ pub fn ui_prefs_set_hud_idle_collapse_ms(ms: u32) -> Result<UiPrefsSnapshot, Str
     Ok(UiPrefsSnapshot::from(&prefs))
 }
 
+/// Save whether the expanded HUD stays pinned open (skips idle collapse).
+///
+/// # Errors
+///
+/// Config path unresolved or write failure.
+#[tauri::command]
+pub fn ui_prefs_set_hud_pinned(pinned: bool) -> Result<UiPrefsSnapshot, String> {
+    let mut prefs = load();
+    prefs.hud_pinned = pinned;
+    save(&prefs)?;
+    Ok(UiPrefsSnapshot::from(&prefs))
+}
+
+/// Save the expanded HUD logical size after a resize.
+///
+/// Width and height are clamped. Collapsed bloom size is unchanged.
+///
+/// # Errors
+///
+/// Config path unresolved or write failure.
+#[tauri::command]
+pub fn ui_prefs_set_hud_expanded_size(width: u32, height: u32) -> Result<UiPrefsSnapshot, String> {
+    let mut prefs = load();
+    prefs.hud_expanded_w = clamp_hud_expanded_w(width);
+    prefs.hud_expanded_h = clamp_hud_expanded_h(height);
+    save(&prefs)?;
+    Ok(UiPrefsSnapshot::from(&prefs))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,6 +307,7 @@ mod tests {
         let body = serde_json::to_string(&UiPrefs {
             text_size: TextSize::Large,
             hud_idle_collapse_ms: HUD_IDLE_COLLAPSE_DEFAULT_MS,
+            ..UiPrefs::default()
         })
         .expect("ser");
         assert!(body.contains("large"));
@@ -244,5 +335,34 @@ mod tests {
         assert_eq!(low.hud_idle_collapse_ms, 1_000);
         let wire = UiPrefsSnapshot::from(&low);
         assert_eq!(wire.hud_idle_collapse_ms, 1_000);
+    }
+
+    #[test]
+    fn pin_and_size_default_when_absent() {
+        let prefs: UiPrefs = serde_json::from_str(r#"{"text_size":"large"}"#).expect("parse");
+        assert!(!prefs.hud_pinned);
+        assert_eq!(prefs.hud_expanded_w, HUD_EXPANDED_W_DEFAULT);
+        assert_eq!(prefs.hud_expanded_h, HUD_EXPANDED_H_DEFAULT);
+        let wire = UiPrefsSnapshot::from(&prefs);
+        assert!(!wire.hud_pinned);
+        assert_eq!(wire.hud_expanded_w, HUD_EXPANDED_W_DEFAULT);
+        assert_eq!(wire.hud_expanded_h, HUD_EXPANDED_H_DEFAULT);
+    }
+
+    #[test]
+    fn expanded_size_clamps() {
+        assert_eq!(clamp_hud_expanded_w(10), HUD_EXPANDED_W_MIN);
+        assert_eq!(clamp_hud_expanded_w(9999), HUD_EXPANDED_W_MAX);
+        assert_eq!(clamp_hud_expanded_h(10), HUD_EXPANDED_H_MIN);
+        assert_eq!(clamp_hud_expanded_h(9999), HUD_EXPANDED_H_MAX);
+        let normalized = normalize(UiPrefs {
+            hud_expanded_w: 1,
+            hud_expanded_h: 99999,
+            hud_pinned: true,
+            ..UiPrefs::default()
+        });
+        assert!(normalized.hud_pinned);
+        assert_eq!(normalized.hud_expanded_w, HUD_EXPANDED_W_MIN);
+        assert_eq!(normalized.hud_expanded_h, HUD_EXPANDED_H_MAX);
     }
 }

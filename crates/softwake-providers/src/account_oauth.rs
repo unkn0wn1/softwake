@@ -4,6 +4,8 @@
 //! when they need HTTP. Publisher client ids come from process env — never from Settings.
 
 use std::env;
+use std::fs;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -110,22 +112,151 @@ impl std::fmt::Debug for AccountConnection {
     }
 }
 
-/// Read `SOFTWAKE_GOOGLE_CLIENT_ID` from the environment.
+/// Read `SOFTWAKE_GOOGLE_CLIENT_ID` (or `MeetRec` alias) from process env or
+/// `oauth-clients.env`.
 #[must_use]
 pub fn publisher_google_client_id() -> Option<String> {
-    clean_id(env::var_os("SOFTWAKE_GOOGLE_CLIENT_ID").and_then(|v| v.into_string().ok()))
+    clean_id(publisher_value(&[
+        "SOFTWAKE_GOOGLE_CLIENT_ID",
+        "MEETREC_GOOGLE_CLIENT_ID",
+    ]))
 }
 
-/// Read optional `SOFTWAKE_GOOGLE_CLIENT_SECRET`.
+/// Read optional `SOFTWAKE_GOOGLE_CLIENT_SECRET` (or `MeetRec` alias).
 #[must_use]
 pub fn publisher_google_client_secret() -> Option<String> {
-    clean_secret(env::var_os("SOFTWAKE_GOOGLE_CLIENT_SECRET").and_then(|v| v.into_string().ok()))
+    clean_secret(publisher_value(&[
+        "SOFTWAKE_GOOGLE_CLIENT_SECRET",
+        "MEETREC_GOOGLE_CLIENT_SECRET",
+    ]))
 }
 
-/// Read `SOFTWAKE_MICROSOFT_CLIENT_ID` from the environment.
+/// Read `SOFTWAKE_MICROSOFT_CLIENT_ID` (or `MeetRec` alias) from process env or
+/// `oauth-clients.env`.
 #[must_use]
 pub fn publisher_microsoft_client_id() -> Option<String> {
-    clean_id(env::var_os("SOFTWAKE_MICROSOFT_CLIENT_ID").and_then(|v| v.into_string().ok()))
+    clean_id(publisher_value(&[
+        "SOFTWAKE_MICROSOFT_CLIENT_ID",
+        "MEETREC_MICROSOFT_CLIENT_ID",
+    ]))
+}
+
+fn env_first(keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(value) = env::var_os(key).and_then(|v| v.into_string().ok()) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn file_value(keys: &[&str]) -> Option<String> {
+    let map = load_oauth_clients_file();
+    for key in keys {
+        if let Some(value) = map.get(*key) {
+            return Some(value.clone());
+        }
+    }
+    None
+}
+
+fn publisher_value(keys: &[&str]) -> Option<String> {
+    env_first(keys).or_else(|| file_value(keys))
+}
+
+fn load_oauth_clients_file() -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    let Some(path) = oauth_clients_path() else {
+        return map;
+    };
+    let Ok(bytes) = fs::read(&path) else {
+        return map;
+    };
+    let Ok(body) = String::from_utf8(bytes) else {
+        return map;
+    };
+    for (key, value) in parse_oauth_clients_env(&body) {
+        map.insert(key, value);
+    }
+    map
+}
+
+const OAUTH_CLIENTS_FILE: &str = "oauth-clients.env";
+
+/// Softwake publisher OAuth keys that may be loaded from the config file.
+const PUBLISHER_OAUTH_KEYS: &[&str] = &[
+    "SOFTWAKE_GOOGLE_CLIENT_ID",
+    "SOFTWAKE_GOOGLE_CLIENT_SECRET",
+    "SOFTWAKE_MICROSOFT_CLIENT_ID",
+    // MeetRec aliases — same desktop clients on a shared maintainer machine.
+    "MEETREC_GOOGLE_CLIENT_ID",
+    "MEETREC_GOOGLE_CLIENT_SECRET",
+    "MEETREC_MICROSOFT_CLIENT_ID",
+];
+
+fn oauth_clients_path() -> Option<PathBuf> {
+    let config = if let Some(xdg) = env::var_os("XDG_CONFIG_HOME") {
+        let path = PathBuf::from(xdg);
+        if path.as_os_str().is_empty() {
+            return None;
+        }
+        path
+    } else {
+        let home = PathBuf::from(env::var_os("HOME")?);
+        if home.as_os_str().is_empty() {
+            return None;
+        }
+        home.join(".config")
+    };
+    Some(config.join("softwake").join(OAUTH_CLIENTS_FILE))
+}
+
+/// Parse `KEY=VALUE` lines; `#` comments and blank lines are ignored.
+///
+/// Values may be optionally single- or double-quoted. Does not expand shell
+/// variables. Never logs values.
+#[must_use]
+pub fn parse_oauth_clients_env(body: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for raw in body.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() || !PUBLISHER_OAUTH_KEYS.contains(&key) {
+            continue;
+        }
+        let trimmed = value.trim();
+        let value = strip_wrapping_quotes(trimmed);
+        out.push((key.to_owned(), value));
+    }
+    out
+}
+
+fn strip_wrapping_quotes(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return raw[1..raw.len() - 1].to_owned();
+        }
+    }
+    raw.to_owned()
+}
+
+/// Warm the publisher OAuth file lookup (no-op beyond a read).
+///
+/// [`publisher_google_client_id`] and friends already read
+/// `$XDG_CONFIG_HOME/softwake/oauth-clients.env` when process env is unset.
+/// Process env always wins. Missing file is a no-op. Kept so `softwake-ui`
+/// can call this once at startup for a clear load point.
+pub fn apply_publisher_oauth_from_config() {
+    let _ = load_oauth_clients_file();
 }
 
 fn clean_id(value: Option<String>) -> Option<String> {
@@ -521,5 +652,24 @@ mod tests {
             AccountProvider::Google
         );
         assert!(AccountProvider::parse("xai").is_err());
+    }
+}
+
+#[cfg(test)]
+mod publisher_env_tests {
+    use super::parse_oauth_clients_env;
+
+    #[test]
+    fn parse_oauth_clients_env_skips_unknown_keys() {
+        let rows = parse_oauth_clients_env(
+            "# comment\nSOFTWAKE_GOOGLE_CLIENT_ID=abc\nIGNORED=x\nMEETREC_MICROSOFT_CLIENT_ID=\"ms-id\"\n",
+        );
+        assert_eq!(
+            rows,
+            vec![
+                ("SOFTWAKE_GOOGLE_CLIENT_ID".to_owned(), "abc".to_owned()),
+                ("MEETREC_MICROSOFT_CLIENT_ID".to_owned(), "ms-id".to_owned()),
+            ]
+        );
     }
 }

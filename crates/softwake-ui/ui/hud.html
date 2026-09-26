@@ -8,6 +8,12 @@
   </head>
   <body>
     <div id="capsule" class="capsule" role="button" tabindex="0" aria-expanded="false" aria-label="Softwake listening capsule">
+      <button type="button" id="pin" class="pin" hidden aria-pressed="false" aria-label="Pin chat open" title="Pin chat open">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+          <path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/>
+        </svg>
+      </button>
+      <div id="resize-grip" class="resize-grip" hidden aria-hidden="true" title="Drag to resize"></div>
       <canvas id="bloom" width="120" height="120" aria-hidden="true"></canvas>
       <div id="strip" class="strip" hidden>
       <div id="vault-gate" class="vault-gate" hidden>
@@ -58,13 +64,13 @@
               />
             </svg>
           </button>
-          <input
+          <textarea
             id="ask-input"
-            type="text"
+            rows="2"
             maxlength="2000"
             placeholder="Ask…  /clear /halve /compact"
             aria-label="Ask Softwake"
-          />
+          ></textarea>
           <button type="submit" id="ask-send">Send</button>
         </form>
       </div>

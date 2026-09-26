@@ -20,7 +20,7 @@
 
    Matching is case-insensitive on the trimmed line. Commands do not call the chat model (compact may use the existing compact completion / extractive fallback). No TTS for the command reply. PROTOCOL generation stays **1**.
 
-4. **No seed-on-wake.** HUD history is still display-only. Waking still opens a fresh model session from the soul pack; this slice does not replay HUD turns into the session.
+4. **Seed-on-wake (amended 2026-09-27).** Waking opens a fresh model session from the soul pack, then replays a budgeted suffix of per-profile HUD history (see [ADR 0026](ADR-0026-hud-chat-unlock.md) amendment). Slash commands still affect the model session only.
 
 ## Context
 
@@ -29,7 +29,7 @@ Operators need to see how full the awake window is without opening Settings, and
 ## Alternatives
 
 - New `ClientMessage` variants for clear/compact/halve. Rejected for this slice: intercepting `Ask` text keeps PROTOCOL gen 1 and works from HUD/`ctl` without new wire shapes.
-- Seed model context from HUD history on wake. Rejected (product lock).
+- Seed model context from HUD history on wake. Accepted in the 2026-09-27 HUD polish amendment (budgeted; plaintext daemon load + UI `SeedChat` for encrypted vaults).
 - Change only the HUD copy without a Status threshold field. Rejected: meter and Status should share one source (`context_compact_at`).
 
 ## Consequences

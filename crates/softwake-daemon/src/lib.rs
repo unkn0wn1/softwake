@@ -23,6 +23,7 @@ mod demo;
 mod dispatch;
 mod email_tool;
 mod free_speech;
+mod hud_seed;
 mod mode_confirm;
 mod mode_intent;
 mod pcm;

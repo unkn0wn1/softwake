@@ -952,6 +952,10 @@ impl Demo {
             return;
         };
         self.session = TextStubSession::open(instructions.to_owned());
+        let _ = crate::hud_seed::seed_session(
+            &mut self.session,
+            crate::hud_seed::load_plaintext_hud_turns(),
+        );
     }
 
     fn status_lines(&self) -> Vec<String> {

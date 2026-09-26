@@ -219,6 +219,43 @@ impl TextStubSession {
         self.messages.clear();
     }
 
+    /// Seed prior turns when the session has no messages yet.
+    ///
+    /// `turns` are oldest-first. Only the newest suffix that fits in
+    /// `max_chars` (Unicode scalar count across contents) is kept. Returns how
+    /// many messages were stored. No-op when closed, when messages already
+    /// exist, when `turns` is empty, or when `max_chars` is 0.
+    pub fn seed_turns_if_empty(
+        &mut self,
+        turns: impl IntoIterator<Item = SessionMessage>,
+        max_chars: usize,
+    ) -> usize {
+        if self.phase != SessionPhase::Open || !self.messages.is_empty() || max_chars == 0 {
+            return 0;
+        }
+        let mut all: Vec<SessionMessage> = turns
+            .into_iter()
+            .filter(|turn| !turn.content.trim().is_empty())
+            .collect();
+        if all.is_empty() {
+            return 0;
+        }
+        let mut kept_chars = 0usize;
+        let mut keep_from = all.len();
+        while keep_from > 0 {
+            let next = keep_from - 1;
+            let add = all[next].content.chars().count();
+            if kept_chars == 0 || kept_chars.saturating_add(add) <= max_chars {
+                kept_chars = kept_chars.saturating_add(add);
+                keep_from = next;
+            } else {
+                break;
+            }
+        }
+        self.messages.extend(all.drain(keep_from..));
+        self.messages.len()
+    }
+
     /// Drop older turns until roughly half the message character mass remains.
     ///
     /// Keeps the newest suffix. No-op when closed, empty, or a single message.
@@ -527,6 +564,34 @@ mod tests {
         assert!(session.messages().is_empty());
         assert_eq!(session.phase(), SessionPhase::Open);
         assert_eq!(session.instructions(), Some("be brief"));
+    }
+
+    #[test]
+    fn seed_turns_if_empty_keeps_newest_within_budget() {
+        let mut session = TextStubSession::open("sys");
+        let n = session.seed_turns_if_empty(
+            [
+                super::SessionMessage::user("old-user"),
+                super::SessionMessage::assistant("old-asst"),
+                super::SessionMessage::user("new-user"),
+                super::SessionMessage::assistant("new-asst"),
+            ],
+            20, // fits "new-user" + "new-asst" (8+8) and maybe more
+        );
+        assert!(n >= 2);
+        let texts: Vec<_> = session
+            .messages()
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect();
+        assert!(texts.contains(&"new-user"));
+        assert!(texts.contains(&"new-asst"));
+        assert!(!texts.iter().any(|t| t.starts_with("old-")), "{texts:?}");
+        // Second seed is a no-op once messages exist.
+        assert_eq!(
+            session.seed_turns_if_empty([super::SessionMessage::user("again")], 1000),
+            0
+        );
     }
 
     #[test]

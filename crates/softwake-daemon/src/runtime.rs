@@ -1746,6 +1746,40 @@ impl Runtime {
             return;
         };
         self.session = TextStubSession::open(instructions.to_owned());
+        // Replay plaintext HUD history into the fresh session (encrypted vault
+        // skips here; softwake-ui may SeedChat after unlock).
+        let seeded = crate::hud_seed::seed_session(
+            &mut self.session,
+            crate::hud_seed::load_plaintext_hud_turns(),
+        );
+        if seeded > 0 {
+            eprintln!("softwaked: seeded {seeded} HUD turn(s) into the awake session");
+        }
+    }
+
+    /// Seed from softwake-ui when the vault held encrypted history.
+    pub(crate) fn seed_chat_from_ui(&mut self, turns: Vec<softwake_ipc::SeedChatTurn>) -> Outcome {
+        if self.session.phase() != softwake_session::SessionPhase::Open {
+            return Self::rejected(softwake_ipc::IpcError::ChatRejected {
+                message: "seed chat requires an awake session".to_owned(),
+            });
+        }
+        let mapped = turns
+            .into_iter()
+            .map(|turn| crate::hud_seed::SeedTurn {
+                role: turn.role,
+                text: turn.text,
+                error: turn.error,
+            })
+            .collect();
+        let messages = crate::hud_seed::seed_turns_to_messages(mapped);
+        let seeded = crate::hud_seed::seed_session(&mut self.session, messages);
+        Self::quiet(self.snapshot(
+            Some(format!(
+                "Seeded {seeded} prior turn(s) into this awake session"
+            )),
+            None,
+        ))
     }
 
     fn snapshot(&self, message: Option<String>, detail: Option<String>) -> Status {
