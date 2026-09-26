@@ -9,6 +9,7 @@
 
 mod account_oauth;
 mod chat;
+mod chat_turn;
 mod constants;
 mod context;
 mod handle;
@@ -41,6 +42,9 @@ pub use account_oauth::{
 pub use chat::{
     CHAT_MAX_TOKENS, COMPACT_SYSTEM, ChatError, ChatMessage, ChatRole, PrepareError, PreparedChat,
     complete_chat, complete_compact, extractive_summary, missing_credential_message, prepare_chat,
+};
+pub use chat_turn::{
+    AssistantToolCall, ChatTurn, WireMessage, WireRole, complete_chat_turn, wire_from_chat_messages,
 };
 pub use constants::{
     OPENAI_API_BASE, OPENAI_CHAT_SEED, OPENAI_COMPATIBLE_CHAT_SEED, OPENAI_VOICE_SEED,

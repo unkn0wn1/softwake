@@ -193,6 +193,7 @@ pub(crate) fn estimate_ask_usage(system: &str, prior: &[SessionMessage], new_use
 /// Record `text` and call `complete`, compacting older turns when over budget.
 ///
 /// Blank text and a closed session do not call `complete` or `compact`.
+#[allow(dead_code)] // retained for compact+complete without a tool loop
 pub(crate) fn perform_ask(
     session: &mut TextStubSession,
     text: &str,
@@ -245,6 +246,66 @@ pub(crate) fn perform_ask(
         Err(SessionError::Closed) => Err(AskReject::Closed),
         Err(SessionError::Complete { message }) => Err(AskReject::Failed(message)),
     }
+}
+
+/// Compact and record the user line for an ask that will run the tool loop next.
+///
+/// Does not call the provider. On success the session already contains `text` as
+/// the latest user message. The caller runs [`crate::tool_loop::run_tool_loop`]
+/// then [`softwake_session::TextStubSession::push_assistant_turn`].
+pub(crate) fn prepare_ask_session(
+    session: &mut TextStubSession,
+    text: &str,
+    appendix: &str,
+    budget: ContextBudget,
+    compact: impl FnOnce(&[SessionMessage]) -> Result<String, String>,
+    mut trace: impl FnMut(&AskContext),
+) -> Result<(String, AskContext), AskReject> {
+    if text.trim().is_empty() {
+        return Err(AskReject::NeedsText);
+    }
+    if session.phase() != SessionPhase::Open {
+        return Err(AskReject::Closed);
+    }
+    let Some(instructions) = session.instructions().map(str::to_owned) else {
+        return Err(AskReject::Closed);
+    };
+    let system = assemble_system(&instructions, appendix);
+    let mut compacted = false;
+    let before_compact = estimate_ask_usage(&system, session.messages(), text);
+    if should_compact(before_compact, budget.limit, budget.compact_at_percent)
+        && session.messages().len() > budget.keep_recent
+    {
+        let prefix_len = session.messages().len() - budget.keep_recent;
+        let older: Vec<SessionMessage> = session.messages()[..prefix_len].to_vec();
+        let summary = match compact(&older) {
+            Ok(text) => text,
+            Err(_error) => {
+                let chat = to_chat_messages(&older);
+                extractive_summary(&chat, 2000)
+            }
+        };
+        session.apply_compaction(budget.keep_recent, &summary);
+        compacted = true;
+    }
+    let used = estimate_ask_usage(&system, session.messages(), text);
+    let context = AskContext {
+        used,
+        before_compact,
+        limit: budget.limit,
+        percent: usage_percent(used, budget.limit),
+        compacted,
+        threshold_percent: budget.compact_at_percent,
+    };
+    trace(&context);
+    session.push_user_turn(text).map_err(|error| match error {
+        SessionError::Empty => AskReject::NeedsText,
+        SessionError::Closed => AskReject::Closed,
+        SessionError::Complete { message } => AskReject::Failed(message),
+    })?;
+    // Re-assemble after push so system string stays aligned with instructions+appendix.
+    let system = assemble_system(&instructions, appendix);
+    Ok((system, context))
 }
 
 /// Refuse a disk ask before the session records the line when live HTTP is off.
@@ -466,6 +527,43 @@ fn finish_prepared_compact_inner(
     complete_compact(&transport, prepared, bearer, &chat).map_err(|error| error.to_string())
 }
 
+/// Live or fixture completion with optional API tools and a Hands invoke callback.
+///
+/// When `tools` is empty this is one text completion (no `tools` field). Otherwise
+/// it runs the multi-turn tool loop. Used by ask paths that already recorded the user line.
+#[cfg(feature = "live-http")]
+pub(crate) fn finish_prepared_chat_tools<F>(
+    prepared: &PreparedChat,
+    bearer: &str,
+    system: &str,
+    messages: &[SessionMessage],
+    tools: &[serde_json::Value],
+    invoke: F,
+) -> Result<crate::tool_loop::ToolLoopOk, String>
+where
+    F: FnMut(&str, &[String]) -> crate::tool_loop::ToolInvokeResult,
+{
+    let transport = softwake_providers::live::LiveTransport::bounded(CHAT_TIMEOUT);
+    let chat = to_chat_messages(messages);
+    crate::tool_loop::run_tool_loop(&transport, prepared, bearer, system, &chat, tools, invoke)
+}
+
+#[cfg(not(feature = "live-http"))]
+pub(crate) fn finish_prepared_chat_tools<F>(
+    prepared: &PreparedChat,
+    bearer: &str,
+    system: &str,
+    messages: &[SessionMessage],
+    tools: &[serde_json::Value],
+    _invoke: F,
+) -> Result<crate::tool_loop::ToolLoopOk, String>
+where
+    F: FnMut(&str, &[String]) -> crate::tool_loop::ToolInvokeResult,
+{
+    let _ = (prepared, bearer, system, messages, tools);
+    Err(LIVE_HTTP_DISABLED.to_owned())
+}
+
 #[cfg(test)]
 mod fixture {
     use std::sync::{Arc, Mutex};
@@ -486,14 +584,30 @@ mod fixture {
     }
 
     pub(crate) struct ScriptedTransport {
-        response: HttpResponse,
+        /// Popped FIFO responses for multi-turn tool loops.
+        queue: Mutex<std::collections::VecDeque<HttpResponse>>,
+        /// Used when the queue is empty (single-response fixtures).
+        fallback: HttpResponse,
         posts: Mutex<Vec<RecordedPost>>,
     }
 
     impl ScriptedTransport {
         fn new(response: HttpResponse) -> Arc<Self> {
             Arc::new(Self {
-                response,
+                queue: Mutex::new(std::collections::VecDeque::new()),
+                fallback: response,
+                posts: Mutex::new(Vec::new()),
+            })
+        }
+
+        /// Scripted multi-turn: each POST takes the next queued body; leftover use the last.
+        #[allow(dead_code)] // used by xai_key_fixture_queue for future integration tests
+        fn with_queue(responses: Vec<HttpResponse>) -> Arc<Self> {
+            assert!(!responses.is_empty(), "queue needs at least one response");
+            let fallback = responses.last().expect("last").clone();
+            Arc::new(Self {
+                queue: Mutex::new(std::collections::VecDeque::from(responses)),
+                fallback,
                 posts: Mutex::new(Vec::new()),
             })
         }
@@ -534,7 +648,11 @@ mod fixture {
                     url: url.to_owned(),
                     body: body.to_owned(),
                 });
-            Ok(self.response.clone())
+            let mut queue = self
+                .queue
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Ok(queue.pop_front().unwrap_or_else(|| self.fallback.clone()))
         }
 
         fn post_multipart_bearer(
@@ -596,6 +714,7 @@ mod fixture {
     /// # Errors
     ///
     /// The chat-completion sentence. The text does not include the bearer.
+    #[allow(dead_code)] // single-shot helper; tool path uses complete_fixture_tools
     pub(crate) fn complete_fixture(
         transport: &ScriptedTransport,
         prepared: &PreparedChat,
@@ -606,6 +725,55 @@ mod fixture {
         let chat = to_chat_messages(messages);
         softwake_providers::complete_chat(transport, prepared, bearer, system, &chat)
             .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn complete_fixture_tools(
+        transport: &ScriptedTransport,
+        prepared: &PreparedChat,
+        bearer: &str,
+        system: &str,
+        messages: &[SessionMessage],
+        tools: &[serde_json::Value],
+        invoke: impl FnMut(&str, &[String]) -> crate::tool_loop::ToolInvokeResult,
+    ) -> Result<crate::tool_loop::ToolLoopOk, String> {
+        let chat = to_chat_messages(messages);
+        crate::tool_loop::run_tool_loop(transport, prepared, bearer, system, &chat, tools, invoke)
+    }
+
+    /// Fixture with a FIFO of chat completion bodies (tool-loop tests).
+    #[allow(dead_code)]
+    pub(crate) fn xai_key_fixture_queue(
+        test_ok: bool,
+        key: Option<&str>,
+        bodies: Vec<HttpResponse>,
+    ) -> ChatFixture {
+        let mut settings = ProviderSettings {
+            selected_provider: ProviderId::XaiKey,
+            selected_model: "grok-4.5".to_owned(),
+            ..ProviderSettings::default()
+        };
+        settings.store_models(
+            ProviderId::XaiKey,
+            vec!["grok-4.5".to_owned()],
+            Vec::new(),
+            1,
+        );
+        settings.store_test(
+            ProviderId::XaiKey,
+            TestReport {
+                ok: test_ok,
+                message: "recorded".to_owned(),
+            },
+        );
+        let mut bag = SecretBag::empty();
+        bag.xai_api_key = key.map(str::to_owned);
+        ChatFixture {
+            handle: ProviderHandle::from_parts(settings, bag),
+            settings_file_present: true,
+            env_xai: None,
+            env_openai: None,
+            transport: ScriptedTransport::with_queue(bodies),
+        }
     }
 
     pub(crate) fn compact_fixture(
@@ -693,7 +861,7 @@ mod fixture {
 
 #[cfg(test)]
 pub(crate) use fixture::{
-    ChatFixture, RecordedPost, budget_for_handle, compact_fixture, complete_fixture,
+    ChatFixture, RecordedPost, budget_for_handle, compact_fixture, complete_fixture_tools,
     prepare_fixture, xai_key_fixture,
 };
 

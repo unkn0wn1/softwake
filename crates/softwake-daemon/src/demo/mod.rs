@@ -463,15 +463,17 @@ impl Demo {
                 let transport_c = std::sync::Arc::clone(&transport);
                 let call_c = call.clone();
                 let bearer_c = bearer.clone();
-                self.complete_ask(
+                self.complete_ask_tools(
                     text,
                     &prepared,
                     budget,
                     move |older| {
                         crate::chat::compact_fixture(&transport_c, &call_c, &bearer_c, older)
                     },
-                    move |system, messages| {
-                        crate::chat::complete_fixture(&transport, &call, &bearer, system, messages)
+                    |system, messages, tools, invoke| {
+                        crate::chat::complete_fixture_tools(
+                            &transport, &call, &bearer, system, messages, tools, invoke,
+                        )
                     },
                 )
             }
@@ -501,24 +503,31 @@ impl Demo {
         let call = prepared.clone();
         let call_c = prepared.clone();
         let bearer_c = bearer.clone();
-        self.complete_ask(
+        self.complete_ask_tools(
             text,
             &prepared,
             budget,
             move |older| crate::chat::finish_prepared_compact(&call_c, &bearer_c, older),
-            move |system, messages| {
-                crate::chat::finish_prepared_chat(&call, &bearer, system, messages)
+            |system, messages, tools, invoke| {
+                crate::chat::finish_prepared_chat_tools(
+                    &call, &bearer, system, messages, tools, invoke,
+                )
             },
         )
     }
 
-    fn complete_ask(
+    fn complete_ask_tools(
         &mut self,
         text: &str,
         prepared: &PreparedChat,
         budget: crate::chat::ContextBudget,
         compact: impl FnOnce(&[softwake_session::SessionMessage]) -> Result<String, String>,
-        complete: impl FnOnce(&str, &[softwake_session::SessionMessage]) -> Result<String, String>,
+        run_loop: impl FnOnce(
+            &str,
+            &[softwake_session::SessionMessage],
+            &[serde_json::Value],
+            &mut dyn FnMut(&str, &[String]) -> crate::tool_loop::ToolInvokeResult,
+        ) -> Result<crate::tool_loop::ToolLoopOk, String>,
     ) -> Vec<String> {
         let mut lines = Vec::new();
         self.note_chat(&mut lines, prepared);
@@ -527,27 +536,61 @@ impl Demo {
         #[cfg(not(test))]
         let fixture = Option::<&softwake_memory::MockMemory>::None;
         let memory = crate::chat::appendix_for_ask(text, fixture);
-        let appendix = crate::chat::system_appendix(&memory, &self.hands.tools_settings());
-        match crate::chat::perform_ask(
+        let tools_settings = self.hands.tools_settings();
+        let appendix = crate::chat::system_appendix(&memory, &tools_settings);
+        let tools = softwake_tools::advertise_chat_tools(&tools_settings);
+        let prepared_ask = match crate::chat::prepare_ask_session(
             &mut self.session,
             text,
             &appendix,
             budget,
             compact,
-            complete,
             |_| {},
         ) {
-            Ok(ok) => {
-                if ok.context.compacted {
-                    lines.push(format!(
-                        "compacted: context ~{} / {} ({}%)",
-                        ok.context.used, ok.context.limit, ok.context.percent
-                    ));
-                }
-                lines.push(format!("assistant: {}", ok.reply));
-            }
+            Ok(ok) => ok,
             Err(error) => {
                 let rejected = format!("rejected: {}", error.sentence());
+                self.push_verbose(&mut lines, &rejected);
+                lines.push(rejected);
+                return self.with_status(lines);
+            }
+        };
+        let (system, context) = prepared_ask;
+        let messages = self.session.messages().to_vec();
+        let loop_ok = {
+            let hands = &mut self.hands;
+            let machine = &self.machine;
+            let mut invoke = |name: &str, args: &[String]| {
+                crate::tool_loop::invoke_from_request(hands.request(machine, name, args))
+            };
+            run_loop(&system, &messages, &tools, &mut invoke)
+        };
+        match loop_ok {
+            Ok(crate::tool_loop::ToolLoopOk::Message(reply)) => {
+                let _ = self.session.push_assistant_turn(&reply);
+                if context.compacted {
+                    lines.push(format!(
+                        "compacted: context ~{} / {} ({}%)",
+                        context.used, context.limit, context.percent
+                    ));
+                }
+                lines.push(format!("assistant: {reply}"));
+            }
+            Ok(crate::tool_loop::ToolLoopOk::Pending {
+                message,
+                pending: _,
+            }) => {
+                let _ = self.session.push_assistant_turn(&message);
+                if context.compacted {
+                    lines.push(format!(
+                        "compacted: context ~{} / {} ({}%)",
+                        context.used, context.limit, context.percent
+                    ));
+                }
+                lines.push(format!("assistant: {message}"));
+            }
+            Err(message) => {
+                let rejected = format!("rejected: {message}");
                 self.push_verbose(&mut lines, &rejected);
                 lines.push(rejected);
             }

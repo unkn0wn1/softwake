@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- Chat API tool-calling: non-deny Tools Settings tools are advertised on
+  `/chat/completions`; the daemon runs a capped tool loop through Hands so
+  natural asks can execute shell (and other tools) without saying `run …`
+  ([ADR-0025](docs/ADR-0025-api-tool-calling.md)).
+
+
 - Each ask/chat turn attaches a live **Tools permissions** appendix (from `tools.json`) so the model sees current always_allow / ask / deny modes. When shell is always_allow or ask, the appendix says shell is available; when deny, unavailable. The model is told not to claim a tool is denied against that list, and to propose shell as a `run …` / `shell …` command for the operator rather than inventing output. Static Runtime policy stub defers to this appendix for availability.
 
 - Settings left-nav pane switching works again. Email OAuth (#69) used Google/Microsoft Connect controls in `app.js` without declaring their DOM refs, so a top-level `ReferenceError` aborted the script before nav click handlers registered (tabs highlighted on focus but stayed on Status).

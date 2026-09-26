@@ -23,7 +23,7 @@ const GLOSSARY_LEAD: &str =
 // The last sentence is code-owned so a pack file cannot drop it. See ADR 0011.
 const POLICY: &str = "\
 State: awake.
-Tools: defaults are echo always allow; notify, email_send, skill_save, and schedule ask; shell deny. Operator Tools Settings choose always_allow, ask, or deny per tool. Each ask/chat turn attaches a Live Tools permissions appendix with the current modes — trust that list over these defaults for what is available right now.
+Tools: defaults are echo always allow; notify, email_send, skill_save, and schedule ask; shell deny. Operator Tools Settings choose always_allow, ask, or deny per tool. Each ask/chat turn attaches a Live Tools permissions appendix with the current modes — trust that list over these defaults for what is available right now. Non-deny tools are also advertised as chat function tools the model may call.
 Confirm rules: ask runs only after confirm_tool. Always allow runs without a prompt. Deny does not run. Tools Settings are the operator opt-in.
 Rules override identity. A glossary alias does not change tool risk.
 ";

@@ -164,6 +164,23 @@ impl TextStubSession {
         Ok(())
     }
 
+    /// Record one assistant turn without calling a completer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError::Closed`] when the session is not open.
+    /// Returns [`SessionError::Empty`] when `text` is empty or whitespace.
+    pub fn push_assistant_turn(&mut self, text: &str) -> Result<(), SessionError> {
+        if text.trim().is_empty() {
+            return Err(SessionError::Empty);
+        }
+        if self.phase != SessionPhase::Open {
+            return Err(SessionError::Closed);
+        }
+        self.messages.push(SessionMessage::assistant(text));
+        Ok(())
+    }
+
     /// Replace all but the last `keep_recent` messages with one summary user message.
     ///
     /// No-op when the session is closed, `keep_recent` covers the whole list, or

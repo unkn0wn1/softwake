@@ -35,6 +35,7 @@ mod shell_intent;
 mod skill_intent;
 mod soul;
 mod talk;
+mod tool_loop;
 mod verbose_log;
 
 #[cfg(test)]

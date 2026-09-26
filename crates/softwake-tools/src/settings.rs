@@ -494,10 +494,7 @@ pub fn tools_permissions_appendix(settings: &ToolsSettings) -> String {
     ));
     out.push('\n');
     out.push_str(
-        "Do not claim a tool is denied when this list says otherwise. \
-You cannot invoke tools yourself in this chat turn. \
-For a shell command, reply with one clear proposed command the operator can confirm by saying `run <command>` or `shell <command>`. \
-Never invent command output.",
+        "Do not claim a tool is denied when this list says otherwise. When a tool is listed as always_allow or ask, Softwake advertises it as a chat function tool — call it when you need real results. Ask-mode tools wait for HUD Approve before they run; the turn may pause with a pending confirmation. Saying `run <command>` or `shell <command>` still works as a fast path. Never invent command output; only report stdout/stderr Softwake returns from a tool result.",
     );
     out
 }
@@ -505,10 +502,10 @@ Never invent command output.",
 fn shell_availability_line(permission: ToolPermission) -> &'static str {
     match permission {
         ToolPermission::AlwaysAllow => {
-            "Shell is available. Permission is always_allow: Softwake runs shell without a confirm prompt when the operator stages a command (for example by saying `run …`)."
+            "Shell is available. Permission is always_allow: Softwake runs shell without a confirm prompt when you call the shell tool or when the operator stages a command (for example by saying `run …`)."
         }
         ToolPermission::Ask => {
-            "Shell is available. Permission is ask: Softwake stages the command and the operator must Approve in the HUD (or Status Confirm) before it runs."
+            "Shell is available. Permission is ask: Softwake stages the command (API tool call or `run …`) and the operator must Approve in the HUD (or Status Confirm) before it runs."
         }
         ToolPermission::Deny => {
             "Shell is unavailable. Permission is deny. Do not treat shell as available."
@@ -730,7 +727,7 @@ mod tests {
         assert!(appendix.contains("Shell is unavailable. Permission is deny."));
         assert!(appendix.contains("Do not claim a tool is denied when this list says otherwise."));
         assert!(appendix.contains("`run <command>`"));
-        assert!(appendix.contains("Never invent command output."));
+        assert!(appendix.contains("Never invent command output"));
         assert!(!appendix.contains("Shell is available."));
     }
 
@@ -758,9 +755,10 @@ mod tests {
         settings.normalize();
         let appendix = tools_permissions_appendix(&settings);
         assert!(appendix.contains("- shell: ask"));
-        assert!(appendix.contains(
-            "Shell is available. Permission is ask: Softwake stages the command and the operator must Approve in the HUD"
-        ));
+        assert!(
+            appendix.contains("Shell is available. Permission is ask: Softwake stages the command")
+        );
+        assert!(appendix.contains("Approve in the HUD"));
         assert!(!appendix.contains("Shell is unavailable."));
     }
 }
