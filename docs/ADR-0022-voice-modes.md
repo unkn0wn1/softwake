@@ -28,7 +28,7 @@ Verbose (`-v` / `-vv`) KWS lines include the loaded profile name and, when it di
 
 ## Non-goals
 
-- A sentence parser or grammar.
+- A general sentence grammar. A small fixed heuristic covers confirm and fuzzy wake only: awake ask text that clearly means sleep or hibernate, yes/no while that question is open, and a below-threshold wake near-miss while asleep.
 - Leaving hibernate by voice.
 - A protocol generation bump. `set_voice_test` and `Status.voice_test` are additive on generation 1.
 - Persisting voice test mode in Settings JSON.
@@ -42,3 +42,5 @@ Bare `sleep` is scored again during awake chat. `go to sleep` and `<name> sleep`
 A profile whose name is exactly `sleep` or `hi` ties with that bare word and loses the tie-break (hibernate, then sleep, then wake). `hey <name>` still wakes.
 
 Announcement speech can lag the HUD by one completion plus TTS. Rapid transitions are serialized on a playback lock and can speak a line after the state has already moved on.
+
+Confirm prompts are fixed lines in the profile voice (`Sleep now?`, `Hibernate now?`, `Were you trying to wake me?`), not a one-shot completion. The wait is 15 seconds. Fuzzy wake asks at most once every 45 seconds, and a probe hit on bare `hi` does not ask. A real keyword fire still changes state immediately and clears a waiting confirm. No protocol field was added: the question is `Status.message` only. Voice-test mode still does not send microphone speech to speech-to-text; a typed yes or no still answers, and a real wake keyword still wakes.

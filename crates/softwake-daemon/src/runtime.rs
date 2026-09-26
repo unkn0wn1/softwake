@@ -92,6 +92,8 @@ pub(crate) struct Runtime {
     /// In-test provider. Absent in the serve binary, so ask uses the disk path.
     #[cfg(test)]
     chat_fixture: Option<crate::chat::ChatFixture>,
+    /// Pending NL sleep / hibernate / fuzzy-wake confirm. Not a Hands confirm.
+    mode_confirm: crate::mode_confirm::ModeConfirm,
     /// When set, `talk_stop` skips cloud STT and asks with this text.
     #[cfg(test)]
     talk_transcript: Option<String>,
@@ -138,7 +140,7 @@ impl Runtime {
             wire_state(VoiceState::Sleep).as_str(),
             kind.as_str()
         );
-        Ok(Self {
+        let mut runtime = Self {
             machine: Machine::new(CooldownConfig::default()),
             last_tick: Instant::now(),
             capture,
@@ -173,7 +175,11 @@ impl Runtime {
             chat_fixture: None,
             #[cfg(test)]
             talk_transcript: None,
-        })
+            mode_confirm: crate::mode_confirm::ModeConfirm::default(),
+        };
+        // Serve starts in sleep, so the probe is on even at verbosity 0.
+        runtime.sync_near_miss_probe();
+        Ok(runtime)
     }
 
     /// Apply one client command.
@@ -182,6 +188,7 @@ impl Runtime {
     /// connected client. A rejection leaves the machine untouched and does
     /// not emit that event.
     pub(crate) fn handle(&mut self, command: Command) -> Outcome {
+        self.expire_mode_confirm();
         // Score PCM that arrived before this command. Serve's queue is empty
         // unless a test pushed samples. The typed demo enters awake on its own.
         // While capture runs, queue a short mock listening tone before drain so
@@ -243,6 +250,7 @@ impl Runtime {
         self.machine
             .advance(now.saturating_duration_since(self.last_tick));
         self.last_tick = now;
+        self.expire_mode_confirm();
     }
 
     /// Instructions stored the last time awake was entered successfully.
@@ -298,6 +306,9 @@ impl Runtime {
         if text.trim().is_empty() {
             return Self::chat_rejected("ask needs text");
         }
+        if let Some(outcome) = self.route_mode_ask(text) {
+            return outcome;
+        }
         if self.machine.permit_tool_dispatch().is_err() {
             return Self::chat_rejected(&format!(
                 "ask while {} (chat acts only while awake)",
@@ -315,6 +326,161 @@ impl Runtime {
             return self.ask_fixture(text);
         }
         self.ask_disk(text)
+    }
+
+    /// Sleep / hibernate / fuzzy-wake confirm, before shell intent and the model.
+    fn route_mode_ask(&mut self, text: &str) -> Option<Outcome> {
+        self.expire_mode_confirm();
+        let agent = self.soul.agent_name();
+        let phrases = softwake_wake::phrases_for_agent(&agent);
+        if let Some(kind) = self.mode_confirm.pending_kind() {
+            return self.reply_to_mode(text, kind, &phrases.wake);
+        }
+        match self.machine.state() {
+            VoiceState::Awake => self.maybe_arm_awake_mode(text, &agent),
+            VoiceState::Sleep => self.maybe_arm_fuzzy_text(text, &phrases.wake, &agent),
+            VoiceState::Hibernate => None,
+        }
+    }
+
+    fn reply_to_mode(
+        &mut self,
+        text: &str,
+        kind: crate::mode_confirm::ConfirmKind,
+        wake: &[String],
+    ) -> Option<Outcome> {
+        let allow_wake = kind == crate::mode_confirm::ConfirmKind::FuzzyWake;
+        match crate::mode_intent::classify_reply(text, allow_wake, wake) {
+            crate::mode_intent::ConfirmReply::Yes => Some(self.commit_mode(kind)),
+            crate::mode_intent::ConfirmReply::No => Some(self.cancel_mode(kind)),
+            crate::mode_intent::ConfirmReply::Unclear => {
+                if kind == crate::mode_confirm::ConfirmKind::FuzzyWake
+                    || self.machine.state() != VoiceState::Awake
+                {
+                    Some(self.quiet_confirm_hold())
+                } else {
+                    self.mode_confirm.clear();
+                    None
+                }
+            }
+        }
+    }
+
+    fn maybe_arm_awake_mode(&mut self, text: &str, agent: &str) -> Option<Outcome> {
+        let intent = crate::mode_intent::classify_mode(text, agent)?;
+        let kind = match intent {
+            crate::mode_intent::ModeIntent::Sleep => crate::mode_confirm::ConfirmKind::Sleep,
+            crate::mode_intent::ModeIntent::Hibernate => {
+                crate::mode_confirm::ConfirmKind::Hibernate
+            }
+        };
+        Some(self.arm_mode(kind))
+    }
+
+    fn maybe_arm_fuzzy_text(
+        &mut self,
+        text: &str,
+        wake: &[String],
+        agent: &str,
+    ) -> Option<Outcome> {
+        if !crate::mode_intent::is_fuzzy_wake_text(text, wake, agent) || !self.fuzzy_wake_allowed()
+        {
+            return None;
+        }
+        Some(self.arm_mode(crate::mode_confirm::ConfirmKind::FuzzyWake))
+    }
+
+    fn fuzzy_wake_allowed(&self) -> bool {
+        self.mode_confirm.fuzzy_allowed(Instant::now())
+            && !self.machine.phrase_cooling(Event::WakePhrase)
+    }
+
+    fn arm_mode(&mut self, kind: crate::mode_confirm::ConfirmKind) -> Outcome {
+        if !self.mode_confirm.arm(kind, Instant::now()) {
+            return self.quiet_confirm_hold();
+        }
+        let line = crate::mode_confirm::prompt_line(kind);
+        self.speak_fixed_line(line);
+        let owned = line.to_owned();
+        self.retain_status_text(Some(owned.clone()), Some("confirm".to_owned()));
+        Self::quiet(self.snapshot(Some(owned), Some("confirm".to_owned())))
+    }
+
+    fn commit_mode(&mut self, kind: crate::mode_confirm::ConfirmKind) -> Outcome {
+        self.mode_confirm.clear();
+        match kind {
+            crate::mode_confirm::ConfirmKind::Sleep => self.sleep_phrase(),
+            crate::mode_confirm::ConfirmKind::Hibernate => self.hibernate_phrase(),
+            crate::mode_confirm::ConfirmKind::FuzzyWake => self.wake_phrase(),
+        }
+    }
+
+    fn cancel_mode(&mut self, kind: crate::mode_confirm::ConfirmKind) -> Outcome {
+        self.mode_confirm.clear();
+        let line = crate::mode_confirm::cancel_line(kind);
+        self.speak_fixed_line(line);
+        let owned = line.to_owned();
+        self.retain_status_text(Some(owned.clone()), Some("confirm cancelled".to_owned()));
+        Self::quiet(self.snapshot(Some(owned), Some("confirm cancelled".to_owned())))
+    }
+
+    fn quiet_confirm_hold(&mut self) -> Outcome {
+        Self::quiet(self.snapshot(
+            self.last_status_message.clone(),
+            self.last_status_detail.clone(),
+        ))
+    }
+
+    fn speak_fixed_line(&mut self, line: &str) {
+        #[cfg(test)]
+        {
+            self.announced_prompts.push(line.to_owned());
+        }
+        #[cfg(not(test))]
+        {
+            crate::announce::spawn_fixed_line(
+                line.to_owned(),
+                self.soul.profile_log_token(),
+                self.verbosity,
+            );
+        }
+    }
+
+    fn expire_mode_confirm(&mut self) {
+        if self.mode_confirm.expired(Instant::now()) {
+            self.mode_confirm.clear();
+        }
+    }
+
+    /// Probe stream follows sleep, and `-vv` keeps it on in other states.
+    fn sync_near_miss_probe(&mut self) {
+        let enabled = self.machine.state() == VoiceState::Sleep || self.verbosity >= 2;
+        self.pcm.set_near_miss_probe(enabled);
+    }
+
+    fn fuzzy_listen_active(&self, muted: bool) -> bool {
+        self.machine.state() == VoiceState::Sleep
+            && self.mode_confirm.pending_kind() == Some(crate::mode_confirm::ConfirmKind::FuzzyWake)
+            && !self.voice_test
+            && !muted
+            && !self.talk.is_armed()
+            && self.pending_auto_pcm.is_none()
+    }
+
+    fn arm_fuzzy_from_probe(&mut self, keyword: &str) {
+        if self.machine.state() != VoiceState::Sleep || !self.fuzzy_wake_allowed() {
+            return;
+        }
+        let phrases = softwake_wake::phrases_for_agent(&self.soul.agent_name());
+        if !crate::mode_intent::probe_is_fuzzy_wake(
+            keyword,
+            &phrases.wake,
+            &phrases.sleep,
+            &phrases.hibernate,
+        ) {
+            return;
+        }
+        let _ = self.arm_mode(crate::mode_confirm::ConfirmKind::FuzzyWake);
     }
 
     /// When Tools→shell is enabled, turn clear shell/ssh ask lines into a gated tool call.
@@ -768,6 +934,16 @@ impl Runtime {
         self.pcm_agent = "scripted".to_owned();
     }
 
+    /// Replace the PCM engine with scripted probe near-misses (tests only).
+    #[cfg(test)]
+    fn install_scripted_near_misses<S>(&mut self, keywords: impl IntoIterator<Item = S>)
+    where
+        S: Into<String>,
+    {
+        self.pcm = PcmEngine::scripted_near_misses(keywords);
+        self.pcm_agent = "scripted".to_owned();
+    }
+
     /// Pull every queued frame into the PCM detector.
     ///
     /// Keeps the **first** actionable [`PhraseHit::Wake`] / [`PhraseHit::Sleep`]
@@ -778,6 +954,7 @@ impl Runtime {
     /// so hibernate does not score a late frame.
     fn drain_pcm(&mut self) -> Vec<WireEvent> {
         let mut hit = PhraseHit::None;
+        let mut near_miss = None;
         let mut scored = false;
         let mut energy_seen = false;
         let awake = wire_state(self.machine.state()) == WireState::Awake;
@@ -785,12 +962,16 @@ impl Runtime {
         // frames so speakers do not feed free-speech / KWS / PTT.
         let muted = softwake_voice::input_muted();
         self.rearm_kws_after_unmute(muted);
-        let auto_ok = awake
-            && !self.voice_test
-            && !self.talk.is_armed()
-            && self.pending_auto_pcm.is_none()
-            && !self.in_voice_cooldown()
-            && !muted;
+        // Fuzzy wake listens only while the clarifier is already armed. Sleep
+        // otherwise still drops the auto buffer.
+        let fuzzy_listen = self.fuzzy_listen_active(muted);
+        let auto_ok = fuzzy_listen
+            || (awake
+                && !self.voice_test
+                && !self.talk.is_armed()
+                && self.pending_auto_pcm.is_none()
+                && !self.in_voice_cooldown()
+                && !muted);
         if !auto_ok && (self.auto_utt.is_buffering() || !awake || muted || self.voice_test) {
             // PTT, cooldown, TTS mute, voice test, sleep, or a pending clip — drop a partial auto buffer.
             if self.talk.is_armed()
@@ -819,10 +1000,12 @@ impl Runtime {
             if auto_ok && self.pending_auto_pcm.is_none() {
                 if let Some(pcm) = self.auto_utt.push_frame(samples, level) {
                     self.pending_auto_pcm = Some(pcm);
-                    self.retain_status_text(
-                        Some("thinking…".to_owned()),
-                        Some("free speech".to_owned()),
-                    );
+                    if awake {
+                        self.retain_status_text(
+                            Some("thinking…".to_owned()),
+                            Some("free speech".to_owned()),
+                        );
+                    }
                 }
             }
             let observed = self.observe_kws_frame(&frame);
@@ -830,58 +1013,66 @@ impl Runtime {
             // Stick the first wake/sleep/hibernate; do not let later None overwrite it.
             if matches!(hit, PhraseHit::None)
                 && matches!(
-                    observed,
+                    observed.hit,
                     PhraseHit::Wake | PhraseHit::Sleep | PhraseHit::Hibernate
                 )
             {
-                hit = observed;
+                hit = observed.hit;
+            }
+            if near_miss.is_none() {
+                near_miss = observed.near_miss;
             }
         }
         if scored {
             self.last_pcm_hit = Some(hit);
         }
-        if energy_seen
-            && matches!(hit, PhraseHit::None)
-            && self.capture.kind() == CaptureKind::PipeWire
-            && wire_state(self.machine.state()) == WireState::Sleep
-            && !self.pcm.weights_loaded()
-        {
-            let now = Instant::now();
-            let should_log = self
-                .last_energy_log
-                .is_none_or(|previous| now.duration_since(previous).as_secs() >= 2);
-            if should_log {
-                self.last_energy_log = Some(now);
-                eprintln!(
-                    "softwaked: mic energy heard (capture_level set); wake-from-voice needs KWS weights — see README"
-                );
-            }
-        }
-        if energy_seen
-            && self.verbosity >= 2
-            && matches!(hit, PhraseHit::None)
-            && self.capture.kind() == CaptureKind::PipeWire
-            && wire_state(self.machine.state()) == WireState::Sleep
-            && self.pcm.weights_loaded()
-        {
-            let now = Instant::now();
-            let should_log = self
-                .last_energy_log
-                .is_none_or(|previous| now.duration_since(previous).as_secs() >= 2);
-            if should_log {
-                self.last_energy_log = Some(now);
-                eprintln!(
-                    "softwaked: KWS {} listening (sleep) mic_rms={:.3} wake_phrases=[{}] — no keyword match yet",
-                    self.soul.profile_log_token(),
-                    self.last_capture_level.unwrap_or(0.0),
-                    self.pcm.wake_phrases().join(", ")
-                );
-            }
-        }
+        self.log_idle_sleep_energy(hit, energy_seen);
         if !self.capture.is_running() {
             self.last_capture_level = None;
         }
-        self.apply_pcm_hit(hit)
+        let events = self.apply_pcm_hit(hit);
+        // A fire hit in this batch stays one-shot. Near-miss asks only when
+        // nothing in the batch fired.
+        if matches!(hit, PhraseHit::None) {
+            if let Some(keyword) = near_miss {
+                self.arm_fuzzy_from_probe(&keyword);
+            }
+        }
+        events
+    }
+
+    /// Rate-limited stderr when sleep hears energy and the spotter did not fire.
+    fn log_idle_sleep_energy(&mut self, hit: PhraseHit, energy_seen: bool) {
+        if !energy_seen
+            || !matches!(hit, PhraseHit::None)
+            || self.capture.kind() != CaptureKind::PipeWire
+            || wire_state(self.machine.state()) != WireState::Sleep
+        {
+            return;
+        }
+        let now = Instant::now();
+        let should_log = self
+            .last_energy_log
+            .is_none_or(|previous| now.duration_since(previous).as_secs() >= 2);
+        if !should_log {
+            return;
+        }
+        if !self.pcm.weights_loaded() {
+            self.last_energy_log = Some(now);
+            eprintln!(
+                "softwaked: mic energy heard (capture_level set); wake-from-voice needs KWS weights — see README"
+            );
+            return;
+        }
+        if self.verbosity >= 2 {
+            self.last_energy_log = Some(now);
+            eprintln!(
+                "softwaked: KWS {} listening (sleep) mic_rms={:.3} wake_phrases=[{}] — no keyword match yet",
+                self.soul.profile_log_token(),
+                self.last_capture_level.unwrap_or(0.0),
+                self.pcm.wake_phrases().join(", ")
+            );
+        }
     }
 
     /// When half-duplex mute lifts, reset sherpa so the next phrase is not scored
@@ -893,17 +1084,20 @@ impl Runtime {
         self.was_input_muted = muted;
     }
 
-    /// Score one frame and return the spotter hit unchanged.
+    /// Score one frame and return the spotter detail unchanged.
     ///
     /// Short words are not dropped when free speech or press-to-talk is long.
     /// A 1.5 s suppress cut real `sleep` commands during awake chat. A 400 ms
     /// silence reset of the online stream chopped keywords mid-utterance.
     /// Both gates are gone. Soft 5 s / hard 10 s stream budget still refreshes a long session.
-    fn observe_kws_frame(&mut self, frame: &softwake_audio::AudioFrame) -> PhraseHit {
+    fn observe_kws_frame(
+        &mut self,
+        frame: &softwake_audio::AudioFrame,
+    ) -> softwake_wake::SpotDetail {
         let detail = score_frame_detailed(&mut self.pcm, frame);
         let level = self.last_capture_level.unwrap_or(0.0);
         self.log_kws_observation(&detail, level);
-        detail.hit
+        detail
     }
 
     /// Log one KWS observation when verbosity asks for it.
@@ -1016,6 +1210,7 @@ impl Runtime {
             }
         }
         self.pcm_agent = agent;
+        self.sync_near_miss_probe();
     }
 
     /// Re-read KWS thresholds and rebuild the spotter without changing voice state.
@@ -1137,6 +1332,8 @@ impl Runtime {
         let previous = wire_state(self.machine.state());
         match self.machine.apply(event) {
             Ok(applied) => {
+                // A keyword hit is one-shot and drops a question that was waiting.
+                self.mode_confirm.clear();
                 if event == Event::WakePhrase {
                     self.soul.commit_awake();
                     self.sync_shell_glossary();
@@ -1157,6 +1354,7 @@ impl Runtime {
                 // Mode change (and the mute gap that often follows state voice)
                 // must not leave sherpa OnlineStream silent for the next cycle.
                 self.pcm.rearm();
+                self.sync_near_miss_probe();
                 let state = wire_state(self.machine.state());
                 let capture_running = self.capture.is_running();
                 let detail = Some(format!("{previous} -> {state}"));
@@ -1691,6 +1889,39 @@ mod tests {
             outcome.body.status().is_some(),
             "wake should apply, got {outcome:?}"
         );
+    }
+
+    fn install_fixture(runtime: &mut Runtime) {
+        runtime.install_chat_fixture(crate::chat::xai_key_fixture(
+            true,
+            Some("sk-test-secret"),
+            "pong",
+        ));
+    }
+
+    fn sally_runtime() -> (Runtime, TestSoulDir) {
+        let dir = TestSoulDir::valid();
+        softwake_soul::write_profile_meta(
+            dir.path(),
+            &softwake_soul::ProfileMeta::new("sally", "Sally"),
+        )
+        .expect("profile meta");
+        let runtime = Runtime::new(dir.soul_dir());
+        assert_eq!(runtime.soul.agent_name(), "Sally");
+        (runtime, dir)
+    }
+
+    fn hold_input_clear() -> std::sync::MutexGuard<'static, ()> {
+        let guard = softwake_voice::INPUT_MUTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        softwake_voice::clear_input_mute_for_test();
+        guard
+    }
+
+    fn push_and_drain(runtime: &mut Runtime) {
+        assert!(runtime.capture_mock().push_frame(&[0; 160]));
+        runtime.drain_pcm();
     }
 
     #[test]
@@ -2975,5 +3206,276 @@ mod tests {
         assert!(runtime.chat_posts().is_empty());
         assert!(runtime.session_turns().is_empty());
         assert!(!format!("{outcome:?}").contains("sk-test-secret"));
+    }
+
+    #[test]
+    fn nl_sleep_confirm_stays_awake_until_yes() {
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        install_fixture(&mut runtime);
+        let asked = runtime.ask("put yourself to sleep");
+        let status = asked.body.status().expect("confirm");
+        assert_eq!(status.state, VoiceState::Awake);
+        assert_eq!(status.message.as_deref(), Some("Sleep now?"));
+        assert!(runtime.chat_posts().is_empty());
+        assert!(runtime.session_turns().is_empty());
+
+        // `yes` applies `SleepPhrase`, which the post-wake cooldown still holds.
+        runtime.machine.advance(Duration::from_millis(800));
+        let yes = runtime.ask("yes");
+        assert!(yes.body.status().is_some(), "yes should sleep, got {yes:?}");
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Sleep);
+        assert_eq!(runtime.session_phase(), SessionPhase::Closed);
+        assert!(runtime.session_turns().is_empty());
+        assert!(runtime.chat_posts().is_empty());
+        assert!(
+            runtime
+                .announced_prompts()
+                .iter()
+                .any(|line| line == "Sleep now?")
+        );
+        assert!(
+            runtime
+                .announced_prompts()
+                .last()
+                .is_some_and(|line| line.contains("asleep"))
+        );
+    }
+
+    #[test]
+    fn nl_sleep_no_stays_awake_without_a_model_call() {
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        install_fixture(&mut runtime);
+        runtime.ask("I'm done for a bit");
+        let no = runtime.ask("no");
+        let status = no.body.status().expect("cancel");
+        assert_eq!(status.state, VoiceState::Awake);
+        assert_eq!(status.message.as_deref(), Some("Okay, staying awake."));
+        assert!(runtime.chat_posts().is_empty());
+        assert_eq!(runtime.session_phase(), SessionPhase::Open);
+        assert!(runtime.session_turns().is_empty());
+    }
+
+    #[test]
+    fn nl_hibernate_yes_stops_capture() {
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        install_fixture(&mut runtime);
+        let asked = runtime.ask("hibernate");
+        let status = asked.body.status().expect("confirm");
+        assert_eq!(status.message.as_deref(), Some("Hibernate now?"));
+        assert_eq!(status.state, VoiceState::Awake);
+        assert!(runtime.capture.is_running());
+        runtime.ask("yes");
+        assert_eq!(
+            runtime.machine.state(),
+            softwake_state::VoiceState::Hibernate
+        );
+        assert!(!runtime.capture.is_running());
+        assert!(runtime.chat_posts().is_empty());
+        assert!(runtime.session_turns().is_empty());
+    }
+
+    #[test]
+    fn question_about_hibernate_reaches_the_model() {
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        install_fixture(&mut runtime);
+        let outcome = runtime.ask("what is hibernate");
+        let status = outcome.body.status().expect("reply");
+        assert_eq!(status.message.as_deref(), Some("pong"));
+        assert_eq!(status.state, VoiceState::Awake);
+        assert_eq!(runtime.chat_posts().len(), 1);
+        assert!(
+            runtime
+                .announced_prompts()
+                .iter()
+                .all(|line| line != "Hibernate now?")
+        );
+        assert_eq!(
+            runtime.session_turns(),
+            vec!["what is hibernate".to_owned()]
+        );
+    }
+
+    #[test]
+    fn yes_without_a_confirm_is_a_normal_ask() {
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        install_fixture(&mut runtime);
+        let outcome = runtime.ask("yes");
+        let status = outcome.body.status().expect("reply");
+        assert_eq!(status.message.as_deref(), Some("pong"));
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Awake);
+        assert_eq!(runtime.chat_posts().len(), 1);
+    }
+
+    #[test]
+    fn unclear_reply_cancels_the_confirm_and_asks_the_model() {
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        install_fixture(&mut runtime);
+        runtime.ask("put yourself to sleep");
+        let outcome = runtime.ask("what is the weather");
+        let status = outcome.body.status().expect("reply");
+        assert_eq!(status.message.as_deref(), Some("pong"));
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Awake);
+        assert_eq!(runtime.chat_posts().len(), 1);
+        assert!(runtime.mode_confirm.pending_kind().is_none());
+    }
+
+    #[test]
+    fn expired_sleep_confirm_does_not_swallow_the_next_ask() {
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        install_fixture(&mut runtime);
+        runtime.ask("put yourself to sleep");
+        runtime
+            .mode_confirm
+            .force_expired(std::time::Instant::now());
+        let outcome = runtime.ask("hello");
+        let status = outcome.body.status().expect("reply");
+        assert_eq!(status.message.as_deref(), Some("pong"));
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Awake);
+        assert_eq!(runtime.chat_posts().len(), 1);
+    }
+
+    #[test]
+    fn hard_sleep_keyword_clears_a_pending_confirm() {
+        let _guard = hold_input_clear();
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        runtime.machine.advance(Duration::from_millis(800));
+        runtime.ask("put yourself to sleep");
+        assert_eq!(
+            runtime.mode_confirm.pending_kind(),
+            Some(crate::mode_confirm::ConfirmKind::Sleep)
+        );
+        runtime.install_scripted_pcm_keywords([(PhraseHit::Sleep, "sleep")]);
+        assert!(runtime.capture_mock().push_frame(&[8_000; 320]));
+        runtime.drain_pcm();
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Sleep);
+        assert!(runtime.mode_confirm.pending_kind().is_none());
+    }
+
+    #[test]
+    fn fuzzy_near_miss_asks_once_and_yes_wakes() {
+        let _guard = hold_input_clear();
+        let (mut runtime, _soul) = sally_runtime();
+        install_fixture(&mut runtime);
+        runtime.install_scripted_near_misses(["sally", "sally"]);
+        push_and_drain(&mut runtime);
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Sleep);
+        assert_eq!(
+            runtime.announced_prompts(),
+            &["Were you trying to wake me?".to_owned()]
+        );
+        push_and_drain(&mut runtime);
+        assert_eq!(runtime.announced_prompts().len(), 1);
+        runtime.ask("yes");
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Awake);
+        assert!(runtime.chat_posts().is_empty());
+        assert!(runtime.session_turns().is_empty());
+        assert!(runtime.mode_confirm.pending_kind().is_none());
+        assert!(
+            runtime
+                .announced_prompts()
+                .last()
+                .is_some_and(|line| line.contains("awake"))
+        );
+    }
+
+    #[test]
+    fn fuzzy_near_miss_no_stays_asleep() {
+        let _guard = hold_input_clear();
+        let (mut runtime, _soul) = sally_runtime();
+        install_fixture(&mut runtime);
+        runtime.install_scripted_near_misses(["sally"]);
+        push_and_drain(&mut runtime);
+        let no = runtime.ask("no");
+        let status = no.body.status().expect("cancel");
+        assert_eq!(status.message.as_deref(), Some("Okay, staying asleep."));
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Sleep);
+        assert!(runtime.chat_posts().is_empty());
+        assert!(runtime.mode_confirm.pending_kind().is_none());
+    }
+
+    #[test]
+    fn probe_hi_and_sleep_do_not_arm_fuzzy_wake() {
+        let _guard = hold_input_clear();
+        let (mut runtime, _soul) = sally_runtime();
+        runtime.install_scripted_near_misses(["hi"]);
+        push_and_drain(&mut runtime);
+        assert!(runtime.announced_prompts().is_empty());
+        assert!(runtime.mode_confirm.pending_kind().is_none());
+        runtime.install_scripted_near_misses(["sleep"]);
+        push_and_drain(&mut runtime);
+        assert!(runtime.announced_prompts().is_empty());
+        assert!(runtime.mode_confirm.pending_kind().is_none());
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Sleep);
+    }
+
+    #[test]
+    fn hard_wake_keyword_wins_over_a_fuzzy_confirm() {
+        let _guard = hold_input_clear();
+        let (mut runtime, _soul) = sally_runtime();
+        runtime.install_scripted_near_misses(["sally"]);
+        push_and_drain(&mut runtime);
+        assert!(runtime.mode_confirm.pending_kind().is_some());
+        runtime.install_scripted_pcm([PhraseHit::Wake]);
+        push_and_drain(&mut runtime);
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Awake);
+        assert!(runtime.mode_confirm.pending_kind().is_none());
+    }
+
+    #[test]
+    fn ask_hello_while_asleep_is_still_refused() {
+        let (mut runtime, _soul) = valid_runtime();
+        install_fixture(&mut runtime);
+        let outcome = runtime.ask("hello");
+        match outcome.body {
+            ResponseBody::Err {
+                error: IpcError::ChatRejected { ref message },
+            } => assert_eq!(message, "ask while sleep (chat acts only while awake)"),
+            other => panic!("expected sleep refusal, got {other:?}"),
+        }
+        assert!(runtime.chat_posts().is_empty());
+        assert!(runtime.announced_prompts().is_empty());
+    }
+
+    #[test]
+    fn typed_hey_sally_while_asleep_asks_before_waking() {
+        let (mut runtime, _soul) = sally_runtime();
+        install_fixture(&mut runtime);
+        let outcome = runtime.ask("hey sally");
+        let status = outcome.body.status().expect("confirm");
+        assert_eq!(status.state, VoiceState::Sleep);
+        assert_eq!(
+            status.message.as_deref(),
+            Some("Were you trying to wake me?")
+        );
+        assert!(runtime.chat_posts().is_empty());
+        assert!(runtime.session_turns().is_empty());
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Sleep);
+    }
+
+    #[test]
+    fn hibernate_still_refuses_a_typed_wake_attempt() {
+        let (mut runtime, _soul) = sally_runtime();
+        install_fixture(&mut runtime);
+        runtime.handle(Command::Hibernate);
+        let outcome = runtime.ask("hey sally");
+        match outcome.body {
+            ResponseBody::Err {
+                error: IpcError::ChatRejected { ref message },
+            } => assert_eq!(message, "ask while hibernate (chat acts only while awake)"),
+            other => panic!("expected hibernate refusal, got {other:?}"),
+        }
+        assert_eq!(
+            runtime.machine.state(),
+            softwake_state::VoiceState::Hibernate
+        );
+        assert!(runtime.chat_posts().is_empty());
     }
 }
