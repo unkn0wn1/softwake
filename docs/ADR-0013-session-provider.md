@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-09-25
 - **Amended:** 2026-09-25 (budgeted FileMemory recall on ask/chat; `ctl ask` on generation 1; `ctl wake` on generation 1)
+- **Amended:** 2026-09-26 (multi-turn history + compaction — see [ADR 0021](ADR-0021-multi-turn-compact.md))
 
 ## Decision
 
@@ -30,7 +31,7 @@ The operator paths are `softwaked demo` (`ask` and `chat`) and `softwaked ctl as
 
 `ctl ask` and `ctl chat` send [`ClientMessage::Ask`](../crates/softwake-ipc/src/types.rs). Success puts the assistant text in the status `message` field. A refusal is [`IpcError::ChatRejected`](../crates/softwake-ipc/src/types.rs) carrying the sentences in the table above, including the live-HTTP sentence. ctl prints that sentence and exits non-zero. The bearer is not on the wire.
 
-One completion per ask. The request is the system message plus this user line. Prior turns are not replayed. User lines accumulate on the session for the awake period and are dropped on close. Assistant text is the return value and the demo line. It is not stored on the session.
+Originally one completion per ask (system + this user line only). [ADR 0021](ADR-0021-multi-turn-compact.md) replays prior user/assistant turns for the awake session, stores assistant replies on the session, and may compact older turns when estimated usage crosses a Settings threshold. History still clears on sleep/hibernate.
 
 Ask does not refresh OAuth. An expired access token surfaces as HTTP 401 with the rejection sentence above.
 

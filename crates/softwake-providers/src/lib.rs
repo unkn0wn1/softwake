@@ -3,11 +3,13 @@
 //! Default builds use [`MockTransport`] and do not open a network socket.
 //! Enable `live-http` for real HTTPS via [`live::LiveTransport`].
 //!
-//! See [ADR 0012](../../docs/ADR-0012-model-providers.md) and
-//! [ADR 0013](../../docs/ADR-0013-session-provider.md).
+//! See [ADR 0012](../../docs/ADR-0012-model-providers.md),
+//! [ADR 0013](../../docs/ADR-0013-session-provider.md), and
+//! [ADR 0021](../../docs/ADR-0021-multi-turn-compact.md).
 
 mod chat;
 mod constants;
+mod context;
 mod handle;
 mod ids;
 mod models;
@@ -26,14 +28,19 @@ mod voice;
 pub mod live;
 
 pub use chat::{
-    CHAT_MAX_TOKENS, ChatError, PrepareError, PreparedChat, complete_chat,
-    missing_credential_message, prepare_chat,
+    CHAT_MAX_TOKENS, COMPACT_SYSTEM, ChatError, ChatMessage, ChatRole, PrepareError, PreparedChat,
+    complete_chat, complete_compact, extractive_summary, missing_credential_message, prepare_chat,
 };
 pub use constants::{
     OPENAI_API_BASE, OPENAI_CHAT_SEED, OPENAI_COMPATIBLE_CHAT_SEED, OPENAI_VOICE_SEED,
     OPENROUTER_API_BASE, OPENROUTER_CHAT_SEED, XAI_API_BASE, XAI_CHAT_SEED, XAI_OAUTH_CLIENT_ID,
     XAI_OAUTH_DEVICE_URL, XAI_OAUTH_GRANT_DEVICE, XAI_OAUTH_ISSUER, XAI_OAUTH_SCOPE,
     XAI_OAUTH_TOKEN_URL, XAI_REFRESH_SKEW_MS, XAI_TTS_VOICE_EVE, XAI_TTS_VOICES, XAI_VOICE_SEED,
+};
+pub use context::{
+    DEFAULT_COMPACT_AT_PERCENT, DEFAULT_CONTEXT_LIMIT_TOKENS, DEFAULT_KEEP_RECENT_TURNS,
+    builtin_context_limit, estimate_tokens, estimate_tokens_parts, resolve_compact_at_percent,
+    resolve_context_limit, resolve_keep_recent_turns, should_compact, usage_percent,
 };
 pub use handle::{HandleError, ProviderHandle};
 pub use ids::{ParseProviderIdError, ProviderId};

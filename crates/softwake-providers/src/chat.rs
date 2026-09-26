@@ -13,6 +13,57 @@ use crate::transport::{Transport, TransportError};
 /// `max_tokens` sent on every chat completion in this slice.
 pub const CHAT_MAX_TOKENS: u32 = 1024;
 
+/// Role on a non-system chat message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatRole {
+    /// User / operator turn (includes session-summary stand-ins).
+    User,
+    /// Assistant reply.
+    Assistant,
+}
+
+impl ChatRole {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Assistant => "assistant",
+        }
+    }
+}
+
+/// One user or assistant message in a chat/completions request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatMessage {
+    /// Message role.
+    pub role: ChatRole,
+    /// Message text.
+    pub content: String,
+}
+
+impl ChatMessage {
+    /// User message.
+    #[must_use]
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: ChatRole::User,
+            content: content.into(),
+        }
+    }
+
+    /// Assistant message.
+    #[must_use]
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self {
+            role: ChatRole::Assistant,
+            content: content.into(),
+        }
+    }
+}
+
+/// System prompt for one compaction completion.
+pub const COMPACT_SYSTEM: &str = "Summarize this conversation so far for continuity. Keep decisions, names, open tasks, and facts. Omit filler. Plain prose, no preamble.";
+
 /// Chat target that passed readiness.
 ///
 /// The bearer token is not a field. [`Debug`](std::fmt::Debug) cannot print it.
@@ -148,7 +199,8 @@ pub fn prepare_chat(
 
 /// POST one chat completion. No `temperature`, tools, or stream.
 ///
-/// Parses `choices[0].message.content` only when it is a JSON string.
+/// `messages` are user/assistant turns only; `system` is prepended as the first
+/// message. Parses `choices[0].message.content` only when it is a JSON string.
 ///
 /// # Errors
 ///
@@ -160,21 +212,73 @@ pub fn complete_chat<T: Transport>(
     prepared: &PreparedChat,
     bearer: &str,
     system: &str,
-    user: &str,
+    messages: &[ChatMessage],
 ) -> Result<String, ChatError> {
     let url = format!("{}/chat/completions", prepared.api_base);
+    let mut wire = Vec::with_capacity(messages.len() + 1);
+    wire.push(serde_json::json!({"role": "system", "content": system}));
+    for message in messages {
+        wire.push(serde_json::json!({
+            "role": message.role.as_str(),
+            "content": message.content,
+        }));
+    }
     let body = serde_json::json!({
         "model": prepared.model,
         "max_tokens": CHAT_MAX_TOKENS,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user}
-        ]
+        "messages": wire,
     })
     .to_string();
-    let response = transport
-        .post_json_bearer(&url, bearer, &body)
-        .map_err(|_error: TransportError| ChatError::Unreachable)?;
+    parse_chat_response(transport.post_json_bearer(&url, bearer, &body))
+}
+
+/// One short compaction completion over older turns.
+///
+/// # Errors
+///
+/// Same as [`complete_chat`].
+pub fn complete_compact<T: Transport>(
+    transport: &T,
+    prepared: &PreparedChat,
+    bearer: &str,
+    older: &[ChatMessage],
+) -> Result<String, ChatError> {
+    let mut transcript = String::new();
+    for message in older {
+        transcript.push_str(message.role.as_str());
+        transcript.push_str(": ");
+        transcript.push_str(&message.content);
+        transcript.push('\n');
+    }
+    let messages = [ChatMessage::user(transcript)];
+    complete_chat(transport, prepared, bearer, COMPACT_SYSTEM, &messages)
+}
+
+/// Local extractive fallback when a compact completion fails.
+#[must_use]
+pub fn extractive_summary(older: &[ChatMessage], max_chars: usize) -> String {
+    let mut out = String::new();
+    for message in older {
+        let line = format!("{}: {}", message.role.as_str(), message.content);
+        if out.len() + line.len() + 1 > max_chars {
+            if out.is_empty() {
+                let take = max_chars.min(line.len());
+                out.push_str(&line[..take]);
+            }
+            break;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&line);
+    }
+    out
+}
+
+fn parse_chat_response(
+    response: Result<crate::transport::HttpResponse, TransportError>,
+) -> Result<String, ChatError> {
+    let response = response.map_err(|_error: TransportError| ChatError::Unreachable)?;
     if response.status == 401 || response.status == 403 {
         return Err(ChatError::Rejected);
     }
@@ -206,8 +310,8 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        ChatError, PrepareError, PreparedChat, complete_chat, missing_credential_message,
-        prepare_chat,
+        ChatError, ChatMessage, PrepareError, PreparedChat, complete_chat,
+        missing_credential_message, prepare_chat,
     };
     use crate::handle::ProviderHandle;
     use crate::ids::ProviderId;
@@ -529,7 +633,7 @@ mod tests {
                 &prepared(family, model),
                 "sk-test-secret",
                 "be brief",
-                "hello",
+                &[ChatMessage::user("hello")],
             )
             .expect("pong");
             assert_eq!(reply, "pong");
@@ -555,13 +659,27 @@ mod tests {
         let prepared = prepared(ProviderFamily::Xai, "grok-4.5");
         let trimmed = RecordingTransport::new(content_response(200, &json!("  pong \n")));
         assert_eq!(
-            complete_chat(&trimmed, &prepared, "token", "sys", "user").expect("trim"),
+            complete_chat(
+                &trimmed,
+                &prepared,
+                "token",
+                "sys",
+                &[ChatMessage::user("user")]
+            )
+            .expect("trim"),
             "pong"
         );
 
         let empty = RecordingTransport::new(content_response(200, &json!("  \n\t")));
         assert_eq!(
-            complete_chat(&empty, &prepared, "token", "sys", "user").expect_err("empty"),
+            complete_chat(
+                &empty,
+                &prepared,
+                "token",
+                "sys",
+                &[ChatMessage::user("user")]
+            )
+            .expect_err("empty"),
             ChatError::Empty
         );
 
@@ -570,7 +688,14 @@ mod tests {
             &json!([{"type": "text", "text": "hi"}]),
         ));
         assert_eq!(
-            complete_chat(&parts, &prepared, "token", "sys", "user").expect_err("parts"),
+            complete_chat(
+                &parts,
+                &prepared,
+                "token",
+                "sys",
+                &[ChatMessage::user("user")]
+            )
+            .expect_err("parts"),
             ChatError::Unparseable
         );
 
@@ -579,7 +704,14 @@ mod tests {
             body: json!({"choices": []}).to_string(),
         });
         assert_eq!(
-            complete_chat(&none, &prepared, "token", "sys", "user").expect_err("choices"),
+            complete_chat(
+                &none,
+                &prepared,
+                "token",
+                "sys",
+                &[ChatMessage::user("user")]
+            )
+            .expect_err("choices"),
             ChatError::Unparseable
         );
     }
@@ -591,8 +723,14 @@ mod tests {
             status: 401,
             body: "sk-test-secret".to_owned(),
         });
-        let error =
-            complete_chat(&rejected, &prepared, "sk-test-secret", "sys", "user").expect_err("401");
+        let error = complete_chat(
+            &rejected,
+            &prepared,
+            "sk-test-secret",
+            "sys",
+            &[ChatMessage::user("user")],
+        )
+        .expect_err("401");
         assert_eq!(error, ChatError::Rejected);
         assert_eq!(error.to_string(), "Provider rejected the credentials.");
         assert!(!error.to_string().contains("sk-test-secret"));
@@ -602,7 +740,14 @@ mod tests {
             body: "sk-test-secret".to_owned(),
         });
         assert_eq!(
-            complete_chat(&forbidden, &prepared, "sk-test-secret", "sys", "user").expect_err("403"),
+            complete_chat(
+                &forbidden,
+                &prepared,
+                "sk-test-secret",
+                "sys",
+                &[ChatMessage::user("user")]
+            )
+            .expect_err("403"),
             ChatError::Rejected
         );
 
@@ -610,11 +755,40 @@ mod tests {
             status: 500,
             body: "sk-test-secret".to_owned(),
         });
-        let error =
-            complete_chat(&failed, &prepared, "sk-test-secret", "sys", "user").expect_err("500");
+        let error = complete_chat(
+            &failed,
+            &prepared,
+            "sk-test-secret",
+            "sys",
+            &[ChatMessage::user("user")],
+        )
+        .expect_err("500");
         assert_eq!(error, ChatError::Failed { status: 500 });
         assert_eq!(error.to_string(), "Chat completion failed (500).");
         assert!(!error.to_string().contains("sk-test-secret"));
+    }
+
+    #[test]
+    fn complete_chat_sends_prior_turns_before_new_user() {
+        let transport = RecordingTransport::new(content_response(200, &json!("ok")));
+        let messages = [
+            ChatMessage::user("first"),
+            ChatMessage::assistant("ack"),
+            ChatMessage::user("second"),
+        ];
+        complete_chat(
+            &transport,
+            &prepared(ProviderFamily::Xai, "grok-4.5"),
+            "token",
+            "sys",
+            &messages,
+        )
+        .expect("ok");
+        let body: Value = serde_json::from_str(&transport.posts.borrow()[0].2).expect("json");
+        assert_eq!(body["messages"].as_array().expect("arr").len(), 4);
+        assert_eq!(body["messages"][1]["content"], "first");
+        assert_eq!(body["messages"][2]["role"], "assistant");
+        assert_eq!(body["messages"][3]["content"], "second");
     }
 
     #[test]
@@ -624,7 +798,7 @@ mod tests {
             &prepared(ProviderFamily::Xai, "grok-4.5"),
             "token",
             "sys",
-            "user",
+            &[ChatMessage::user("user")],
         )
         .expect_err("no route");
         assert_eq!(error, ChatError::Unreachable);

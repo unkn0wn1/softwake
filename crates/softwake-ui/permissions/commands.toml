@@ -94,6 +94,16 @@ description = "Save the selected xAI TTS voice id."
 commands.allow = ["provider_set_tts_voice"]
 
 [[permission]]
+identifier = "allow-provider-set-context-limit"
+description = "Save the context window override in tokens."
+commands.allow = ["provider_set_context_limit"]
+
+[[permission]]
+identifier = "allow-provider-set-compact-at"
+description = "Save the compaction threshold percent."
+commands.allow = ["provider_set_compact_at"]
+
+[[permission]]
 identifier = "allow-provider-opt-in-plaintext"
 description = "Opt in to a local plaintext secret file. The command writes no key."
 commands.allow = ["provider_opt_in_plaintext"]

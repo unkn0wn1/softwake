@@ -68,6 +68,12 @@ pub(crate) struct Runtime {
     last_status_message: Option<String>,
     /// Last detail line retained for HUD polls.
     last_status_detail: Option<String>,
+    /// Last ask context estimate (Status while awake).
+    last_context_used: Option<u32>,
+    /// Last resolved context limit.
+    last_context_limit: Option<u32>,
+    /// Whether the last ask compacted.
+    last_context_compacted: bool,
     /// Last playback error after a successful ask. Empty when speech played or was skipped.
     last_speech_note: Option<String>,
     /// In-test provider. Absent in the serve binary, so ask uses the disk path.
@@ -117,6 +123,9 @@ impl Runtime {
             last_voice_activity: None,
             last_status_message: None,
             last_status_detail: None,
+            last_context_used: None,
+            last_context_limit: None,
+            last_context_compacted: false,
             last_speech_note: None,
             #[cfg(test)]
             chat_fixture: None,
@@ -214,8 +223,12 @@ impl Runtime {
 
     /// User lines recorded on the open session.
     #[cfg(test)]
-    pub(crate) fn session_turns(&self) -> &[String] {
-        self.session.turns()
+    pub(crate) fn session_turns(&self) -> Vec<String> {
+        self.session
+            .user_texts()
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
     }
 
     /// Install the in-test provider. Production serve leaves this unset.
@@ -311,15 +324,28 @@ impl Runtime {
                     text,
                     Some(&softwake_memory::MockMemory::default()),
                 );
+                let budget = crate::chat::budget_for_handle(
+                    self.chat_fixture
+                        .as_ref()
+                        .map(|f| &f.handle)
+                        .expect("fixture"),
+                );
+                let transport_compact = std::sync::Arc::clone(&transport);
+                let call_c = call.clone();
+                let bearer_c = bearer.clone();
                 match crate::chat::perform_ask(
                     &mut self.session,
                     text,
                     &appendix,
-                    move |system, user| {
-                        crate::chat::complete_fixture(&transport, &call, &bearer, system, user)
+                    budget,
+                    move |older| {
+                        crate::chat::compact_fixture(&transport_compact, &call_c, &bearer_c, older)
+                    },
+                    move |system, messages| {
+                        crate::chat::complete_fixture(&transport, &call, &bearer, system, messages)
                     },
                 ) {
-                    Ok(reply) => self.finish_ask_reply(reply),
+                    Ok(ok) => self.finish_ask_reply(ok),
                     Err(error) => Self::chat_rejected(error.sentence()),
                 }
             }
@@ -337,17 +363,27 @@ impl Runtime {
             bearer,
             tts_voice: _,
             stt_model: _,
+            budget,
         } = ready;
         if let Err(message) = crate::chat::gate_live_http(&prepared, &bearer, text) {
             return Self::chat_rejected(&message);
         }
         let call = prepared.clone();
+        let call_c = prepared.clone();
+        let bearer_c = bearer.clone();
         let appendix =
             crate::chat::appendix_for_ask(text, Option::<&softwake_memory::MockMemory>::None);
-        match crate::chat::perform_ask(&mut self.session, text, &appendix, move |system, user| {
-            crate::chat::finish_prepared_chat(&call, &bearer, system, user)
-        }) {
-            Ok(reply) => self.finish_ask_reply(reply),
+        match crate::chat::perform_ask(
+            &mut self.session,
+            text,
+            &appendix,
+            budget,
+            move |older| crate::chat::finish_prepared_compact(&call_c, &bearer_c, older),
+            move |system, messages| {
+                crate::chat::finish_prepared_chat(&call, &bearer, system, messages)
+            },
+        ) {
+            Ok(ok) => self.finish_ask_reply(ok),
             Err(error) => Self::chat_rejected(error.sentence()),
         }
     }
@@ -356,9 +392,23 @@ impl Runtime {
     ///
     /// A playback failure keeps the reply and puts the player sentence on
     /// [`Status::detail`].
-    fn finish_ask_reply(&mut self, reply: String) -> Outcome {
+    fn finish_ask_reply(&mut self, ok: crate::chat::AskOk) -> Outcome {
+        let crate::chat::AskOk { reply, context } = ok;
+        self.last_context_used = Some(context.used);
+        self.last_context_limit = Some(context.limit);
+        self.last_context_compacted = context.compacted;
         self.speak_if_configured(&reply);
-        let detail = self.last_speech_note.clone();
+        let mut detail = self.last_speech_note.clone();
+        if context.compacted {
+            let compact_note = format!(
+                "compacted; context ~{} / {} ({}%)",
+                context.used, context.limit, context.percent
+            );
+            detail = Some(match detail {
+                Some(existing) => format!("{existing}; {compact_note}"),
+                None => compact_note,
+            });
+        }
         self.last_voice_activity = Some(Instant::now());
         self.auto_utt.reset();
         self.retain_status_text(Some(reply.clone()), detail.clone());
@@ -805,6 +855,9 @@ impl Runtime {
                 Effect::OpenSession => self.open_session(),
                 Effect::ReleaseActingResources => {
                     self.session.close();
+                    self.last_context_used = None;
+                    self.last_context_limit = None;
+                    self.last_context_compacted = false;
                     self.talk.clear();
                     self.auto_utt.reset();
                     self.pending_auto_pcm = None;
@@ -858,6 +911,14 @@ impl Runtime {
             last_tool: self.hands.last_tool_line(),
             talking: self.talk.is_armed(),
             auto_listening: self.auto_listening_active(),
+            context_used: self
+                .last_context_used
+                .filter(|_| self.session.phase() == softwake_session::SessionPhase::Open),
+            context_limit: self
+                .last_context_limit
+                .filter(|_| self.session.phase() == softwake_session::SessionPhase::Open),
+            context_compacted: self.last_context_compacted
+                && self.session.phase() == softwake_session::SessionPhase::Open,
         }
     }
 

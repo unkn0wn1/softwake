@@ -153,7 +153,7 @@ fn ask_while_awake_returns_the_fixture_reply() {
     assert_eq!(result.lines[0], "assistant: pong");
     assert!(result.lines.iter().any(|line| line == "state: awake"));
     assert_eq!(demo.state(), VoiceState::Awake);
-    assert_eq!(demo.session_turns(), &["hello".to_owned()]);
+    assert_eq!(demo.session_turns(), vec!["hello".to_owned()]);
     let posts = demo.chat_posts();
     assert_eq!(posts.len(), 1);
     assert_eq!(posts[0].url, "https://api.x.ai/v1/chat/completions");
@@ -183,7 +183,7 @@ fn chat_sends_the_rest_of_the_line() {
     wake(&mut demo);
     let result = demo.handle_line("chat hello there", Duration::ZERO);
     assert_eq!(result.lines[0], "assistant: pong");
-    assert_eq!(demo.session_turns(), &["hello there".to_owned()]);
+    assert_eq!(demo.session_turns(), vec!["hello there".to_owned()]);
     let body: serde_json::Value = serde_json::from_str(&demo.chat_posts()[0].body).expect("json");
     assert_eq!(body["messages"][1]["content"].as_str(), Some("hello there"));
 }
@@ -204,7 +204,7 @@ fn ask_command_word_is_case_insensitive() {
     wake(&mut demo);
     let result = demo.handle_line("ASK hello", Duration::ZERO);
     assert_eq!(result.lines[0], "assistant: pong");
-    assert_eq!(demo.session_turns(), &["hello".to_owned()]);
+    assert_eq!(demo.session_turns(), vec!["hello".to_owned()]);
 }
 
 #[test]
@@ -271,7 +271,7 @@ fn rejected_credentials_keep_the_user_line_and_hide_the_bearer() {
         result.lines[0],
         "rejected: Provider rejected the credentials."
     );
-    assert_eq!(demo.session_turns(), &["hello".to_owned()]);
+    assert_eq!(demo.session_turns(), vec!["hello".to_owned()]);
     assert_eq!(demo.chat_posts().len(), 1);
     assert!(!result.lines.join("\n").contains("sk-test-secret"));
     assert_eq!(demo.state(), VoiceState::Awake);
@@ -298,7 +298,7 @@ fn verbose_ask_names_the_provider_and_model_without_the_bearer() {
     assert!(text.contains("verbose: provider: xai-key"));
     assert!(text.contains("verbose: model: grok-4.5"));
     assert!(!text.contains("sk-test-secret"));
-    assert_eq!(demo.session_turns(), &["hello".to_owned()]);
+    assert_eq!(demo.session_turns(), vec!["hello".to_owned()]);
 }
 
 #[test]
@@ -442,4 +442,96 @@ fn ask_with_file_memory_temp_dir_attaches_substring_hits() {
         &softwake_session::assemble_system(demo.session_instructions().expect("pack"), &appendix,)
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn second_ask_replays_prior_user_and_assistant() {
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    install(
+        &mut demo,
+        xai_handle(
+            "grok-4.5",
+            &["grok-4.5"],
+            Some(true),
+            Some("sk-test-secret"),
+        ),
+        pong_body(),
+    );
+    wake(&mut demo);
+    assert_eq!(
+        demo.handle_line("ask remember blue", Duration::ZERO).lines[0],
+        "assistant: pong"
+    );
+    let result = demo.handle_line("ask what color", Duration::ZERO);
+    assert_eq!(result.lines[0], "assistant: pong");
+    assert_eq!(
+        demo.session_turns(),
+        vec!["remember blue".to_owned(), "what color".to_owned()]
+    );
+    let body: serde_json::Value = serde_json::from_str(&demo.chat_posts()[1].body).expect("json");
+    let messages = body["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 4); // system + user + assistant + user
+    assert_eq!(messages[1]["content"], "remember blue");
+    assert_eq!(messages[2]["role"], "assistant");
+    assert_eq!(messages[2]["content"], "pong");
+    assert_eq!(messages[3]["content"], "what color");
+}
+
+#[test]
+fn low_context_limit_compacts_before_ask() {
+    let (mut demo, _soul) = demo_with(no_cooldown());
+    let mut settings = ProviderSettings {
+        selected_provider: ProviderId::XaiKey,
+        selected_model: "grok-4.5".to_owned(),
+        context_limit_tokens: 80,
+        compact_at_percent: 10,
+        keep_recent_turns: 2,
+        ..ProviderSettings::default()
+    };
+    settings.store_models(
+        ProviderId::XaiKey,
+        vec!["grok-4.5".to_owned()],
+        Vec::new(),
+        1,
+    );
+    settings.store_test(
+        ProviderId::XaiKey,
+        TestReport {
+            ok: true,
+            message: "recorded".to_owned(),
+        },
+    );
+    let mut bag = SecretBag::empty();
+    bag.xai_api_key = Some("sk-test-secret".to_owned());
+    install(
+        &mut demo,
+        ProviderHandle::from_parts(settings, bag),
+        pong_body(),
+    );
+    wake(&mut demo);
+    for i in 0..4 {
+        let line = format!("ask turn-{i}-with-enough-text-to-grow-history");
+        let result = demo.handle_line(&line, Duration::ZERO);
+        assert!(
+            result.lines.iter().any(|l| l.starts_with("assistant:")),
+            "{result:?}"
+        );
+    }
+    let posts = demo.chat_posts();
+    assert!(
+        posts.len() >= 5,
+        "expected compact + asks, got {}",
+        posts.len()
+    );
+    let last: serde_json::Value = serde_json::from_str(&posts.last().unwrap().body).expect("json");
+    let contents: Vec<&str> = last["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["content"].as_str())
+        .collect();
+    assert!(
+        contents.iter().any(|c| c.starts_with("Session summary:")),
+        "expected summary in {contents:?}"
+    );
 }

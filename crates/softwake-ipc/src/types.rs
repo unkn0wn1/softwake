@@ -392,6 +392,17 @@ pub struct Status {
     /// Additive on protocol generation 1. Older peers omit it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub auto_listening: bool,
+    /// Estimated context tokens in use for the awake session (char/4 v1).
+    ///
+    /// Additive on protocol generation 1. Absent when asleep or never asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_used: Option<u32>,
+    /// Resolved context limit tokens for the selected model / Settings override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_limit: Option<u32>,
+    /// True when the latest ask compacted older turns.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub context_compacted: bool,
 }
 
 #[allow(
@@ -676,6 +687,9 @@ mod tests {
             last_tool: None,
             talking: false,
             auto_listening: false,
+            context_used: None,
+            context_limit: None,
+            context_compacted: false,
         }
     }
 
@@ -962,6 +976,9 @@ mod tests {
             last_tool: Some("notify confirm pending".to_owned()),
             talking: true,
             auto_listening: false,
+            context_used: None,
+            context_limit: None,
+            context_compacted: false,
         };
         assert_round_trip(&with_pending);
         let pending_json = serde_json::to_string(&with_pending).expect("encode");
@@ -1009,6 +1026,9 @@ mod tests {
             last_tool: None,
             talking: false,
             auto_listening: false,
+            context_used: None,
+            context_limit: None,
+            context_compacted: false,
         };
         assert_round_trip(&with_level);
         let json = serde_json::to_string(&with_level).expect("encode");
@@ -1026,6 +1046,9 @@ mod tests {
             last_tool: None,
             talking: false,
             auto_listening: false,
+            context_used: None,
+            context_limit: None,
+            context_compacted: false,
         };
         let json = serde_json::to_string(&without).expect("encode");
         assert!(!json.contains("capture_level"));
@@ -1050,6 +1073,9 @@ mod tests {
             last_tool: None,
             talking: false,
             auto_listening: false,
+            context_used: None,
+            context_limit: None,
+            context_compacted: false,
         };
         assert_round_trip(&missing);
 
@@ -1068,6 +1094,9 @@ mod tests {
             last_tool: None,
             talking: false,
             auto_listening: false,
+            context_used: None,
+            context_limit: None,
+            context_compacted: false,
         };
         let json = serde_json::to_string(&ok).expect("encode");
         assert!(json.contains("\"soul\":{\"ok\":true}"));

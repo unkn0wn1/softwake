@@ -37,6 +37,8 @@
     "allow-provider-set-model",
     "allow-provider-set-voice-model",
     "allow-provider-set-tts-voice",
+    "allow-provider-set-context-limit",
+    "allow-provider-set-compact-at",
     "allow-provider-opt-in-plaintext",
     "allow-email-snapshot",
     "allow-email-save",

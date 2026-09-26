@@ -33,7 +33,7 @@ Chat UIs are not how you want to drive a machine when your hands are busy. Softw
 | **1** | Local wake word → awake session → one safe tool → sleep phrase; hibernate from UI; soul.md + user.md loaded into session |
 | **2** | Better TTS/STT or realtime voice; confirm flows; richer tool bus |
 | **3** | Connectors (boundary first; live backends still open) + long-term memory (local trait and opt-in durable file; daemon unwired) + policy engine ([ADR 0010](ADR-0010-policy-engine.md)) |
-| **4** | Four-file context pack ([ADR 0011](ADR-0011-context-pack.md)), provider Settings ([ADR 0012](ADR-0012-model-providers.md)), and typed session chat ([ADR 0013](ADR-0013-session-provider.md)). Live connectors and OpenRouter stay open |
+| **4** | Four-file context pack ([ADR 0011](ADR-0011-context-pack.md)), provider Settings ([ADR 0012](ADR-0012-model-providers.md)), and typed session chat ([ADR 0013](ADR-0013-session-provider.md) / [ADR 0021](ADR-0021-multi-turn-compact.md)). Live connectors and OpenRouter stay open |
 | **later** | Skills hub, refine loop, and webhook wake ([ADR 0014](ADR-0014-skills-hub.md)) — direction only; implementation later. Chat and voice (STT) model pickers are in Settings after Test |
 
 See [06-milestones.md](06-milestones.md).

@@ -73,10 +73,29 @@ pub struct ProviderSettings {
     /// OpenAI-compatible API base URL (non-secret). Empty until the operator sets one.
     #[serde(default)]
     pub openai_compatible_base_url: String,
+    /// Context window override in tokens. `0` means unset (use built-in map / 128000).
+    ///
+    /// Document version stays 1. Older files omit this field.
+    #[serde(default)]
+    pub context_limit_tokens: u32,
+    /// Compaction trigger as percent of the context limit. `0` means default 70.
+    #[serde(default = "default_compact_at_percent")]
+    pub compact_at_percent: u8,
+    /// Recent message entries kept raw after compaction. `0` means default 8.
+    #[serde(default = "default_keep_recent_turns")]
+    pub keep_recent_turns: u32,
 }
 
 fn one() -> u32 {
     1
+}
+
+fn default_compact_at_percent() -> u8 {
+    crate::context::DEFAULT_COMPACT_AT_PERCENT
+}
+
+fn default_keep_recent_turns() -> u32 {
+    crate::context::DEFAULT_KEEP_RECENT_TURNS
 }
 
 impl Default for ProviderSettings {
@@ -90,6 +109,9 @@ impl Default for ProviderSettings {
             model_cache: BTreeMap::new(),
             last_test: BTreeMap::new(),
             openai_compatible_base_url: String::new(),
+            context_limit_tokens: 0,
+            compact_at_percent: crate::context::DEFAULT_COMPACT_AT_PERCENT,
+            keep_recent_turns: crate::context::DEFAULT_KEEP_RECENT_TURNS,
         }
     }
 }
@@ -145,6 +167,39 @@ impl ProviderSettings {
         raw.trim()
             .trim_end_matches('/')
             .clone_into(&mut self.openai_compatible_base_url);
+    }
+
+    /// Context limit override, or 0 when unset.
+    #[must_use]
+    pub fn context_limit_tokens(&self) -> u32 {
+        self.context_limit_tokens
+    }
+
+    /// Compaction percent (stored value; 0 still means “use default” at resolve time).
+    #[must_use]
+    pub fn compact_at_percent(&self) -> u8 {
+        self.compact_at_percent
+    }
+
+    /// Keep-recent turns (stored value; 0 still means “use default” at resolve time).
+    #[must_use]
+    pub fn keep_recent_turns(&self) -> u32 {
+        self.keep_recent_turns
+    }
+
+    /// Store context window override. `0` clears the override.
+    pub fn set_context_limit_tokens(&mut self, tokens: u32) {
+        self.context_limit_tokens = tokens;
+    }
+
+    /// Store compaction percent. Values above 100 clamp to 100; `0` restores default on resolve.
+    pub fn set_compact_at_percent(&mut self, percent: u8) {
+        self.compact_at_percent = percent.min(100);
+    }
+
+    /// Store keep-recent message count. `0` restores default on resolve.
+    pub fn set_keep_recent_turns(&mut self, turns: u32) {
+        self.keep_recent_turns = turns;
     }
 }
 
@@ -446,6 +501,17 @@ mod tests {
         );
         assert_eq!(loaded.selected_voice_model, "whisper-1");
         assert_eq!(loaded.selected_tts_voice, "eve");
+        assert_eq!(loaded.context_limit_tokens, 0);
+        assert_eq!(loaded.compact_at_percent, 70);
+        assert_eq!(loaded.keep_recent_turns, 8);
+        settings.context_limit_tokens = 8192;
+        settings.compact_at_percent = 50;
+        settings.keep_recent_turns = 4;
+        store.save(&settings).expect("save2");
+        let loaded = store.load().expect("load2");
+        assert_eq!(loaded.context_limit_tokens, 8192);
+        assert_eq!(loaded.compact_at_percent, 50);
+        assert_eq!(loaded.keep_recent_turns, 4);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
