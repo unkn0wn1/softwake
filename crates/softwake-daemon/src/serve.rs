@@ -461,6 +461,10 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
             let outcome = lock(&shared.runtime).set_voice_test(enabled);
             reply(shared, tx, id, outcome)
         }
+        Ok(ClientMessage::ReloadKws { id }) => {
+            let outcome = lock(&shared.runtime).reload_kws();
+            reply(shared, tx, id, outcome)
+        }
         Ok(ClientMessage::Hello { .. }) => false,
         Err(error) if error.is_disconnect() => false,
         Err(error) => {

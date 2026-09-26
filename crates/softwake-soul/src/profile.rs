@@ -56,9 +56,13 @@ pub struct AppConfig {
     /// Global KWS trigger threshold in milli-units (150 = 0.15). Lower = easier.
     ///
     /// Missing key → product default. Clamped by the wake crate when applied.
+    /// Settings → General and `SOFTWAKE_KWS_THRESHOLD` both target this key;
+    /// see daemon `resolve_kws_thresholds` for env > file precedence.
     #[serde(default = "default_kws_threshold_milli")]
     pub kws_threshold_milli: u16,
     /// Short-word per-keyword threshold in milli-units (100 = 0.10).
+    ///
+    /// Settings → General and `SOFTWAKE_KWS_SHORT_THRESHOLD` target this key.
     #[serde(default = "default_kws_short_threshold_milli")]
     pub kws_short_threshold_milli: u16,
 }
@@ -294,6 +298,39 @@ pub fn list_profiles(config_dir: &Path) -> Result<Vec<ProfileMeta>, SoulError> {
     }
     profiles.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(profiles)
+}
+
+/// Lowest milli accepted by Settings / `set_kws_thresholds` (0.05).
+pub const KWS_THRESHOLD_MILLI_MIN: u16 = 50;
+/// Highest milli accepted by Settings / `set_kws_thresholds` (0.50).
+pub const KWS_THRESHOLD_MILLI_MAX: u16 = 500;
+
+/// Clamp a milli threshold into [`KWS_THRESHOLD_MILLI_MIN`]..=[`KWS_THRESHOLD_MILLI_MAX`].
+#[must_use]
+pub fn clamp_kws_threshold_milli(value: u16) -> u16 {
+    value.clamp(KWS_THRESHOLD_MILLI_MIN, KWS_THRESHOLD_MILLI_MAX)
+}
+
+/// Write KWS thresholds into `softwake.json`, preserving `active_profile`.
+///
+/// Values are clamped to 50..=500 (0.05..=0.50). The wake crate also enforces
+/// short ≤ global when the daemon applies them.
+///
+/// # Errors
+///
+/// Config path or write failure.
+pub fn set_kws_thresholds(
+    config_dir: &Path,
+    global_milli: u16,
+    short_milli: u16,
+) -> Result<AppConfig, SoulError> {
+    ensure_migrated(config_dir)?;
+    let mut config = load_app_config(config_dir).unwrap_or_default();
+    config.version = APP_CONFIG_VERSION;
+    config.kws_threshold_milli = clamp_kws_threshold_milli(global_milli);
+    config.kws_short_threshold_milli = clamp_kws_threshold_milli(short_milli);
+    write_app_config(config_dir, &config)?;
+    Ok(config)
 }
 
 /// Set the active profile id (must already exist).
@@ -719,5 +756,22 @@ mod tests {
         assert_eq!(app.kws_threshold_milli, 150);
         assert_eq!(app.kws_short_threshold_milli, 100);
         assert_eq!(AppConfig::default().kws_threshold_milli, 150);
+    }
+
+    #[test]
+    fn set_kws_thresholds_round_trips_and_clamps() {
+        let root = TempDir::new("kws-thresh");
+        ensure_migrated(&root.path).expect("migrate");
+        let written = set_kws_thresholds(&root.path, 120, 80).expect("write");
+        assert_eq!(written.kws_threshold_milli, 120);
+        assert_eq!(written.kws_short_threshold_milli, 80);
+        let loaded = load_app_config(&root.path).expect("load");
+        assert_eq!(loaded.kws_threshold_milli, 120);
+        assert_eq!(loaded.kws_short_threshold_milli, 80);
+        let clamped = set_kws_thresholds(&root.path, 1, 999).expect("clamp");
+        assert_eq!(clamped.kws_threshold_milli, KWS_THRESHOLD_MILLI_MIN);
+        assert_eq!(clamped.kws_short_threshold_milli, KWS_THRESHOLD_MILLI_MAX);
+        // active_profile preserved
+        assert_eq!(clamped.active_profile, DEFAULT_PROFILE_ID);
     }
 }
