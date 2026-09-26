@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Per-profile Softwake schedules (`schedules.json`): once / daily / cron subset, confirm-gated `schedule` tool (Ask default), Settings → Timers, daemon tick with notify + fixed TTS fire (any voice state while softwaked runs). See [ADR-0024](docs/ADR-0024-timers-cron.md).
+
+
 - Settings → **Email** can Connect / Disconnect **Google** and **Microsoft** (PKCE + loopback). Tokens live in the existing secret bag / OS keyring. Scopes cover mail, calendar, and drive. Status shows the connected account. Live send/list stay draft-gated; SMTP opt-in remains. Publisher client ids come from `SOFTWAKE_GOOGLE_CLIENT_ID` / optional `SOFTWAKE_GOOGLE_CLIENT_SECRET` / `SOFTWAKE_MICROSOFT_CLIENT_ID` (not Settings). See [ADR 0023](docs/ADR-0023-email-oauth.md).
 - Settings → **Skills** lists user-added and agent-learned Markdown skills (`procedure` / `pitfalls` / `verify`) under the XDG data skills directory. Add, edit, and delete in the pane. Confirm-gated `skill_save` (Tools permission Ask by default) writes an agent skill after Approve; ask phrases like “make a skill …” / “make a skill from this” stage it. Soul rules still beat skills. Tools permission UX unchanged. Webhook wake and Email OAuth are not in this change.
 - Settings → Tools lists every registered tool as Always allow, Ask, or Deny (`tools.json` version 2). Defaults match the previous floors: echo always allow, notify and email_send ask, shell deny. Shell confirm policy (`always`, `mutating_only`, `allowlisted_quiet`) applies when shell is Ask. Always allow skips the prompt; shell still expands glossary aliases. A pending tool expands the HUD and keeps it open until Approve or Deny. After Approve, the HUD can offer “Always allow this tool”; the Tools page is what persists. Soul policy overrides can still only tighten. Skills and email sign-in are unchanged.

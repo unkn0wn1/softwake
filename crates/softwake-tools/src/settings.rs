@@ -131,9 +131,10 @@ pub fn parse_tool_permission(value: &str) -> Result<ToolPermission, ToolsSetting
 pub fn default_permission(name: &str) -> Option<ToolPermission> {
     match name {
         crate::ECHO_TOOL => Some(ToolPermission::AlwaysAllow),
-        crate::NOTIFY_TOOL | crate::EMAIL_SEND_TOOL | crate::SKILL_SAVE_TOOL => {
-            Some(ToolPermission::Ask)
-        }
+        crate::NOTIFY_TOOL
+        | crate::EMAIL_SEND_TOOL
+        | crate::SKILL_SAVE_TOOL
+        | crate::SCHEDULE_TOOL => Some(ToolPermission::Ask),
         crate::SHELL_TOOL => Some(ToolPermission::Deny),
         _ => None,
     }
@@ -210,6 +211,7 @@ impl ToolsSettings {
             crate::NOTIFY_TOOL,
             crate::EMAIL_SEND_TOOL,
             crate::SKILL_SAVE_TOOL,
+            crate::SCHEDULE_TOOL,
         ] {
             if !self.permissions.contains_key(name) {
                 if let Some(permission) = default_permission(name) {
@@ -473,7 +475,7 @@ mod tests {
         ConfirmPolicy, FileToolsSettings, ToolPermission, ToolsSettings, ToolsSettingsError,
         default_permission, parse_confirm_policy, parse_tool_permission, resolve_tools_file_from,
     };
-    use crate::{ECHO_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL, SHELL_TOOL, ToolRegistry};
+    use crate::{ECHO_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, ToolRegistry};
 
     fn temp_store(label: &str) -> (std::path::PathBuf, FileToolsSettings) {
         let dir = std::env::temp_dir().join(format!(
@@ -505,6 +507,7 @@ mod tests {
         assert_eq!(settings.permission(ECHO_TOOL), ToolPermission::AlwaysAllow);
         assert_eq!(settings.permission(NOTIFY_TOOL), ToolPermission::Ask);
         assert_eq!(settings.permission(EMAIL_SEND_TOOL), ToolPermission::Ask);
+        assert_eq!(settings.permission(SCHEDULE_TOOL), ToolPermission::Ask);
         assert_eq!(settings.permission(SHELL_TOOL), ToolPermission::Deny);
         assert_eq!(settings.permission("volume"), ToolPermission::Deny);
         assert!(!settings.permissions.contains_key("volume"));
@@ -580,6 +583,7 @@ mod tests {
         assert_eq!(settings.permission(ECHO_TOOL), ToolPermission::AlwaysAllow);
         assert_eq!(settings.permission(NOTIFY_TOOL), ToolPermission::Ask);
         assert_eq!(settings.permission(EMAIL_SEND_TOOL), ToolPermission::Ask);
+        assert_eq!(settings.permission(SCHEDULE_TOOL), ToolPermission::Ask);
         let _ = std::fs::remove_dir_all(dir);
     }
 

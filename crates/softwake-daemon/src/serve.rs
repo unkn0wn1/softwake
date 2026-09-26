@@ -99,6 +99,7 @@ pub(crate) fn spawn(
     let shared = Arc::new(Shared::new(soul_dir, capture, verbosity, voice_test)?);
     #[cfg(test)]
     let shared_for_handle = Arc::clone(&shared);
+    spawn_schedule_tick(Arc::clone(&shared));
     let listener = Listener::bind(&path)?;
     if listener.replaced_stale() {
         eprintln!("softwaked: removed stale socket {}", path.display());
@@ -607,4 +608,21 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
+}
+
+fn spawn_schedule_tick(shared: Arc<Shared>) {
+    let _ = thread::Builder::new()
+        .name("softwake-schedule".to_owned())
+        .spawn(move || {
+            loop {
+                thread::sleep(std::time::Duration::from_secs(
+                    crate::schedule_tick::TICK_SECS,
+                ));
+                // try_lock so we never block the voice pipeline
+                let Ok(mut runtime) = shared.runtime.try_lock() else {
+                    continue;
+                };
+                let _ = crate::schedule_tick::tick_all(&mut runtime);
+            }
+        });
 }

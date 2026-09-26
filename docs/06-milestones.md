@@ -89,3 +89,4 @@
 ## Multi-platform releases
 
 Linux and Windows x86_64 GitHub Releases (AppImage, tar.gz + systemd --user install, Windows setup.exe + portable): [ADR 0019](ADR-0019-multiplatform-releases.md), [releases.md](releases.md).
+- [x] Per-profile timers / cron (`schedule` tool + Settings → Timers; ADR-0024)

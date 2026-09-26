@@ -3934,8 +3934,10 @@ dependencies = [
 name = "softwake-tools"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
+ "softwake-soul",
  "thiserror 2.0.19",
 ]
 

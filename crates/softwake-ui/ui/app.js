@@ -10,7 +10,7 @@ const confirmBtn = document.querySelector("#confirm");
 const cancelBtn = document.querySelector("#cancel");
 const navStatus = document.querySelector("#nav-status");
 
-const panes = ["general", "profiles", "providers", "tools", "skills", "email", "status"];
+const panes = ["general", "profiles", "providers", "tools", "timers", "skills", "email", "status"];
 
 const providerSelect = document.querySelector("#provider-select");
 const keyPanel = document.querySelector("#key-panel");
@@ -1102,6 +1102,145 @@ if (skillsDeleteBtn) {
   });
 }
 
+
+/* ---- Timers ---- */
+const timersList = document.querySelector("#timers-list");
+const timersShowAll = document.querySelector("#timers-show-all");
+const timersActive = document.querySelector("#timers-active");
+const timersKind = document.querySelector("#timers-kind");
+const timersWhen = document.querySelector("#timers-when");
+const timersTitleInput = document.querySelector("#timers-title-input");
+const timersMessage = document.querySelector("#timers-message");
+const timersEnabled = document.querySelector("#timers-enabled");
+const timersStatus = document.querySelector("#timers-status");
+const timersError = document.querySelector("#timers-error");
+const timersNewBtn = document.querySelector("#timers-new");
+const timersSaveBtn = document.querySelector("#timers-save");
+const timersDeleteBtn = document.querySelector("#timers-delete");
+let timersSelectedId = "";
+let timersSelectedProfile = "";
+let timersRows = [];
+
+function showTimersError(error) {
+  if (!timersError) return;
+  timersError.textContent =
+    typeof error === "string" ? error : error && error.message ? error.message : "request failed";
+}
+
+function clearTimersForm() {
+  timersSelectedId = "";
+  timersSelectedProfile = "";
+  if (timersList) timersList.selectedIndex = -1;
+  if (timersKind) timersKind.value = "daily";
+  if (timersWhen) timersWhen.value = "";
+  if (timersTitleInput) timersTitleInput.value = "";
+  if (timersMessage) timersMessage.value = "";
+  if (timersEnabled) timersEnabled.checked = true;
+}
+
+function fillTimersForm(row) {
+  timersSelectedId = row.id || "";
+  timersSelectedProfile = row.profileId || "";
+  if (timersKind) timersKind.value = row.kind || "daily";
+  if (timersWhen) timersWhen.value = row.when || "";
+  if (timersTitleInput) timersTitleInput.value = row.title || "";
+  if (timersMessage) timersMessage.value = row.message || "";
+  if (timersEnabled) timersEnabled.checked = !!row.enabled;
+}
+
+function renderTimers(snap) {
+  if (timersError) timersError.textContent = "";
+  timersRows = snap.rows || [];
+  if (timersActive) {
+    timersActive.textContent = "Active profile: " + (snap.activeProfileId || "—");
+  }
+  if (timersShowAll) timersShowAll.checked = !!snap.showAll;
+  if (!timersList) return;
+  const prev = timersSelectedId;
+  timersList.innerHTML = "";
+  for (const row of timersRows) {
+    const opt = document.createElement("option");
+    opt.value = row.profileId + "\t" + row.id;
+    const label = (snap.showAll ? "[" + row.profileName + "] " : "") +
+      row.kind + " " + row.when + " — " + row.title + (row.enabled ? "" : " (off)");
+    opt.textContent = label;
+    timersList.appendChild(opt);
+  }
+  if (prev) {
+    for (const opt of timersList.options) {
+      if (opt.value.endsWith("\t" + prev) || opt.value === timersSelectedProfile + "\t" + prev) {
+        opt.selected = true;
+        break;
+      }
+    }
+  }
+}
+
+async function refreshTimers() {
+  try {
+    const showAll = timersShowAll ? timersShowAll.checked : false;
+    renderTimers(await invoke("timers_snapshot", { showAll }));
+  } catch (error) {
+    showTimersError(error);
+  }
+}
+
+if (timersShowAll) {
+  timersShowAll.addEventListener("change", () => refreshTimers());
+}
+if (timersList) {
+  timersList.addEventListener("change", () => {
+    const val = timersList.value || "";
+    const parts = val.split("\t");
+    const profileId = parts[0] || "";
+    const id = parts[1] || "";
+    const row = timersRows.find((r) => r.id === id && r.profileId === profileId);
+    if (row) fillTimersForm(row);
+  });
+}
+if (timersNewBtn) {
+  timersNewBtn.addEventListener("click", () => {
+    clearTimersForm();
+    if (timersStatus) timersStatus.textContent = "New timer — fill when + message, then Save.";
+  });
+}
+if (timersSaveBtn) {
+  timersSaveBtn.addEventListener("click", async () => {
+    try {
+      const snap = await invoke("timers_upsert", {
+        profileId: timersSelectedProfile || null,
+        id: timersSelectedId || null,
+        kind: timersKind ? timersKind.value : "daily",
+        when: timersWhen ? timersWhen.value : "",
+        title: timersTitleInput ? timersTitleInput.value : "",
+        message: timersMessage ? timersMessage.value : "",
+        enabled: timersEnabled ? timersEnabled.checked : true,
+      });
+      renderTimers(snap);
+      if (timersStatus) timersStatus.textContent = "Timer saved.";
+    } catch (error) {
+      showTimersError(error);
+    }
+  });
+}
+if (timersDeleteBtn) {
+  timersDeleteBtn.addEventListener("click", async () => {
+    if (!timersSelectedId || !timersSelectedProfile) return;
+    try {
+      const snap = await invoke("timers_delete", {
+        profileId: timersSelectedProfile,
+        id: timersSelectedId,
+      });
+      clearTimersForm();
+      renderTimers(snap);
+      if (timersStatus) timersStatus.textContent = "Timer deleted.";
+    } catch (error) {
+      showTimersError(error);
+    }
+  });
+}
+
+
 async function refreshTools() {
   try {
     renderTools(await invoke("tools_snapshot"));
@@ -1552,6 +1691,9 @@ function showPane(name) {
   }
   if (name === "skills") {
     refreshSkills();
+  }
+  if (name === "timers") {
+    refreshTimers();
   }
 
 }

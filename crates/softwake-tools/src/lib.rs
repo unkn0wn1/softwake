@@ -13,9 +13,17 @@
 //! Tools Settings choose always allow, ask, or deny. The daemon expands glossary
 //! aliases, then may spawn `/bin/sh -c` via [`shell`]. This crate still does not spawn on invoke.
 
+mod schedule;
 mod settings;
 mod shell;
 
+pub use schedule::{
+    CATCH_UP_GRACE_MS, CronExpr, MAX_ENTRIES, SCHEDULES_FILE_NAME, ScheduleAction, ScheduleEntry,
+    ScheduleError, ScheduleKind, SchedulesFile, TIMEZONE_LOCAL, advance_after_fire, apply_action,
+    compute_next_fire_ms, fire_notify_line, fire_speak_line, list_profile_ids, load_schedules,
+    new_schedule_id, now_ms, parse_schedule_args, refresh_next_fire, resolve_active_schedules_file,
+    resolve_schedules_file, save_schedules, should_fire, skip_missed, validate_entry,
+};
 pub use settings::{
     ConfirmPolicy, FileToolsSettings, TOOLS_FILE_NAME, ToolPermission, ToolsSettings,
     ToolsSettingsError, default_permission, parse_confirm_policy, parse_tool_permission,
@@ -40,6 +48,9 @@ pub const SHELL_TOOL: &str = "shell";
 
 /// Confirm-gated skill write. Daemon saves Markdown after confirm.
 pub const SKILL_SAVE_TOOL: &str = "skill_save";
+
+/// Confirm-gated schedule mutate (create/edit/delete). `list` is included and confirm-gated.
+pub const SCHEDULE_TOOL: &str = "schedule";
 
 /// How the daemon may treat a registered tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,6 +117,11 @@ const PHASE2: &[ToolMeta] = &[
         name: SKILL_SAVE_TOOL,
         risk: ToolRisk::Confirm,
         description: "Save a Markdown skill (procedure / pitfalls / verify) after confirm.",
+    },
+    ToolMeta {
+        name: SCHEDULE_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Create, edit, or delete a per-profile timer/reminder/cron after confirm.",
     },
 ];
 
@@ -247,6 +263,11 @@ impl ToolRegistry {
                 if name == SKILL_SAVE_TOOL {
                     parse_skill_save_args(args)?;
                 }
+                if name == SCHEDULE_TOOL {
+                    parse_schedule_args(args).map_err(|_| ToolError::InvalidArgs {
+                        name: SCHEDULE_TOOL.to_owned(),
+                    })?;
+                }
                 Ok(ToolResult {
                     detail: render(name, args),
                 })
@@ -274,6 +295,10 @@ fn render(name: &str, args: &[String]) -> String {
     match name {
         ECHO_TOOL => echo_detail(args),
         NOTIFY_TOOL | SHELL_TOOL => args.join(" "),
+        SCHEDULE_TOOL => match parse_schedule_args(args) {
+            Ok(action) => format!("schedule {action:?}"),
+            Err(error) => error.to_string(),
+        },
         SKILL_SAVE_TOOL => match parse_skill_save_args(args) {
             Ok(parsed) => format!("skill_save: {}", parsed.title),
             Err(_) => args.join(" "),
@@ -383,8 +408,8 @@ fn echo_detail(args: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ECHO_TOOL, EMAIL_SEND_TOOL, EmailSendArgs, NOTIFY_TOOL, SHELL_TOOL, SKILL_SAVE_TOOL,
-        ToolError, ToolRegistry, ToolResult, ToolRisk, parse_email_send_args,
+        ECHO_TOOL, EMAIL_SEND_TOOL, EmailSendArgs, NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL,
+        SKILL_SAVE_TOOL, ToolError, ToolRegistry, ToolResult, ToolRisk, parse_email_send_args,
     };
 
     fn registry() -> ToolRegistry {
@@ -406,6 +431,7 @@ mod tests {
                 (EMAIL_SEND_TOOL, ToolRisk::Confirm),
                 (SHELL_TOOL, ToolRisk::Confirm),
                 (SKILL_SAVE_TOOL, ToolRisk::Confirm),
+                (SCHEDULE_TOOL, ToolRisk::Confirm),
             ]
         );
         assert_eq!(registry.risk("echo"), Some(ToolRisk::Safe));
