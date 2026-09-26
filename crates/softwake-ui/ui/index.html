@@ -63,6 +63,20 @@
           </p>
           <p id="kws-status" class="meta" role="status"></p>
           <p id="kws-error" class="error" role="status"></p>
+          <label class="field">
+            <span>Free-speech end silence (seconds)</span>
+            <input id="free-speech-silence" type="number" min="0.5" max="4.0" step="0.1" value="2.0" aria-describedby="free-speech-silence-hint" />
+          </label>
+          <p id="free-speech-silence-hint" class="meta">
+            How long quiet after speech before Softwake ends the utterance and runs STT.
+            Press-to-talk ignores this. This is not wake-word sensitivity.
+            Range 0.5–4.0 s, default 2.0. Saved to softwake.json
+            (<code>free_speech_end_silence_ms</code>, 500–4000) and applied live.
+            Changes debounce about 450&nbsp;ms.
+            Env <code>SOFTWAKE_FREE_SPEECH_END_SILENCE_MS</code> wins over the file when set.
+          </p>
+          <p id="free-speech-silence-status" class="meta" role="status"></p>
+          <p id="free-speech-silence-error" class="error" role="status"></p>
           <label class="field row-check">
             <input id="voice-test" type="checkbox" />
             <span>Voice test mode</span>

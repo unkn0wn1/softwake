@@ -18,6 +18,7 @@ mod providers;
 mod tools;
 mod tray;
 mod ui_prefs;
+mod utterance_prefs;
 
 use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
@@ -82,6 +83,8 @@ pub fn run() {
             ui_prefs::ui_prefs_set_text_size,
             kws_prefs::kws_thresholds_snapshot,
             kws_prefs::kws_thresholds_set,
+            utterance_prefs::free_speech_silence_snapshot,
+            utterance_prefs::free_speech_silence_set,
         ])
         .setup(|app| {
             ensure_daemon::ensure_daemon_running();
@@ -308,6 +311,8 @@ mod tests {
         "ui_prefs_set_text_size",
         "kws_thresholds_snapshot",
         "kws_thresholds_set",
+        "free_speech_silence_snapshot",
+        "free_speech_silence_set",
     ];
 
     const PERMISSIONS: &[&str] = &[
@@ -357,6 +362,8 @@ mod tests {
         "allow-ui-prefs-set-text-size",
         "allow-kws-thresholds-snapshot",
         "allow-kws-thresholds-set",
+        "allow-free-speech-silence-snapshot",
+        "allow-free-speech-silence-set",
     ];
 
     #[test]
