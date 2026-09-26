@@ -21,7 +21,7 @@ See [Cargo features](#cargo-features) for `pipewire`, `pipewire-native`, and `sh
 
 ## Releases
 
-Tagged builds (`v*`) publish **linux-x86_64** and **windows-x86_64** archives on GitHub Releases. See [docs/releases.md](docs/releases.md) for download, install, the OS feature matrix, and how to cut a tag. Design: [ADR 0019](docs/ADR-0019-multiplatform-releases.md).
+Tagged builds (`v*`) publish a Linux **AppImage** (preferred portable), a Linux **tar.gz** with `install-linux.sh` (user-prefix + systemd --user), a Windows **setup.exe**, and a Windows **portable** zip. Each package includes both `softwaked` and `softwake-ui`. See [docs/releases.md](docs/releases.md) for download, install, the OS feature matrix, and how to cut a tag. Design: [ADR 0019](docs/ADR-0019-multiplatform-releases.md).
 
 ## Cargo features
 

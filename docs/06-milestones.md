@@ -85,4 +85,4 @@
 
 ## Multi-platform releases
 
-Linux and Windows x86_64 GitHub Releases: [ADR 0019](ADR-0019-multiplatform-releases.md), [releases.md](releases.md).
+Linux and Windows x86_64 GitHub Releases (AppImage, tar.gz + systemd --user install, Windows setup.exe + portable): [ADR 0019](ADR-0019-multiplatform-releases.md), [releases.md](releases.md).

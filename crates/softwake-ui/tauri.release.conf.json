@@ -1,0 +1,18 @@
+{
+  "bundle": {
+    "active": true,
+    "targets": ["appimage", "nsis"],
+    "externalBin": ["binaries/softwaked"],
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

@@ -29,3 +29,6 @@ crates/softwake-ui/gen/
 # Personal soul copies with private data
 /.softwake/
 /.softwake-briefs/
+
+# Staged Tauri sidecars (target-triple suffix); .gitkeep stays
+crates/softwake-ui/binaries/softwaked-*
