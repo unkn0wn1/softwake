@@ -9,16 +9,17 @@
 //! and the email outbox live in the daemon. This crate classifies names and
 //! shapes `email_send` arguments. It does not send.
 //!
-//! [`SHELL_TOOL`] is confirm-gated. The daemon refuses it until Tools Settings
-//! enable shell, expands glossary aliases, confirm-echoes, then may spawn
-//! `/bin/sh -c` via [`shell`]. This crate still does not spawn on invoke.
+//! [`SHELL_TOOL`] is confirm-gated in the registry. The operator default is deny.
+//! Tools Settings choose always allow, ask, or deny. The daemon expands glossary
+//! aliases, then may spawn `/bin/sh -c` via [`shell`]. This crate still does not spawn on invoke.
 
 mod settings;
 mod shell;
 
 pub use settings::{
-    ConfirmPolicy, FileToolsSettings, TOOLS_FILE_NAME, ToolsSettings, ToolsSettingsError,
-    parse_confirm_policy, resolve_tools_file, resolve_tools_file_from,
+    ConfirmPolicy, FileToolsSettings, TOOLS_FILE_NAME, ToolPermission, ToolsSettings,
+    ToolsSettingsError, default_permission, parse_confirm_policy, parse_tool_permission,
+    resolve_tools_file, resolve_tools_file_from,
 };
 pub use shell::{
     DEFAULT_OUTPUT_CAP, DEFAULT_SHELL_TIMEOUT, ShellError, ShellOutput, format_shell_output,
@@ -34,7 +35,7 @@ pub const NOTIFY_TOOL: &str = "notify";
 /// Confirm-gated send. The daemon appends one in-memory message after confirm.
 pub const EMAIL_SEND_TOOL: &str = "email_send";
 
-/// Confirm-gated shell. Off until Tools Settings enable it; the daemon spawns after confirm.
+/// Confirm-gated shell. Operator default is deny; the daemon spawns only after Ask or Always allow.
 pub const SHELL_TOOL: &str = "shell";
 
 /// How the daemon may treat a registered tool.

@@ -12,9 +12,34 @@
 mod tighten;
 
 use softwake_connectors::{ConnectorRegistry, ConnectorRisk};
-use softwake_tools::{ToolRegistry, ToolRisk};
+use softwake_tools::{ToolPermission, ToolRegistry, ToolRisk};
 
 pub use tighten::tighten;
+
+/// Operator grant composed with the registry floor and a tighten-only soul request.
+///
+/// Operator Always allow may loosen a confirm floor. A registry deny stays deny.
+/// Soul requests only tighten the operator result. This function is not
+/// `tighten(floor, operator)`.
+#[must_use]
+pub fn effective_tool_decision(
+    floor: PolicyDecision,
+    operator: ToolPermission,
+    soul_tighten: Option<PolicyDecision>,
+) -> PolicyDecision {
+    if floor == PolicyDecision::Deny {
+        return PolicyDecision::Deny;
+    }
+    let chosen = match operator {
+        ToolPermission::Deny => PolicyDecision::Deny,
+        ToolPermission::Ask => PolicyDecision::Confirm,
+        ToolPermission::AlwaysAllow => PolicyDecision::Safe,
+    };
+    match soul_tighten {
+        Some(requested) => tighten(chosen, requested),
+        None => chosen,
+    }
+}
 
 /// How a subject may be treated after policy evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,6 +166,14 @@ impl PolicyEngine {
         }
     }
 
+    /// Strictest override request for `name`, not the evaluated registry floor.
+    ///
+    /// `None` when the override map has no row for that name.
+    #[must_use]
+    pub fn tool_tighten_request(&self, name: &str) -> Option<PolicyDecision> {
+        self.overrides.tool(name)
+    }
+
     fn evaluate_tool(&self, name: &str) -> PolicyDecision {
         let Some(floor) = tool_floor(self.tools.risk(name)) else {
             return PolicyDecision::Deny;
@@ -196,8 +229,11 @@ mod tests {
         ECHO_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL, SHELL_TOOL, ToolRegistry, ToolRisk,
     };
 
+    use softwake_tools::ToolPermission;
+
     use super::{
-        PolicyDecision, PolicyEngine, PolicyOverrides, Subject, permits_confirmed_connector,
+        PolicyDecision, PolicyEngine, PolicyOverrides, Subject, effective_tool_decision,
+        permits_confirmed_connector,
     };
 
     fn builtin() -> PolicyEngine {
@@ -514,6 +550,51 @@ mod tests {
                 "create"
             ),
             PolicyDecision::Deny
+        );
+    }
+
+    #[test]
+    fn effective_tool_decision_composes_operator_grant_then_soul_tighten() {
+        use PolicyDecision::{Confirm, Deny, Safe};
+        use ToolPermission::{AlwaysAllow, Ask, Deny as OperatorDeny};
+
+        let rows = [
+            (Safe, AlwaysAllow, None, Safe),
+            (Confirm, AlwaysAllow, None, Safe),
+            (Safe, Ask, None, Confirm),
+            (Confirm, Ask, None, Confirm),
+            (Safe, OperatorDeny, None, Deny),
+            (Confirm, OperatorDeny, None, Deny),
+            (Deny, AlwaysAllow, None, Deny),
+            (Deny, Ask, None, Deny),
+            (Deny, OperatorDeny, None, Deny),
+            (Deny, AlwaysAllow, Some(Safe), Deny),
+            (Deny, Ask, Some(Confirm), Deny),
+            (Deny, OperatorDeny, Some(Deny), Deny),
+            (Safe, AlwaysAllow, Some(Confirm), Confirm),
+            (Confirm, AlwaysAllow, Some(Confirm), Confirm),
+            (Safe, AlwaysAllow, Some(Deny), Deny),
+            (Confirm, AlwaysAllow, Some(Deny), Deny),
+            (Safe, Ask, Some(Safe), Confirm),
+            (Confirm, Ask, Some(Safe), Confirm),
+            (Safe, OperatorDeny, Some(Safe), Deny),
+            (Confirm, OperatorDeny, Some(Safe), Deny),
+        ];
+        for (floor, operator, soul, expected) in rows {
+            assert_eq!(
+                effective_tool_decision(floor, operator, soul),
+                expected,
+                "floor {floor} operator {operator} soul {soul:?}"
+            );
+        }
+        assert!(
+            PolicyEngine::builtin()
+                .tool_tighten_request(ECHO_TOOL)
+                .is_none()
+        );
+        assert_eq!(
+            tool_engine(NOTIFY_TOOL, Deny).tool_tighten_request(NOTIFY_TOOL),
+            Some(Deny)
         );
     }
 

@@ -39,3 +39,11 @@ host aliases) without turning Softwake into a silent full-machine agent.
 - Policy floor for `shell` is confirm; overrides may only tighten to deny.
 - Operators must enable Tools → shell, add glossary aliases, and confirm before
   remote commands run.
+
+## Amendment — per-tool permissions (2026-09-26)
+
+`tools.json` is document version 2. Each registered tool is `always_allow`, `ask`, or `deny` (Always allow, Ask, Deny). Defaults match the previous floors: echo always allow, notify and email_send ask, shell deny. Version 1 still loads. A version-1 file with no `permissions.shell` becomes ask when `shell_enabled` is true and deny when it is false. It does not become always allow. When `permissions.shell` is present, that value wins and the next save rewrites `shell_enabled` to match (`true` unless shell is deny).
+
+Shell confirm policy (`always`, `mutating_only`, `allowlisted_quiet`) applies only when shell is Ask. Always allow expands glossary aliases and runs with no prompt. Deny does not spawn. `allowlisted_quiet` is still reserved and uses the same gate as `mutating_only`.
+
+Settings → Tools lists every registered tool. The HUD shows Approve and Deny for a pending tool and stays expanded until the operator actions it. After Approve, if the stored mode is still ask, the HUD can offer “Always allow this tool”. That offer writes `tools.json`. Soul policy overrides can still only tighten. A registry deny cannot be lifted. Shell is still not full machine access.

@@ -7,6 +7,16 @@ const liveEl = document.querySelector("#live");
 const form = document.querySelector("#ask-form");
 const input = document.querySelector("#ask-input");
 const talkBtn = document.querySelector("#talk");
+const pendingCard = document.querySelector("#hud-pending");
+const pendingNameEl = document.querySelector("#hud-pending-name");
+const pendingDescEl = document.querySelector("#hud-pending-desc");
+const pendingArgsEl = document.querySelector("#hud-pending-args");
+const approveBtn = document.querySelector("#hud-approve");
+const denyBtn = document.querySelector("#hud-deny");
+const allowBar = document.querySelector("#hud-allow");
+const allowText = document.querySelector("#hud-allow-text");
+const allowYes = document.querySelector("#hud-allow-yes");
+const allowNo = document.querySelector("#hud-allow-no");
 
 const IDLE_MIN_MS = 1000;
 const IDLE_MAX_MS = 30000;
@@ -31,6 +41,9 @@ let refreshInFlight = false;
 let lastStatusMessage = "";
 let profileName = "Softwake";
 let profilePollAt = 0;
+let pendingToolId = null;
+let pendingBusy = false;
+let allowOfferName = "";
 let viewW = 120;
 let viewH = 120;
 const turns = [];
@@ -171,7 +184,7 @@ async function applyWindowLayout(next) {
 }
 
 function idleBlocked() {
-  if (pointerOver || holding || talkPending) {
+  if (pointerOver || holding || talkPending || pendingToolId) {
     return true;
   }
   return !!input.value.trim();
@@ -218,6 +231,9 @@ function setConfiguredIdle(ms) {
 }
 
 function setExpanded(next) {
+  if (!next && pendingToolId) {
+    next = true;
+  }
   if (expanded === next) {
     if (next) {
       markActivity();
@@ -440,6 +456,156 @@ async function refreshProfileName(force) {
   }
 }
 
+function hideAllow() {
+  allowOfferName = "";
+  if (allowBar) {
+    allowBar.hidden = true;
+  }
+}
+
+function applyPending(pending) {
+  const nextId = pending && pending.pending_id ? String(pending.pending_id) : "";
+  if (!nextId) {
+    const had = pendingToolId !== null;
+    pendingToolId = null;
+    if (pendingCard) {
+      pendingCard.hidden = true;
+    }
+    if (had) {
+      markActivity();
+    }
+    return;
+  }
+  const changed = nextId !== pendingToolId;
+  pendingToolId = nextId;
+  if (pendingNameEl) {
+    pendingNameEl.textContent = pending.name || "";
+  }
+  if (pendingDescEl) {
+    pendingDescEl.textContent = pending.description || "";
+  }
+  const args = (pending.args || []).join(" ");
+  const description = pending.description || "";
+  const showArgs = !!args && args !== description;
+  if (pendingArgsEl) {
+    pendingArgsEl.hidden = !showArgs;
+    pendingArgsEl.textContent = showArgs ? args : "";
+  }
+  if (pendingCard) {
+    pendingCard.hidden = false;
+  }
+  if (!pendingBusy && approveBtn && denyBtn) {
+    approveBtn.disabled = false;
+    denyBtn.disabled = false;
+  }
+  if (changed) {
+    hideAllow();
+    const askFocused = document.activeElement === input;
+    setExpanded(true);
+    if (!askFocused && approveBtn) {
+      approveBtn.focus();
+    }
+  }
+}
+
+async function maybeOfferAlwaysAllow(name) {
+  if (!name) {
+    return;
+  }
+  try {
+    const snap = await invoke("tools_snapshot");
+    const row = ((snap && snap.tools) || []).find((tool) => tool && tool.name === name);
+    if (!row || row.permission !== "ask") {
+      return;
+    }
+    allowOfferName = name;
+    if (allowText) {
+      allowText.textContent = "Always allow " + name + "?";
+    }
+    if (allowBar) {
+      allowBar.hidden = false;
+    }
+  } catch (_error) {
+    hideAllow();
+  }
+}
+
+async function approvePending() {
+  if (!pendingToolId || pendingBusy) {
+    return;
+  }
+  const id = pendingToolId;
+  const name = pendingNameEl ? pendingNameEl.textContent : "";
+  pendingBusy = true;
+  if (approveBtn) {
+    approveBtn.disabled = true;
+  }
+  if (denyBtn) {
+    denyBtn.disabled = true;
+  }
+  try {
+    const status = await invoke("confirm_tool", { pendingId: id });
+    applyPending(status && status.pending_tool);
+    await maybeOfferAlwaysAllow(name);
+  } catch (_error) {
+    // The next poll refreshes the card.
+  } finally {
+    pendingBusy = false;
+    if (pendingToolId && approveBtn && denyBtn) {
+      approveBtn.disabled = false;
+      denyBtn.disabled = false;
+    }
+  }
+}
+
+async function denyPending() {
+  if (!pendingToolId || pendingBusy) {
+    return;
+  }
+  const id = pendingToolId;
+  pendingBusy = true;
+  if (approveBtn) {
+    approveBtn.disabled = true;
+  }
+  if (denyBtn) {
+    denyBtn.disabled = true;
+  }
+  hideAllow();
+  try {
+    const status = await invoke("cancel_tool", { pendingId: id });
+    applyPending(status && status.pending_tool);
+  } catch (_error) {
+    // The next poll refreshes the card.
+  } finally {
+    pendingBusy = false;
+    if (pendingToolId && approveBtn && denyBtn) {
+      approveBtn.disabled = false;
+      denyBtn.disabled = false;
+    }
+  }
+}
+
+async function acceptAlwaysAllow() {
+  const name = allowOfferName;
+  if (!name) {
+    hideAllow();
+    return;
+  }
+  if (allowYes) {
+    allowYes.disabled = true;
+  }
+  try {
+    await invoke("tools_set_permission", { name: name, permission: "always_allow" });
+  } catch (_error) {
+    // The Tools page can still write the mode.
+  } finally {
+    if (allowYes) {
+      allowYes.disabled = false;
+    }
+    hideAllow();
+  }
+}
+
 async function refresh() {
   if (refreshInFlight) {
     return;
@@ -455,6 +621,7 @@ async function refresh() {
     const detail = (snap && snap.detail) || "";
     lastStatusMessage = message;
     considerStatus(message, detail);
+    applyPending(snap && snap.pending_tool);
   } catch (_error) {
     state = "sleep";
     captureRunning = false;
@@ -535,6 +702,7 @@ function endTalk() {
   afterPaint().then(() =>
     invoke("hud_talk_stop")
       .then((status) => {
+        applyPending(status && status.pending_tool);
         const message = (status && (status.message || status.detail)) || "(no reply text)";
         const detail = (status && status.detail) || "";
         lastReplyKey = message + "\0" + detail;
@@ -621,7 +789,7 @@ function isInteractiveTarget(target) {
     return false;
   }
   return !!target.closest(
-    "#ask-form, #talk, #ask-send, #ask-input, #log, #live, button, input, a, .bubble",
+    "#ask-form, #talk, #ask-send, #ask-input, #log, #live, #hud-pending, #hud-allow, button, input, a, .bubble",
   );
 }
 
@@ -674,7 +842,9 @@ capsule.addEventListener("click", (event) => {
     event.target.closest("#ask-form") ||
     event.target.closest("#log") ||
     event.target.closest("#live") ||
-    event.target.closest("#talk")
+    event.target.closest("#talk") ||
+    event.target.closest("#hud-pending") ||
+    event.target.closest("#hud-allow")
   ) {
     return;
   }
@@ -731,6 +901,7 @@ form.addEventListener("submit", (event) => {
   talkPending = true;
   invoke("hud_ask", { text: asked })
     .then((status) => {
+      applyPending(status && status.pending_tool);
       const message = (status && (status.message || status.detail)) || "(no reply text)";
       const detail = (status && status.detail) || "";
       lastReplyKey = message + "\0" + detail;
@@ -753,6 +924,31 @@ form.addEventListener("submit", (event) => {
       refresh();
     });
 });
+
+if (approveBtn) {
+  approveBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    approvePending();
+  });
+}
+if (denyBtn) {
+  denyBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    denyPending();
+  });
+}
+if (allowYes) {
+  allowYes.addEventListener("click", (event) => {
+    event.stopPropagation();
+    acceptAlwaysAllow();
+  });
+}
+if (allowNo) {
+  allowNo.addEventListener("click", (event) => {
+    event.stopPropagation();
+    hideAllow();
+  });
+}
 
 capsule.dataset.idleMs = String(configuredIdleMs);
 capsule.dataset.profile = profileName;

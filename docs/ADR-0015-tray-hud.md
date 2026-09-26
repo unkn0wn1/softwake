@@ -82,3 +82,7 @@ After playback and HUD fire-and-forget ([ADR 0007](ADR-0007-awake-stt-tts.md)), 
 - The mic control is an icon only. Its accessible name stays “Hold to talk”. Space and Enter on that button are press-to-talk. Space typed in the ask field is not stolen. Space on the collapsed capsule still toggles expand.
 - Idle collapse default is 3 seconds. The pointer inside the capsule, or a non-empty ask draft, keeps it open. Leaving starts the timer. Settings → General stores `hud_idle_collapse_ms` in `ui-prefs.json` (default 3000, clamp 1000–30000, shown as 1–30 seconds). The HUD re-reads the file. No daemon IPC.
 - A saved drag keeps the bottom-right corner across expand and collapse instead of jumping to primary bottom-right. First launch with no saved position still parks at primary bottom-right. Always-on-top is unchanged.
+
+## Amendment — pending tool holds the panel (2026-09-26)
+
+A pending tool auto-expands the panel. `idleBlocked` includes that pending id, and a manual collapse (capsule click, Space or Enter on the capsule, idle timer) waits until Approve or Deny. The idle duration knob is unchanged. After Approve, an optional “Always allow this tool?” bar does not block idle collapse.

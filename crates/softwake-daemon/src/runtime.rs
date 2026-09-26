@@ -489,16 +489,18 @@ impl Runtime {
         let _ = self.arm_mode(crate::mode_confirm::ConfirmKind::FuzzyWake);
     }
 
-    /// When Tools→shell is enabled, turn clear shell/ssh ask lines into a gated tool call.
+    /// When shell is not deny, turn clear shell/ssh ask lines into a tool call.
+    ///
+    /// Deny leaves the line on the chat path. Ask and Always allow both propose;
+    /// [`Hands::request`](crate::dispatch::Hands::request) decides pending versus run.
     fn try_shell_ask(&mut self, text: &str) -> Option<Outcome> {
         self.sync_shell_glossary();
-        let Ok(settings) = softwake_tools::resolve_tools_file()
-            .and_then(softwake_tools::FileToolsSettings::new)
-            .and_then(|store| store.load())
-        else {
-            return None;
-        };
-        if !settings.shell_enabled {
+        if self
+            .hands
+            .tools_settings()
+            .permission(softwake_tools::SHELL_TOOL)
+            == softwake_tools::ToolPermission::Deny
+        {
             return None;
         }
         let command = crate::shell_intent::propose_shell_command(text, self.hands.glossary())?;

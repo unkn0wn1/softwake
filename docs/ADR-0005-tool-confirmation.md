@@ -94,3 +94,7 @@ The window polls status. When `pending_tool` is set it shows the pending text an
 - A real side-effect tool should be `confirm` or `deny` until its own ADR says otherwise. `shell` stays deny until that ADR exists.
 - The in-memory log and sink reset when the process exits. A state-directory file can be added later without changing the gate.
 - Clients that do not send `confirm_tool` still speak protocol generation 1. They will see a pending `notify` as a successful status with `pending_tool`, not as a finished tool.
+
+## Amendment — operator mode (2026-09-26)
+
+Tools Settings can run a confirm-gated tool without a prompt (Always allow) or deny a safe tool (Deny). `confirm_tool` remains the Ask path. The HUD blocks idle collapse while `pending_tool` is set. Status Confirm and Cancel remain and share that pending id. The registry floor is unchanged: `invoke` still refuses confirm-gated rows, and `invoke_confirmed` still refuses safe rows. The daemon picks the runner from the registry after the effective decision says the call may proceed.

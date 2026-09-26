@@ -224,6 +224,11 @@ description = "Save Tools Settings."
 commands.allow = ["tools_save"]
 
 [[permission]]
+identifier = "allow-tools-set-permission"
+description = "Set one tool to Always allow, Ask, or Deny."
+commands.allow = ["tools_set_permission"]
+
+[[permission]]
 identifier = "allow-ui-prefs-snapshot"
 description = "Read Settings UI prefs (text size and HUD idle collapse)."
 commands.allow = ["ui_prefs_snapshot"]

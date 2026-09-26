@@ -53,8 +53,9 @@ const emailTestStatus = document.querySelector("#email-test-status");
 const emailStorage = document.querySelector("#email-storage");
 const emailError = document.querySelector("#email-error");
 const emailSaveBtn = document.querySelector("#email-save");
-const toolsShellEnabled = document.querySelector("#tools-shell-enabled");
+const toolsList = document.querySelector("#tools-list");
 const toolsConfirmPolicy = document.querySelector("#tools-confirm-policy");
+const toolsPolicyNote = document.querySelector("#tools-policy-note");
 const toolsSaveBtn = document.querySelector("#tools-save");
 const toolsStatus = document.querySelector("#tools-status");
 const toolsError = document.querySelector("#tools-error");
@@ -856,12 +857,89 @@ function showToolsError(error) {
     typeof error === "string" ? error : error && error.message ? error.message : "request failed";
 }
 
+const TOOL_PERMISSIONS = [
+  ["always_allow", "Always allow"],
+  ["ask", "Ask"],
+  ["deny", "Deny"],
+];
+
+function permissionLabel(value) {
+  const match = TOOL_PERMISSIONS.find((row) => row[0] === value);
+  return match ? match[1] : value;
+}
+
+function shellPermissionValue() {
+  const select = toolsList && toolsList.querySelector('select[data-tool="shell"]');
+  return select ? select.value : "deny";
+}
+
+function syncPolicyEnabled() {
+  const ask = shellPermissionValue() === "ask";
+  if (toolsConfirmPolicy) {
+    toolsConfirmPolicy.disabled = !ask;
+  }
+  if (toolsPolicyNote) {
+    toolsPolicyNote.textContent = ask
+      ? "Confirm policy applies while shell is Ask."
+      : "Confirm policy applies when shell is Ask.";
+  }
+}
+
+function collectToolPermissions() {
+  if (!toolsList) {
+    return [];
+  }
+  return Array.from(toolsList.querySelectorAll("select[data-tool]")).map((select) => ({
+    name: select.dataset.tool,
+    permission: select.value,
+  }));
+}
+
 function renderTools(snap) {
-  toolsShellEnabled.checked = !!snap.shell_enabled;
-  toolsConfirmPolicy.value = snap.confirm_policy || "always";
-  toolsStatus.textContent = snap.shell_enabled
-    ? "Shell enabled — confirm policy: " + (snap.confirm_policy || "always")
-    : "Shell off (default). Softwake cannot run shell until you enable it.";
+  if (!toolsList) {
+    return;
+  }
+  toolsList.replaceChildren();
+  const tools = (snap && snap.tools) || [];
+  for (const tool of tools) {
+    const row = document.createElement("label");
+    row.className = "field tool-row";
+    const copy = document.createElement("span");
+    copy.className = "tool-copy";
+    const name = document.createElement("strong");
+    name.textContent = tool.name || "";
+    const description = document.createElement("span");
+    description.textContent = tool.description || "";
+    const floor = document.createElement("span");
+    floor.className = "tool-floor";
+    floor.textContent = "registry floor: " + (tool.registry_floor || "");
+    copy.append(name, description, floor);
+    const select = document.createElement("select");
+    select.dataset.tool = tool.name || "";
+    select.setAttribute("aria-label", (tool.name || "tool") + " permission");
+    for (const [value, label] of TOOL_PERMISSIONS) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      select.append(option);
+    }
+    select.value = tool.permission || "deny";
+    select.addEventListener("change", syncPolicyEnabled);
+    row.append(copy, select);
+    toolsList.append(row);
+  }
+  if (toolsConfirmPolicy) {
+    toolsConfirmPolicy.value = snap.confirm_policy || "always";
+  }
+  syncPolicyEnabled();
+  const shell = tools.find((tool) => tool.name === "shell");
+  toolsStatus.textContent = shell
+    ? "Shell is " +
+      permissionLabel(shell.permission) +
+      ". Confirm policy: " +
+      (snap.confirm_policy || "always") +
+      "."
+    : "Tools Settings loaded.";
   toolsError.textContent = "";
 }
 
@@ -877,8 +955,8 @@ toolsSaveBtn.addEventListener("click", async () => {
   try {
     renderTools(
       await invoke("tools_save", {
-        shellEnabled: toolsShellEnabled.checked,
         confirmPolicy: toolsConfirmPolicy.value,
+        permissions: collectToolPermissions(),
       })
     );
     toolsStatus.textContent = "Tools Settings saved.";

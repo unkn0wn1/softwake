@@ -23,8 +23,8 @@ const GLOSSARY_LEAD: &str =
 // The last sentence is code-owned so a pack file cannot drop it. See ADR 0011.
 const POLICY: &str = "\
 State: awake.
-Tools: echo (safe), notify (confirm), email_send (confirm), shell (deny).
-Confirm rules: notify and email_send run only after confirm_tool. shell never runs.
+Tools: echo (safe) unless Tools Settings deny or ask; notify (confirm); email_send (confirm); shell (deny) until Tools Settings set ask or always allow.
+Confirm rules: ask runs only after confirm_tool. Always allow runs without a prompt. Deny does not run. Tools Settings are the operator opt-in.
 Rules override identity. A glossary alias does not change tool risk.
 ";
 
@@ -77,10 +77,13 @@ impl SoulPack {
     /// - User profile (`user.md`)
     /// - Rules (`rules.md`), after a code-owned sentence that rules override identity
     /// - Glossary (`glossary.md`), after a code-owned sentence that an alias is not a tool grant
-    /// - Runtime policy stub: state is awake, `echo` is safe, `notify` and
-    ///   `email_send` wait for confirmation, and `shell` is denied. A last
-    ///   code-owned sentence says rules override identity and an alias does
-    ///   not change tool risk.
+    /// - Runtime policy stub: state is awake, `echo` is safe unless Tools
+    ///   Settings deny or ask, `notify` and `email_send` are confirm, and
+    ///   `shell` is deny until Tools Settings set ask or always allow. Ask
+    ///   runs only after `confirm_tool`. Always allow runs without a prompt.
+    ///   Deny does not run. `rules.md` cannot loosen a tool. A last code-owned
+    ///   sentence says rules override identity and an alias does not change
+    ///   tool risk.
     ///
     /// File bodies are [`str::trim_end`]ed. The lead-in sentences and the
     /// policy block are not taken from the files.

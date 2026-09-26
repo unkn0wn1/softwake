@@ -40,6 +40,18 @@ use crate::dispatch::{Hands, RequestOutcome};
 use crate::pcm::score_frame;
 use crate::soul::LoadedSoul;
 
+/// Typed demo reads `tools.json`. Unit tests pin the defaults so a developer file cannot change CI.
+fn demo_hands() -> Hands {
+    #[cfg(test)]
+    {
+        Hands::new()
+    }
+    #[cfg(not(test))]
+    {
+        Hands::from_disk()
+    }
+}
+
 const COMMANDS: &str = "commands: wake, sleep, hibernate, resume, status, reload-soul, tool, confirm, cancel, hear, say, ask, chat, quit";
 const TYPED_ONLY: &str = "typed commands only — mock capture; native PipeWire is feature-gated";
 
@@ -178,7 +190,7 @@ impl Demo {
             last_pcm_hit: None,
             soul: LoadedSoul::open(soul_dir),
             session: TextStubSession::default(),
-            hands: Hands::from_disk(),
+            hands: demo_hands(),
             stt: MockStt::default(),
             tts: MockTts::default(),
             last_transcripts: Vec::new(),

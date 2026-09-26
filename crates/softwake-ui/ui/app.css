@@ -263,6 +263,27 @@ button.btn-primary:hover {
   margin: 8px 0;
 }
 
+.tool-row {
+  grid-template-columns: minmax(0, 1fr) 11rem;
+  align-items: start;
+  gap: 12px;
+}
+
+.tool-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tool-copy strong {
+  color: var(--text);
+}
+
+.tool-floor {
+  color: var(--faint);
+  font-size: 0.85em;
+}
+
 .field span {
   color: var(--muted);
   font-size: 0.9em;
