@@ -30,6 +30,8 @@ pub struct SherpaKwsDetector {
     /// Phrases skipped because BPE encode failed.
     skipped_phrases: Vec<String>,
     engine: Option<LoadedEngine>,
+    /// Accepted audio since the last `KeywordSpotter::reset`.
+    stream_budget: crate::stream_budget::StreamBudget,
 }
 
 struct LoadedEngine {
@@ -47,6 +49,10 @@ impl std::fmt::Debug for SherpaKwsDetector {
             .field("registered_phrases", &self.registered_phrases)
             .field("skipped_phrases", &self.skipped_phrases)
             .field("weights_loaded", &self.engine.is_some())
+            .field(
+                "samples_since_reset",
+                &self.stream_budget.samples_since_reset(),
+            )
             .finish()
     }
 }
@@ -73,6 +79,7 @@ impl SherpaKwsDetector {
             registered_phrases,
             skipped_phrases,
             engine,
+            stream_budget: crate::stream_budget::StreamBudget::new(),
         }
     }
 
@@ -157,6 +164,14 @@ impl SherpaKwsDetector {
                 keyword: None,
             };
         }
+        // sherpa-onnx auto-resets only after ~1.5 s of trailing blanks. Awake
+        // speech never builds that run, and a keyword is the only other reset,
+        // so a long awake session stops emitting keywords. Reset before this
+        // window once the sample budget is spent. `begin_window` / `finish_window`
+        // match `stream_budget` tests (CI does not link sherpa).
+        if self.stream_budget.begin_window() {
+            engine.spotter.reset(&engine.stream);
+        }
         let float_samples: Vec<f32> = samples
             .iter()
             .map(|sample| f32::from(*sample) / f32::from(i16::MAX))
@@ -164,6 +179,7 @@ impl SherpaKwsDetector {
         engine.stream.accept_waveform(16_000, &float_samples);
         let mut last_keyword = None;
         let mut last_hit = PhraseHit::None;
+        let mut keyword_reset = false;
         while engine.spotter.is_ready(&engine.stream) {
             engine.spotter.decode(&engine.stream);
             if let Some(result) = engine.spotter.get_result(&engine.stream) {
@@ -171,17 +187,17 @@ impl SherpaKwsDetector {
                     let hit =
                         hit_from_keyword(&result.keyword, &self.wake_phrases, &self.sleep_phrases);
                     engine.spotter.reset(&engine.stream);
+                    keyword_reset = true;
                     last_keyword = Some(result.keyword);
                     last_hit = hit;
                     if hit != PhraseHit::None {
-                        return crate::SpotDetail {
-                            hit,
-                            keyword: last_keyword,
-                        };
+                        break;
                     }
                 }
             }
         }
+        self.stream_budget
+            .finish_window(samples.len(), keyword_reset);
         crate::SpotDetail {
             hit: last_hit,
             keyword: last_keyword,

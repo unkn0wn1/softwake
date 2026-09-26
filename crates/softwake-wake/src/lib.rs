@@ -11,6 +11,10 @@
 mod phrases;
 #[cfg(feature = "sherpa-kws")]
 mod sherpa;
+// Used by the sherpa detector. Compiled for tests without that feature so CI
+// can check the reset budget without ONNX weights.
+#[cfg(any(test, feature = "sherpa-kws"))]
+mod stream_budget;
 mod text;
 
 use std::fmt;
