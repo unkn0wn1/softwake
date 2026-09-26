@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Seed-on-wake for **encrypted** HUD vaults: UI `SeedChat` now runs once when awake + unlocked + turns loaded (not only on the woke edge), and the daemon prepends budgeted history even if an early post-wake ask already landed.
+
 ### Added
 
 - Seed-on-wake: after sleep → awake, Softwake replays a budgeted suffix of per-profile HUD chat into the new model session (plaintext `hud-chat.json` in softwaked; encrypted vaults via UI `SeedChat`). `/clear` / `/halve` / `/compact` still clear or shrink the model session only.

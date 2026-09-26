@@ -52,7 +52,11 @@ Softwaked loads **plaintext** `hud-chat.json` for the active profile inside
 `OpenSession`, under a 12 000-character newest-first budget (error bubbles
 skipped). Encrypted vault files are not readable by the daemon; softwake-ui
 sends additive `SeedChat` with decrypted turns after unlock / on wake. Seeding
-is no-op when the session already has messages. `/clear`, `/halve`, and
-`/compact` still manage the model session only; the next wake may re-seed from
-HUD history. PROTOCOL stays 1.
+latches once per awake session (`hud_seeded`); empty plaintext loads do **not**
+latch so vault `SeedChat` can still land. Seeded turns are **prepended** ahead
+of any early post-wake asks so a late UI seed still restores history. softwake-ui
+calls `SeedChat` whenever awake + vault unlocked + turns loaded (not only on
+the woke edge), including after `loadChatForActiveProfile`. `/clear`, `/halve`,
+and `/compact` still manage the model session only; the next wake may re-seed
+from HUD history. PROTOCOL stays 1.
 

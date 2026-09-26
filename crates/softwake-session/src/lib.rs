@@ -102,6 +102,8 @@ pub struct TextStubSession {
     phase: SessionPhase,
     instructions: Option<String>,
     messages: Vec<SessionMessage>,
+    /// True after a successful HUD seed this awake period (plaintext or `SeedChat`).
+    hud_seeded: bool,
 }
 
 impl TextStubSession {
@@ -112,6 +114,7 @@ impl TextStubSession {
             phase: SessionPhase::Open,
             instructions: Some(instructions.into()),
             messages: Vec::new(),
+            hud_seeded: false,
         }
     }
 
@@ -120,6 +123,7 @@ impl TextStubSession {
         self.phase = SessionPhase::Closed;
         self.instructions = None;
         self.messages.clear();
+        self.hud_seeded = false;
     }
 
     /// Whether this session is open.
@@ -219,18 +223,22 @@ impl TextStubSession {
         self.messages.clear();
     }
 
-    /// Seed prior turns when the session has no messages yet.
+    /// Seed prior HUD turns once per awake session.
     ///
     /// `turns` are oldest-first. Only the newest suffix that fits in
-    /// `max_chars` (Unicode scalar count across contents) is kept. Returns how
-    /// many messages were stored. No-op when closed, when messages already
-    /// exist, when `turns` is empty, or when `max_chars` is 0.
+    /// `max_chars` (Unicode scalar count across contents) is kept. Those turns
+    /// are **prepended** ahead of any messages already present (so a late
+    /// `SeedChat` after an early post-wake ask still restores history). Returns
+    /// how many HUD messages were inserted. No-op when closed, when this
+    /// session was already seeded, when `turns` is empty (after filter), or
+    /// when `max_chars` is 0. An empty candidate list does **not** latch the
+    /// seeded flag — encrypted vaults can still `SeedChat` later.
     pub fn seed_turns_if_empty(
         &mut self,
         turns: impl IntoIterator<Item = SessionMessage>,
         max_chars: usize,
     ) -> usize {
-        if self.phase != SessionPhase::Open || !self.messages.is_empty() || max_chars == 0 {
+        if self.phase != SessionPhase::Open || self.hud_seeded || max_chars == 0 {
             return 0;
         }
         let mut all: Vec<SessionMessage> = turns
@@ -252,8 +260,21 @@ impl TextStubSession {
                 break;
             }
         }
-        self.messages.extend(all.drain(keep_from..));
-        self.messages.len()
+        let mut kept: Vec<SessionMessage> = all.drain(keep_from..).collect();
+        let seeded = kept.len();
+        if seeded == 0 {
+            return 0;
+        }
+        kept.append(&mut self.messages);
+        self.messages = kept;
+        self.hud_seeded = true;
+        seeded
+    }
+
+    /// Whether HUD history was seeded into this awake session.
+    #[must_use]
+    pub const fn hud_seeded(&self) -> bool {
+        self.hud_seeded
     }
 
     /// Drop older turns until roughly half the message character mass remains.
@@ -579,6 +600,7 @@ mod tests {
             20, // fits "new-user" + "new-asst" (8+8) and maybe more
         );
         assert!(n >= 2);
+        assert!(session.hud_seeded());
         let texts: Vec<_> = session
             .messages()
             .iter()
@@ -587,7 +609,42 @@ mod tests {
         assert!(texts.contains(&"new-user"));
         assert!(texts.contains(&"new-asst"));
         assert!(!texts.iter().any(|t| t.starts_with("old-")), "{texts:?}");
-        // Second seed is a no-op once messages exist.
+        // Second seed is a no-op once HUD seed latched.
+        assert_eq!(
+            session.seed_turns_if_empty([super::SessionMessage::user("again")], 1000),
+            0
+        );
+    }
+
+    #[test]
+    fn seed_turns_prepends_before_early_post_wake_asks() {
+        let mut session = TextStubSession::open("sys");
+        session.push_user_turn("hi").expect("early ask");
+        session.push_assistant_turn("hello").expect("early reply");
+        // Empty candidate must not latch — vault UI can still seed later.
+        assert_eq!(
+            session.seed_turns_if_empty(Vec::<super::SessionMessage>::new(), 1000),
+            0
+        );
+        assert!(!session.hud_seeded());
+        let n = session.seed_turns_if_empty(
+            [
+                super::SessionMessage::user("brave search?"),
+                super::SessionMessage::assistant("use the search tools"),
+            ],
+            12_000,
+        );
+        assert_eq!(n, 2);
+        assert!(session.hud_seeded());
+        let texts: Vec<_> = session
+            .messages()
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect();
+        assert_eq!(
+            texts,
+            vec!["brave search?", "use the search tools", "hi", "hello",]
+        );
         assert_eq!(
             session.seed_turns_if_empty([super::SessionMessage::user("again")], 1000),
             0
