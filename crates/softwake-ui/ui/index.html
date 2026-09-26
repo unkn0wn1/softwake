@@ -266,9 +266,9 @@
           <p class="meta">Override the model context window. Empty or 0 uses the built-in map for known Grok/OpenAI ids, else 128000.</p>
           <label class="field">
             <span>Compact at (%)</span>
-            <input id="compact-at" type="number" min="1" max="100" step="1" value="70" />
+            <input id="compact-at" type="number" min="1" max="100" step="1" value="80" />
           </label>
-          <p class="meta">When estimated awake-session usage reaches this percent of the limit, older turns are summarized.</p>
+          <p class="meta">When estimated awake-session usage reaches this percent of the limit, older turns are summarized (default 80).</p>
           <div class="row">
             <button type="button" class="btn-primary" id="save-context">Save context settings</button>
           </div>

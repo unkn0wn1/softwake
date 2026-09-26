@@ -102,7 +102,7 @@ pub struct ProviderSnapshot {
     pub openai_compatible_base_url: String,
     /// Context window override tokens (`0` = unset / use built-in map).
     pub context_limit_tokens: u32,
-    /// Compaction trigger percent (`0` stored means default 70 at resolve).
+    /// Compaction trigger percent (`0` stored means default 80 at resolve).
     pub compact_at_percent: u8,
     /// Recent message entries kept after compaction.
     pub keep_recent_turns: u32,

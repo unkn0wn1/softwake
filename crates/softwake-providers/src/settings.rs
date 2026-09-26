@@ -78,7 +78,7 @@ pub struct ProviderSettings {
     /// Document version stays 1. Older files omit this field.
     #[serde(default)]
     pub context_limit_tokens: u32,
-    /// Compaction trigger as percent of the context limit. `0` means default 70.
+    /// Compaction trigger as percent of the context limit. `0` means default 80.
     #[serde(default = "default_compact_at_percent")]
     pub compact_at_percent: u8,
     /// Recent message entries kept raw after compaction. `0` means default 8.
@@ -502,7 +502,7 @@ mod tests {
         assert_eq!(loaded.selected_voice_model, "whisper-1");
         assert_eq!(loaded.selected_tts_voice, "eve");
         assert_eq!(loaded.context_limit_tokens, 0);
-        assert_eq!(loaded.compact_at_percent, 70);
+        assert_eq!(loaded.compact_at_percent, 80);
         assert_eq!(loaded.keep_recent_turns, 8);
         settings.context_limit_tokens = 8192;
         settings.compact_at_percent = 50;

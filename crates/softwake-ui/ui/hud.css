@@ -164,6 +164,78 @@ body {
   color: oklch(0.80 0.12 25);
 }
 
+
+.context-meter {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.context-meter[hidden] {
+  display: none !important;
+}
+
+.capsule.expanded .context-meter:not([hidden]) {
+  display: grid !important;
+}
+
+.context-meter-track {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: oklch(1 0 0 / 0.08);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.context-meter-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    oklch(0.78 0.13 200),
+    oklch(0.78 0.14 145)
+  );
+  transition: width 180ms ease, background-color 180ms ease;
+}
+
+.context-meter-fill.warn {
+  background: linear-gradient(
+    90deg,
+    oklch(0.82 0.14 85),
+    oklch(0.78 0.16 55)
+  );
+}
+
+.context-meter-fill.hot {
+  background: linear-gradient(
+    90deg,
+    oklch(0.78 0.16 45),
+    oklch(0.72 0.18 25)
+  );
+}
+
+.context-meter-mark {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  margin-left: -1px;
+  background: oklch(1 0 0 / 0.55);
+  left: 80%;
+}
+
+.context-meter-label {
+  margin: 0;
+  font-size: 0.68rem;
+  line-height: 1.25;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 #ask-form {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

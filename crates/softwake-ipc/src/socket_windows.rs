@@ -1034,6 +1034,7 @@ mod tests {
                         context_used: None,
                         context_limit: None,
                         context_compacted: false,
+                        context_compact_at: None,
                         voice_test: false,
                     }),
                 })

@@ -105,7 +105,7 @@ pub(crate) fn system_appendix(memory: &str, tools: &softwake_tools::ToolsSetting
 }
 
 /// Context usage recorded for Status after one ask.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AskContext {
     /// Tokens about to be sent (after compaction, when it ran).
     pub(crate) used: u32,
@@ -306,6 +306,123 @@ pub(crate) fn prepare_ask_session(
     // Re-assemble after push so system string stays aligned with instructions+appendix.
     let system = assemble_system(&instructions, appendix);
     Ok((system, context))
+}
+
+/// Operator slash / clear-typed commands that manage awake model context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContextCommand {
+    /// Drop all session turns; keep the open session and system pack.
+    Clear,
+    /// Force Hermes-style compaction of older turns (Settings `keep_recent`).
+    Compact,
+    /// Drop older turns until ~half the character mass remains.
+    Halve,
+}
+
+/// Parse `/clear`, `/compact`, `/halve` / `/reduce`, or clear-typed equivalents.
+///
+/// Matching is case-insensitive on the trimmed line. Unknown text returns `None`
+/// so the normal ask path runs.
+#[must_use]
+pub(crate) fn parse_context_command(text: &str) -> Option<ContextCommand> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let key = lower.strip_prefix('/').unwrap_or(lower.as_str()).trim();
+    match key {
+        "clear" | "clear context" => Some(ContextCommand::Clear),
+        "compact" | "compact context" => Some(ContextCommand::Compact),
+        "halve" | "halve context" | "reduce" | "reduce context" => Some(ContextCommand::Halve),
+        _ => None,
+    }
+}
+
+/// Estimate usage for an open session with no pending user line (HUD meter).
+#[must_use]
+pub(crate) fn estimate_session_usage(system: &str, messages: &[SessionMessage]) -> u32 {
+    estimate_ask_usage(system, messages, "")
+}
+
+/// Format a short operator reply after a context command.
+#[must_use]
+pub(crate) fn format_context_command_reply(
+    command: ContextCommand,
+    context: &AskContext,
+) -> String {
+    let meter = format!(
+        "context ~{} / {} ({}%); auto-compact at {}%",
+        context.used, context.limit, context.percent, context.threshold_percent
+    );
+    match command {
+        ContextCommand::Clear => format!("Context cleared — {meter}"),
+        ContextCommand::Compact if context.compacted => {
+            format!("Context compacted — {meter}")
+        }
+        ContextCommand::Compact => format!("Nothing to compact — {meter}"),
+        ContextCommand::Halve => format!("Context halved — {meter}"),
+    }
+}
+
+/// Build [`AskContext`] from system + current session messages.
+#[must_use]
+pub(crate) fn context_from_session(
+    system: &str,
+    messages: &[SessionMessage],
+    budget: ContextBudget,
+    compacted: bool,
+    before_compact: u32,
+) -> AskContext {
+    let used = estimate_session_usage(system, messages);
+    AskContext {
+        used,
+        before_compact,
+        limit: budget.limit,
+        percent: usage_percent(used, budget.limit),
+        compacted,
+        threshold_percent: budget.compact_at_percent,
+    }
+}
+
+/// Apply a context command to the open session (no provider ask).
+///
+/// `compact` is only called for [`ContextCommand::Compact`] when there are
+/// older turns beyond `keep_recent`. Fail-open to extractive summary on error.
+pub(crate) fn apply_context_command(
+    session: &mut TextStubSession,
+    command: ContextCommand,
+    system: &str,
+    budget: ContextBudget,
+    compact: impl FnOnce(&[SessionMessage]) -> Result<String, String>,
+) -> AskContext {
+    let before = estimate_session_usage(system, session.messages());
+    let mut compacted = false;
+    match command {
+        ContextCommand::Clear => {
+            session.clear_messages();
+        }
+        ContextCommand::Halve => {
+            session.keep_newest_half();
+        }
+        ContextCommand::Compact => {
+            let len = session.messages().len();
+            if len > budget.keep_recent {
+                let prefix_len = len - budget.keep_recent;
+                let older: Vec<SessionMessage> = session.messages()[..prefix_len].to_vec();
+                let summary = match compact(&older) {
+                    Ok(text) => text,
+                    Err(_error) => {
+                        let chat = to_chat_messages(&older);
+                        extractive_summary(&chat, 2000)
+                    }
+                };
+                session.apply_compaction(budget.keep_recent, &summary);
+                compacted = true;
+            }
+        }
+    }
+    context_from_session(system, session.messages(), budget, compacted, before)
 }
 
 /// Refuse a disk ask before the session records the line when live HTTP is off.
@@ -1080,5 +1197,73 @@ mod memory_tests {
         let tools_only = super::system_appendix("", &settings);
         assert!(tools_only.starts_with(softwake_tools::TOOLS_PERMISSIONS_LEAD));
         assert!(!tools_only.contains("Memory snippets"));
+    }
+}
+
+#[cfg(test)]
+mod context_command_tests {
+    use super::{
+        ContextBudget, ContextCommand, apply_context_command, context_from_session,
+        format_context_command_reply, parse_context_command,
+    };
+    use softwake_session::{SessionPhase, TextStubSession};
+
+    #[test]
+    fn parses_slash_and_clear_typed_commands() {
+        assert_eq!(parse_context_command("/clear"), Some(ContextCommand::Clear));
+        assert_eq!(
+            parse_context_command("Clear Context"),
+            Some(ContextCommand::Clear)
+        );
+        assert_eq!(
+            parse_context_command("/compact"),
+            Some(ContextCommand::Compact)
+        );
+        assert_eq!(parse_context_command("/halve"), Some(ContextCommand::Halve));
+        assert_eq!(
+            parse_context_command("/reduce context"),
+            Some(ContextCommand::Halve)
+        );
+        assert_eq!(parse_context_command("hello"), None);
+        assert_eq!(parse_context_command("/unknown"), None);
+    }
+
+    #[test]
+    fn clear_command_empties_messages_and_reports_meter() {
+        let mut session = TextStubSession::open("sys");
+        session.push_user_turn("u1").unwrap();
+        session.push_assistant_turn("a1").unwrap();
+        let budget = ContextBudget {
+            limit: 1000,
+            compact_at_percent: 80,
+            keep_recent: 8,
+        };
+        let ctx = apply_context_command(&mut session, ContextCommand::Clear, "sys", budget, |_| {
+            Ok("unused".into())
+        });
+        assert!(session.messages().is_empty());
+        assert_eq!(session.phase(), SessionPhase::Open);
+        assert!(!ctx.compacted);
+        let reply = format_context_command_reply(ContextCommand::Clear, &ctx);
+        assert!(reply.contains("cleared"), "{reply}");
+        assert!(reply.contains("auto-compact at 80%"), "{reply}");
+    }
+
+    #[test]
+    fn compact_command_noops_when_under_keep_recent() {
+        let mut session = TextStubSession::open("sys");
+        session.push_user_turn("only").unwrap();
+        let budget = ContextBudget {
+            limit: 1000,
+            compact_at_percent: 80,
+            keep_recent: 8,
+        };
+        let ctx =
+            apply_context_command(&mut session, ContextCommand::Compact, "sys", budget, |_| {
+                panic!("should not compact")
+            });
+        assert!(!ctx.compacted);
+        assert_eq!(session.messages().len(), 1);
+        let _ = context_from_session("sys", session.messages(), budget, false, 0);
     }
 }

@@ -6,7 +6,7 @@
 pub const DEFAULT_CONTEXT_LIMIT_TOKENS: u32 = 128_000;
 
 /// Default compaction trigger as a percent of the resolved context limit.
-pub const DEFAULT_COMPACT_AT_PERCENT: u8 = 70;
+pub const DEFAULT_COMPACT_AT_PERCENT: u8 = 80;
 
 /// Default number of recent message entries kept raw after compaction.
 pub const DEFAULT_KEEP_RECENT_TURNS: u32 = 8;
@@ -92,7 +92,7 @@ pub fn resolve_context_limit(model_id: &str, override_tokens: u32) -> u32 {
     builtin_context_limit(model_id).unwrap_or(DEFAULT_CONTEXT_LIMIT_TOKENS)
 }
 
-/// Clamp Settings `compact_at_percent` into 1..=100 (default 70 when 0).
+/// Clamp Settings `compact_at_percent` into 1..=100 (default 80 when 0).
 #[must_use]
 pub fn resolve_compact_at_percent(raw: u8) -> u8 {
     if raw == 0 {

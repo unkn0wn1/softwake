@@ -103,3 +103,12 @@
 
 Linux and Windows x86_64 GitHub Releases (AppImage, tar.gz + systemd --user install, Windows setup.exe + portable): [ADR 0019](ADR-0019-multiplatform-releases.md), [releases.md](releases.md).
 - [x] Per-profile timers / cron (`schedule` tool + Settings → Timers; ADR-0024)
+
+## Context meter + slash commands ([ADR-0027](ADR-0027-context-meter-slash.md))
+
+- [x] Expanded HUD context fullness meter (used / limit / % + auto-compact threshold)
+- [x] Status `context_compact_at`; GetStatus refreshes usage while awake
+- [x] `/clear`, `/halve`/`/reduce`, `/compact` (and clear-typed forms) manage model session context
+- [x] Default `compact_at_percent` **80**; auto-compact still runs before ask over threshold
+- [x] No seed-on-wake (HUD history remains display-only)
+

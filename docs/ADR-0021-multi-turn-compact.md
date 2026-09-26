@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-26
-- **Relates to:** [ADR 0013](ADR-0013-session-provider.md) (amends the one-shot ask wire shape)
+- **Relates to:** [ADR 0013](ADR-0013-session-provider.md) (amends the one-shot ask wire shape); default compact threshold amended by [ADR 0027](ADR-0027-context-meter-slash.md)
 
 ## Decision
 
@@ -25,7 +25,7 @@ Completion `max_tokens` (`CHAT_MAX_TOKENS`) stays separate from the context wind
 
 ### Compaction threshold
 
-Settings `compact_at_percent` defaults to **70**. Before each ask, Softwake estimates usage of `system + prior messages + new user + reply headroom` (`CHAT_MAX_TOKENS`). When that estimate is ≥ `compact_at_percent` percent of the resolved limit, Softwake compacts older turns:
+Settings `compact_at_percent` defaults to **80**. Before each ask, Softwake estimates usage of `system + prior messages + new user + reply headroom` (`CHAT_MAX_TOKENS`). When that estimate is ≥ `compact_at_percent` percent of the resolved limit, Softwake compacts older turns:
 
 - Summarize the compacted prefix with one short provider completion (same selected model), or a local extractive fallback if that call fails (fail-open).
 - Replace the compacted prefix with one user-role message: `Session summary: …`.
@@ -41,7 +41,7 @@ Character-based: `ceil(char_count / 4)` (UTF-8 Unicode scalars). Optional later:
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `context_limit_tokens` | `0` (unset → map / 128000) | Positive override for the context window. |
-| `compact_at_percent` | `70` | Compaction trigger as percent of the limit. |
+| `compact_at_percent` | `80` | Compaction trigger as percent of the limit. |
 | `keep_recent_turns` | `8` | Recent raw message entries retained after compact. |
 
 UI: Providers pane — “Context limit (tokens)” and “Compact at (%)”. Status pane shows context usage when awake.

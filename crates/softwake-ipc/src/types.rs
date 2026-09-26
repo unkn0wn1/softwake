@@ -403,6 +403,11 @@ pub struct Status {
     /// True when the latest ask compacted older turns.
     #[serde(default, skip_serializing_if = "is_false")]
     pub context_compacted: bool,
+    /// Settings compact trigger percent while awake (default 80 when unset on disk).
+    ///
+    /// Additive on protocol generation 1. Absent when asleep.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_compact_at: Option<u8>,
     /// Voice test mode: phrases and state voice run; microphone speech is not sent to chat.
     ///
     /// Additive on protocol generation 1. Older peers omit it. Default off.
@@ -737,6 +742,7 @@ mod tests {
             context_used: None,
             context_limit: None,
             context_compacted: false,
+            context_compact_at: None,
             voice_test: false,
         }
     }
@@ -1047,6 +1053,7 @@ mod tests {
             context_used: None,
             context_limit: None,
             context_compacted: false,
+            context_compact_at: None,
             voice_test: false,
         };
         assert_round_trip(&with_pending);
@@ -1099,6 +1106,7 @@ mod tests {
             context_used: None,
             context_limit: None,
             context_compacted: false,
+            context_compact_at: None,
             voice_test: false,
         };
         assert_round_trip(&with_level);
@@ -1120,6 +1128,7 @@ mod tests {
             context_used: None,
             context_limit: None,
             context_compacted: false,
+            context_compact_at: None,
             voice_test: false,
         };
         let json = serde_json::to_string(&without).expect("encode");
@@ -1148,6 +1157,7 @@ mod tests {
             context_used: None,
             context_limit: None,
             context_compacted: false,
+            context_compact_at: None,
             voice_test: false,
         };
         assert_round_trip(&missing);
@@ -1170,6 +1180,7 @@ mod tests {
             context_used: None,
             context_limit: None,
             context_compacted: false,
+            context_compact_at: None,
             voice_test: false,
         };
         let json = serde_json::to_string(&ok).expect("encode");
