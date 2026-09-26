@@ -102,7 +102,7 @@ pub struct TextStubSession {
     phase: SessionPhase,
     instructions: Option<String>,
     messages: Vec<SessionMessage>,
-    /// True after a successful HUD seed this awake period (plaintext or SeedChat).
+    /// True after a successful HUD seed this awake period (plaintext or `SeedChat`).
     hud_seeded: bool,
 }
 
@@ -232,7 +232,7 @@ impl TextStubSession {
     /// how many HUD messages were inserted. No-op when closed, when this
     /// session was already seeded, when `turns` is empty (after filter), or
     /// when `max_chars` is 0. An empty candidate list does **not** latch the
-    /// seeded flag — encrypted vaults can still SeedChat later.
+    /// seeded flag — encrypted vaults can still `SeedChat` later.
     pub fn seed_turns_if_empty(
         &mut self,
         turns: impl IntoIterator<Item = SessionMessage>,
@@ -619,12 +619,8 @@ mod tests {
     #[test]
     fn seed_turns_prepends_before_early_post_wake_asks() {
         let mut session = TextStubSession::open("sys");
-        session
-            .push_user_turn("hi")
-            .expect("early ask");
-        session
-            .push_assistant_turn("hello")
-            .expect("early reply");
+        session.push_user_turn("hi").expect("early ask");
+        session.push_assistant_turn("hello").expect("early reply");
         // Empty candidate must not latch — vault UI can still seed later.
         assert_eq!(
             session.seed_turns_if_empty(Vec::<super::SessionMessage>::new(), 1000),
@@ -647,12 +643,7 @@ mod tests {
             .collect();
         assert_eq!(
             texts,
-            vec![
-                "brave search?",
-                "use the search tools",
-                "hi",
-                "hello",
-            ]
+            vec!["brave search?", "use the search tools", "hi", "hello",]
         );
         assert_eq!(
             session.seed_turns_if_empty([super::SessionMessage::user("again")], 1000),
