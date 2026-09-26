@@ -1248,6 +1248,22 @@ impl Runtime {
         Self::quiet(self.snapshot(Some(note.clone()), Some(note)))
     }
 
+    /// Re-read the TTS playback reaper deadline for the status line.
+    ///
+    /// Does not store it. The next `speak_reply` resolves again. Does not rebuild
+    /// the keyword spotter, does not change the energy gate, voice state, or mute grace.
+    /// An in-flight player keeps the deadline it was spawned with.
+    pub(crate) fn reload_playback(&mut self) -> Outcome {
+        let timeout = crate::playback_timeout::resolve_tts_playback_timeout();
+        let ms = u64::try_from(timeout.as_millis()).unwrap_or(0);
+        if self.verbosity >= 1 {
+            eprintln!("softwaked: tts playback timeout reloaded ({ms} ms)");
+        }
+        let note = format!("tts playback timeout reloaded ({ms} ms)");
+        self.retain_status_text(Some(note.clone()), Some(note.clone()));
+        Self::quiet(self.snapshot(Some(note.clone()), Some(note)))
+    }
+
     /// Apply a KWS hit to the voice machine when the state allows it.
     fn apply_pcm_hit(&mut self, hit: PhraseHit) -> Vec<WireEvent> {
         match hit {
@@ -2194,6 +2210,32 @@ mod tests {
         assert_eq!(runtime.pcm_agent, "scripted");
         assert!(runtime.auto_utt.is_buffering());
         assert_eq!(runtime.auto_utt.buffered_samples(), stored);
+    }
+
+    #[test]
+    fn reload_playback_reports_timeout_without_touching_kws_or_silence() {
+        let _guard = softwake_voice::INPUT_MUTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        softwake_voice::clear_input_mute_for_test();
+        let (mut runtime, _soul) = valid_runtime();
+        runtime.install_scripted_pcm([PhraseHit::None]);
+        let sleep_state = runtime.machine.state();
+        let silence = runtime.auto_utt.silence_frames_end();
+        let outcome = runtime.reload_playback();
+        let message = outcome
+            .body
+            .status()
+            .and_then(|status| status.message.clone())
+            .unwrap_or_default();
+        assert!(
+            message.contains("tts playback timeout reloaded"),
+            "unexpected message: {message}"
+        );
+        assert_eq!(runtime.machine.state(), sleep_state);
+        assert_eq!(runtime.pcm_agent, "scripted");
+        assert!(matches!(&runtime.pcm, crate::pcm::PcmEngine::Scripted(_)));
+        assert_eq!(runtime.auto_utt.silence_frames_end(), silence);
     }
 
     #[test]

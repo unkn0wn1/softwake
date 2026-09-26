@@ -26,6 +26,7 @@ mod free_speech;
 mod mode_confirm;
 mod mode_intent;
 mod pcm;
+mod playback_timeout;
 mod runtime;
 mod serve;
 mod shell_intent;

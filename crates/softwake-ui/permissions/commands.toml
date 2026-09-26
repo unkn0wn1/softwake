@@ -257,3 +257,13 @@ commands.allow = ["free_speech_silence_snapshot"]
 identifier = "allow-free-speech-silence-set"
 description = "Save free-speech end-of-utterance silence and apply it live to the daemon."
 commands.allow = ["free_speech_silence_set"]
+
+[[permission]]
+identifier = "allow-tts-playback-timeout-snapshot"
+description = "Read the TTS playback reaper deadline for Settings General."
+commands.allow = ["tts_playback_timeout_snapshot"]
+
+[[permission]]
+identifier = "allow-tts-playback-timeout-set"
+description = "Save the TTS playback reaper deadline and tell the running daemon."
+commands.allow = ["tts_playback_timeout_set"]

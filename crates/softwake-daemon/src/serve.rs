@@ -469,6 +469,10 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
             let outcome = lock(&shared.runtime).reload_utterance();
             reply(shared, tx, id, outcome)
         }
+        Ok(ClientMessage::ReloadPlayback { id }) => {
+            let outcome = lock(&shared.runtime).reload_playback();
+            reply(shared, tx, id, outcome)
+        }
         Ok(ClientMessage::Hello { .. }) => false,
         Err(error) if error.is_disconnect() => false,
         Err(error) => {

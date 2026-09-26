@@ -13,6 +13,7 @@ mod hud_pos;
 mod kws_prefs;
 mod oauth_open;
 mod pack;
+mod playback_prefs;
 mod profiles;
 mod providers;
 mod tools;
@@ -86,6 +87,8 @@ pub fn run() {
             kws_prefs::kws_thresholds_set,
             utterance_prefs::free_speech_silence_snapshot,
             utterance_prefs::free_speech_silence_set,
+            playback_prefs::tts_playback_timeout_snapshot,
+            playback_prefs::tts_playback_timeout_set,
         ])
         .setup(|app| {
             ensure_daemon::ensure_daemon_running();
@@ -394,6 +397,8 @@ mod tests {
         "kws_thresholds_set",
         "free_speech_silence_snapshot",
         "free_speech_silence_set",
+        "tts_playback_timeout_snapshot",
+        "tts_playback_timeout_set",
     ];
 
     const PERMISSIONS: &[&str] = &[
@@ -446,6 +451,8 @@ mod tests {
         "allow-kws-thresholds-set",
         "allow-free-speech-silence-snapshot",
         "allow-free-speech-silence-set",
+        "allow-tts-playback-timeout-snapshot",
+        "allow-tts-playback-timeout-set",
     ];
 
     #[test]

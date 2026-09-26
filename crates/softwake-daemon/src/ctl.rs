@@ -28,6 +28,8 @@ pub(crate) enum CtlAction {
     ReloadKws,
     /// `ctl reload-utterance`
     ReloadUtterance,
+    /// `ctl reload-playback`
+    ReloadPlayback,
     /// `ctl tool <name> [args...]`
     Tool {
         /// Tool name. Safe tools run while awake. Confirm-gated tools wait.
@@ -75,6 +77,7 @@ impl CtlAction {
             "reload-soul" => Some(Self::ReloadSoul),
             "reload-kws" => Some(Self::ReloadKws),
             "reload-utterance" => Some(Self::ReloadUtterance),
+            "reload-playback" => Some(Self::ReloadPlayback),
             _ => None,
         }
     }
@@ -95,6 +98,7 @@ pub(crate) fn run(path: &Path, action: &CtlAction) -> Result<String, CallError> 
         CtlAction::ReloadSoul => call(path, Command::ReloadSoul)?,
         CtlAction::ReloadKws => call_reload_kws(path)?,
         CtlAction::ReloadUtterance => call_reload_utterance(path)?,
+        CtlAction::ReloadPlayback => call_reload_playback(path)?,
         CtlAction::Tool { name, args } => call_tool(path, name, args)?,
         CtlAction::ConfirmTool { pending_id } => call_confirm(path, pending_id)?,
         CtlAction::CancelTool { pending_id } => call_cancel(path, pending_id)?,
@@ -155,6 +159,16 @@ pub(crate) fn call_reload_kws(path: &Path) -> Result<Status, CallError> {
 pub(crate) fn call_reload_utterance(path: &Path) -> Result<Status, CallError> {
     let mut client = Client::connect(path)?;
     client.reload_utterance()
+}
+
+/// Connect and re-read the TTS playback reaper deadline from disk / env.
+///
+/// # Errors
+///
+/// Returns [`CallError`] when the daemon cannot be reached or rejects the reload.
+pub(crate) fn call_reload_playback(path: &Path) -> Result<Status, CallError> {
+    let mut client = Client::connect(path)?;
+    client.reload_playback()
 }
 
 /// Connect and send one ask.

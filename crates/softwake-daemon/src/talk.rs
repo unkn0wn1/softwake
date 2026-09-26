@@ -10,7 +10,7 @@ use softwake_providers::{ProviderId, family_speaks_xai, resolve_stt_model, resol
 use softwake_providers::{stt_transcribe, tts_synthesize, wav_from_pcm16};
 use softwake_voice::TalkBuffer;
 #[cfg(feature = "live-http")]
-use softwake_voice::{PLAYBACK_TIMEOUT, PlaybackMode, play_audio};
+use softwake_voice::{PlaybackMode, play_audio};
 
 use crate::chat::DiskChat;
 #[cfg(not(feature = "live-http"))]
@@ -125,13 +125,8 @@ pub(crate) fn speak_reply(ready: &DiskChat, text: &str) -> Result<(), String> {
         )
         .map_err(|error| error.to_string())?;
         let mut record = None;
-        play_audio(
-            PlaybackMode::Spawn,
-            &audio,
-            "mp3",
-            PLAYBACK_TIMEOUT,
-            &mut record,
-        )
+        let timeout = crate::playback_timeout::resolve_tts_playback_timeout();
+        play_audio(PlaybackMode::Spawn, &audio, "mp3", timeout, &mut record)
     }
 }
 

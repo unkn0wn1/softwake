@@ -3,7 +3,7 @@
 //! Layout under the Softwake config root:
 //!
 //! ```text
-//! softwake.json                 # { "version": 1, "active_profile": "<id>", optional kws_*_milli, free_speech_end_silence_ms }
+//! softwake.json                 # { "version": 1, "active_profile": "<id>", optional kws_*_milli, free_speech_end_silence_ms, tts_playback_timeout_ms }
 //! profiles/<id>/profile.json    # { "id": "<id>", "name": "<agent name>" }
 //! profiles/<id>/{soul,user,rules,glossary}.md
 //! soul/                         # legacy pack; migration source only
@@ -45,7 +45,7 @@ const MAX_CONFIG_BYTES: u64 = 256 * 1024;
 
 const PACK_FILES: [&str; 4] = ["soul.md", "user.md", "rules.md", "glossary.md"];
 
-/// Softwake app Settings: which profile is active, plus KWS and free-speech knobs.
+/// Softwake app Settings: which profile is active, plus KWS, free-speech, and TTS playback knobs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
     /// Document version.
@@ -72,6 +72,13 @@ pub struct AppConfig {
     /// resolves the hangover. Press-to-talk and wake-word spotting ignore it.
     #[serde(default = "default_free_speech_end_silence_ms")]
     pub free_speech_end_silence_ms: u32,
+    /// TTS playback reaper deadline in milliseconds (60000 = 60 s).
+    ///
+    /// Missing key → product default. Settings → General writes this key.
+    /// `SOFTWAKE_TTS_PLAYBACK_TIMEOUT_MS` wins over the file when a speak starts.
+    /// Chat HTTP timeout, free-speech silence, and mute grace ignore it.
+    #[serde(default = "default_tts_playback_timeout_ms")]
+    pub tts_playback_timeout_ms: u32,
 }
 
 fn app_config_version() -> u32 {
@@ -90,6 +97,10 @@ fn default_free_speech_end_silence_ms() -> u32 {
     FREE_SPEECH_END_SILENCE_MS_DEFAULT
 }
 
+fn default_tts_playback_timeout_ms() -> u32 {
+    TTS_PLAYBACK_TIMEOUT_MS_DEFAULT
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -98,6 +109,7 @@ impl Default for AppConfig {
             kws_threshold_milli: default_kws_threshold_milli(),
             kws_short_threshold_milli: default_kws_short_threshold_milli(),
             free_speech_end_silence_ms: default_free_speech_end_silence_ms(),
+            tts_playback_timeout_ms: default_tts_playback_timeout_ms(),
         }
     }
 }
@@ -324,6 +336,13 @@ pub const FREE_SPEECH_END_SILENCE_MS_MIN: u32 = 500;
 /// Highest milliseconds accepted by Settings (4.0 s).
 pub const FREE_SPEECH_END_SILENCE_MS_MAX: u32 = 4000;
 
+/// Default TTS playback reaper deadline (60 s).
+pub const TTS_PLAYBACK_TIMEOUT_MS_DEFAULT: u32 = 60_000;
+/// Lowest milliseconds accepted by Settings (30 s).
+pub const TTS_PLAYBACK_TIMEOUT_MS_MIN: u32 = 30_000;
+/// Highest milliseconds accepted by Settings (300 s).
+pub const TTS_PLAYBACK_TIMEOUT_MS_MAX: u32 = 300_000;
+
 /// Clamp a milli threshold into [`KWS_THRESHOLD_MILLI_MIN`]..=[`KWS_THRESHOLD_MILLI_MAX`].
 #[must_use]
 pub fn clamp_kws_threshold_milli(value: u16) -> u16 {
@@ -374,6 +393,29 @@ pub fn set_free_speech_end_silence_ms(config_dir: &Path, ms: u32) -> Result<AppC
     let mut config = load_app_config(config_dir).unwrap_or_default();
     config.version = APP_CONFIG_VERSION;
     config.free_speech_end_silence_ms = clamp_free_speech_end_silence_ms(ms);
+    write_app_config(config_dir, &config)?;
+    Ok(config)
+}
+
+/// Clamp the TTS playback reaper deadline into 30000..=300000 ms.
+#[must_use]
+pub fn clamp_tts_playback_timeout_ms(value: u32) -> u32 {
+    value.clamp(TTS_PLAYBACK_TIMEOUT_MS_MIN, TTS_PLAYBACK_TIMEOUT_MS_MAX)
+}
+
+/// Write the TTS playback reaper deadline into `softwake.json`, preserving other keys.
+///
+/// Values are clamped to 30000..=300000 ms. The daemon applies
+/// `SOFTWAKE_TTS_PLAYBACK_TIMEOUT_MS` over this file when a speak starts.
+///
+/// # Errors
+///
+/// Config path or write failure.
+pub fn set_tts_playback_timeout_ms(config_dir: &Path, ms: u32) -> Result<AppConfig, SoulError> {
+    ensure_migrated(config_dir)?;
+    let mut config = load_app_config(config_dir).unwrap_or_default();
+    config.version = APP_CONFIG_VERSION;
+    config.tts_playback_timeout_ms = clamp_tts_playback_timeout_ms(ms);
     write_app_config(config_dir, &config)?;
     Ok(config)
 }
@@ -804,10 +846,15 @@ mod tests {
             app.free_speech_end_silence_ms,
             FREE_SPEECH_END_SILENCE_MS_DEFAULT
         );
+        assert_eq!(app.tts_playback_timeout_ms, TTS_PLAYBACK_TIMEOUT_MS_DEFAULT);
         assert_eq!(AppConfig::default().kws_threshold_milli, 150);
         assert_eq!(
             AppConfig::default().free_speech_end_silence_ms,
             FREE_SPEECH_END_SILENCE_MS_DEFAULT
+        );
+        assert_eq!(
+            AppConfig::default().tts_playback_timeout_ms,
+            TTS_PLAYBACK_TIMEOUT_MS_DEFAULT
         );
     }
 
@@ -854,5 +901,32 @@ mod tests {
         );
         assert_eq!(high.active_profile, DEFAULT_PROFILE_ID);
         assert_eq!(high.kws_threshold_milli, 150);
+    }
+
+    #[test]
+    fn set_tts_playback_timeout_round_trips_and_clamps() {
+        let root = TempDir::new("tts-playback");
+        ensure_migrated(&root.path).expect("migrate");
+        let written = set_tts_playback_timeout_ms(&root.path, 180_000).expect("write");
+        assert_eq!(written.tts_playback_timeout_ms, 180_000);
+        assert_eq!(written.active_profile, DEFAULT_PROFILE_ID);
+        assert_eq!(written.kws_threshold_milli, 150);
+        assert_eq!(written.kws_short_threshold_milli, 100);
+        assert_eq!(
+            written.free_speech_end_silence_ms,
+            FREE_SPEECH_END_SILENCE_MS_DEFAULT
+        );
+        let loaded = load_app_config(&root.path).expect("load");
+        assert_eq!(loaded.tts_playback_timeout_ms, 180_000);
+        let low = set_tts_playback_timeout_ms(&root.path, 1).expect("clamp low");
+        assert_eq!(low.tts_playback_timeout_ms, TTS_PLAYBACK_TIMEOUT_MS_MIN);
+        let high = set_tts_playback_timeout_ms(&root.path, 9_000_000).expect("clamp high");
+        assert_eq!(high.tts_playback_timeout_ms, TTS_PLAYBACK_TIMEOUT_MS_MAX);
+        assert_eq!(high.active_profile, DEFAULT_PROFILE_ID);
+        assert_eq!(high.kws_threshold_milli, 150);
+        assert_eq!(
+            high.free_speech_end_silence_ms,
+            FREE_SPEECH_END_SILENCE_MS_DEFAULT
+        );
     }
 }
