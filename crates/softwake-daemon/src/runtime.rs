@@ -1758,7 +1758,7 @@ mod tests {
             softwake_state::VoiceState::Hibernate
         );
         assert!(!runtime.capture.is_running());
-        assert!(runtime.session_phase() == SessionPhase::Closed);
+        assert_eq!(runtime.session_phase(), SessionPhase::Closed);
         assert!(
             runtime
                 .session_turns()
