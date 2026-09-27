@@ -49,9 +49,10 @@ pub use schedule::{
     resolve_schedules_file, save_schedules, should_fire, skip_missed, validate_entry,
 };
 pub use settings::{
-    ConfirmPolicy, EmailOauthStatus, FileToolsSettings, TOOLS_FILE_NAME, TOOLS_PERMISSIONS_LEAD,
-    ToolPermission, ToolsSettings, ToolsSettingsError, default_permission, parse_confirm_policy,
-    parse_tool_permission, resolve_tools_file, resolve_tools_file_from, tools_permissions_appendix,
+    ConfirmPolicy, ConnectedAccount, EmailOauthStatus, FileToolsSettings, TOOLS_FILE_NAME,
+    TOOLS_PERMISSIONS_LEAD, ToolPermission, ToolsSettings, ToolsSettingsError, default_permission,
+    parse_confirm_policy, parse_tool_permission, resolve_tools_file, resolve_tools_file_from,
+    tools_permissions_appendix,
 };
 pub use shell::{
     DEFAULT_OUTPUT_CAP, DEFAULT_SHELL_TIMEOUT, ShellError, ShellOutput, format_shell_output,
@@ -193,47 +194,47 @@ const PHASE2: &[ToolMeta] = &[
     ToolMeta {
         name: EMAIL_SEND_TOOL,
         risk: ToolRisk::Confirm,
-        description: "Email tool: draft or send one message (to, subject, body).",
+        description: "Email tool: draft or send one message (to, subject, body). Optional account selects a connected mailbox (connection id or email substring).",
     },
     ToolMeta {
         name: EMAIL_LIST_TOOL,
         risk: ToolRisk::Confirm,
-        description: "List recent inbox messages (Gmail or Microsoft Graph via Email OAuth).",
+        description: "List recent inbox messages (Gmail or Microsoft Graph via Email OAuth). Optional account selects a connected mailbox (connection id or email substring).",
     },
     ToolMeta {
         name: EMAIL_SEARCH_TOOL,
         risk: ToolRisk::Confirm,
-        description: "Search inbox (Gmail q or Graph search) via Email OAuth.",
+        description: "Search inbox (Gmail q or Graph search) via Email OAuth. Optional account selects a connected mailbox (connection id or email substring).",
     },
     ToolMeta {
         name: EMAIL_GET_TOOL,
         risk: ToolRisk::Confirm,
-        description: "Get one inbox message by id via Email OAuth.",
+        description: "Get one inbox message by id via Email OAuth. Optional account selects a connected mailbox (connection id or email substring).",
     },
     ToolMeta {
         name: CALENDAR_LIST_TOOL,
         risk: ToolRisk::Confirm,
-        description: "List upcoming calendar events via Email OAuth.",
+        description: "List upcoming calendar events via Email OAuth. Optional account selects a connected mailbox (connection id or email substring).",
     },
     ToolMeta {
         name: CALENDAR_GET_TOOL,
         risk: ToolRisk::Confirm,
-        description: "Get one calendar event by id via Email OAuth.",
+        description: "Get one calendar event by id via Email OAuth. Optional account selects a connected mailbox (connection id or email substring).",
     },
     ToolMeta {
         name: DRIVE_LIST_TOOL,
         risk: ToolRisk::Confirm,
-        description: "List Drive/AppFolder files visible under Email OAuth scopes.",
+        description: "List Drive/AppFolder files visible under Email OAuth scopes. Optional account selects a connected mailbox (connection id or email substring).",
     },
     ToolMeta {
         name: DRIVE_SEARCH_TOOL,
         risk: ToolRisk::Confirm,
-        description: "Search Drive/AppFolder files via Email OAuth.",
+        description: "Search Drive/AppFolder files via Email OAuth. Optional account selects a connected mailbox (connection id or email substring).",
     },
     ToolMeta {
         name: DRIVE_GET_TOOL,
         risk: ToolRisk::Confirm,
-        description: "Get Drive file metadata; optional cheap text body via Email OAuth.",
+        description: "Get Drive file metadata; optional cheap text body via Email OAuth. Optional account selects a connected mailbox (connection id or email substring).",
     },
     ToolMeta {
         name: SHELL_TOOL,
@@ -558,6 +559,8 @@ pub struct EmailSendArgs {
     pub subject: String,
     /// Body text. The remaining arguments joined by a single space.
     pub body: String,
+    /// Optional connection id or email substring. Peeled only when a fourth slot exists.
+    pub account: Option<String>,
 }
 
 /// Split `email_send` arguments into to, subject, and body.
@@ -569,6 +572,7 @@ pub struct EmailSendArgs {
 ///
 /// Returns [`ToolError::InvalidArgs`] when `args` has fewer than three elements.
 pub fn parse_email_send_args(args: &[String]) -> Result<EmailSendArgs, ToolError> {
+    let (account, args) = cloud_read::split_trailing_account(args, 3, EMAIL_SEND_TOOL)?;
     let Some((to, rest)) = args.split_first() else {
         return Err(invalid_email_args());
     };
@@ -582,6 +586,7 @@ pub fn parse_email_send_args(args: &[String]) -> Result<EmailSendArgs, ToolError
         to: to.clone(),
         subject: subject.clone(),
         body: body.join(" "),
+        account,
     })
 }
 
@@ -859,8 +864,26 @@ mod tests {
                 to: "ada@example.com".to_owned(),
                 subject: "hello".to_owned(),
                 body: "a short".to_owned(),
+                account: None,
             }
         );
+        let routed = parse_email_send_args(&[
+            "ada@example.com".to_owned(),
+            "hello".to_owned(),
+            "hello".to_owned(),
+            "account=ada@example.com".to_owned(),
+        ])
+        .expect("routed");
+        assert_eq!(routed.body, "hello");
+        assert_eq!(routed.account.as_deref(), Some("ada@example.com"));
+        let body_looks_like_account = parse_email_send_args(&[
+            "ada@example.com".to_owned(),
+            "hello".to_owned(),
+            "account=foo".to_owned(),
+        ])
+        .expect("body stays");
+        assert_eq!(body_looks_like_account.body, "account=foo");
+        assert!(body_looks_like_account.account.is_none());
         let spaced = parse_email_send_args(&[
             " ada@example.com ".to_owned(),
             "hello there".to_owned(),

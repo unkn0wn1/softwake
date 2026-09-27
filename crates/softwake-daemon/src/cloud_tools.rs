@@ -1,8 +1,10 @@
 //! Live inbox / calendar / Drive tools (Gmail, Google Calendar, Drive, MS Graph).
 //!
-//! Requires daemon `live-http` and a connected Email OAuth account. Prefer Google
-//! when both are connected. Confirmed `email_send` posts from `email_send`
-//! through [`with_account`]. See ADR-0030.
+//! Requires daemon `live-http` and a connected Email OAuth account. With no
+//! `account` hint, one usable account is used; otherwise the active Google
+//! account when any Google account is usable, else the active Microsoft
+//! account. Confirmed `email_send` posts from `email_send` through
+//! [`with_account`]. See ADR-0030 and ADR-0033.
 
 #![cfg_attr(not(feature = "live-http"), allow(dead_code))]
 
@@ -31,7 +33,6 @@ use softwake_tools::{
     EmailListArgs, EmailSearchArgs,
 };
 
-const NO_ACCOUNT: &str = "no Google or Microsoft account connected (Settings → Email → Connect)";
 #[allow(dead_code)]
 pub(crate) const LIVE_REQUIRED: &str =
     "live-http is required for inbox/calendar/Drive tools in this build";
@@ -39,32 +40,35 @@ pub(crate) const LIVE_REQUIRED: &str =
 /// Run `email_list` against the connected account.
 pub(crate) fn run_email_list(args: &EmailListArgs) -> Result<String, String> {
     let max = clamp_inbox_max(args.max_results);
-    with_account(|provider, connection| match provider {
-        AccountProvider::Google => {
-            let url = gmail_list_url(max, None);
-            let body = get_json(&url, connection.access_token.as_str(), None)?;
-            let stubs = parse_gmail_list(&body)?;
-            // Enrich up to max with metadata gets (cheap for small pages).
-            let mut messages = Vec::new();
-            for stub in stubs.into_iter().take(max as usize) {
-                let get_url = gmail_get_url(&stub.id);
-                if let Ok(raw) = get_json(&get_url, connection.access_token.as_str(), None) {
-                    if let Ok(msg) = parse_gmail_message(&raw) {
-                        messages.push(msg);
-                        continue;
+    with_account(
+        args.account.as_deref(),
+        |provider, connection| match provider {
+            AccountProvider::Google => {
+                let url = gmail_list_url(max, None);
+                let body = get_json(&url, connection.access_token.as_str(), None)?;
+                let stubs = parse_gmail_list(&body)?;
+                // Enrich up to max with metadata gets (cheap for small pages).
+                let mut messages = Vec::new();
+                for stub in stubs.into_iter().take(max as usize) {
+                    let get_url = gmail_get_url(&stub.id);
+                    if let Ok(raw) = get_json(&get_url, connection.access_token.as_str(), None) {
+                        if let Ok(msg) = parse_gmail_message(&raw) {
+                            messages.push(msg);
+                            continue;
+                        }
                     }
+                    messages.push(stub);
                 }
-                messages.push(stub);
+                Ok(format_inbox_list("gmail", &messages))
             }
-            Ok(format_inbox_list("gmail", &messages))
-        }
-        AccountProvider::Microsoft => {
-            let url = graph_list_url(max, None);
-            let body = get_json(&url, connection.access_token.as_str(), None)?;
-            let messages = parse_graph_list(&body)?;
-            Ok(format_inbox_list("graph", &messages))
-        }
-    })
+            AccountProvider::Microsoft => {
+                let url = graph_list_url(max, None);
+                let body = get_json(&url, connection.access_token.as_str(), None)?;
+                let messages = parse_graph_list(&body)?;
+                Ok(format_inbox_list("graph", &messages))
+            }
+        },
+    )
 }
 
 /// Run `email_search`.
@@ -74,35 +78,38 @@ pub(crate) fn run_email_search(args: &EmailSearchArgs) -> Result<String, String>
     if query.is_empty() {
         return Err("email_search needs query".to_owned());
     }
-    with_account(|provider, connection| match provider {
-        AccountProvider::Google => {
-            let url = gmail_list_url(max, Some(query));
-            let body = get_json(&url, connection.access_token.as_str(), None)?;
-            let stubs = parse_gmail_list(&body)?;
-            let mut messages = Vec::new();
-            for stub in stubs.into_iter().take(max as usize) {
-                let get_url = gmail_get_url(&stub.id);
-                if let Ok(raw) = get_json(&get_url, connection.access_token.as_str(), None) {
-                    if let Ok(msg) = parse_gmail_message(&raw) {
-                        messages.push(msg);
-                        continue;
+    with_account(
+        args.account.as_deref(),
+        |provider, connection| match provider {
+            AccountProvider::Google => {
+                let url = gmail_list_url(max, Some(query));
+                let body = get_json(&url, connection.access_token.as_str(), None)?;
+                let stubs = parse_gmail_list(&body)?;
+                let mut messages = Vec::new();
+                for stub in stubs.into_iter().take(max as usize) {
+                    let get_url = gmail_get_url(&stub.id);
+                    if let Ok(raw) = get_json(&get_url, connection.access_token.as_str(), None) {
+                        if let Ok(msg) = parse_gmail_message(&raw) {
+                            messages.push(msg);
+                            continue;
+                        }
                     }
+                    messages.push(stub);
                 }
-                messages.push(stub);
+                Ok(format_inbox_list("gmail", &messages))
             }
-            Ok(format_inbox_list("gmail", &messages))
-        }
-        AccountProvider::Microsoft => {
-            let url = graph_list_url(max, Some(query));
-            let body = get_json(
-                &url,
-                connection.access_token.as_str(),
-                Some(&[("ConsistencyLevel", "eventual")]),
-            )?;
-            let messages = parse_graph_list(&body)?;
-            Ok(format_inbox_list("graph", &messages))
-        }
-    })
+            AccountProvider::Microsoft => {
+                let url = graph_list_url(max, Some(query));
+                let body = get_json(
+                    &url,
+                    connection.access_token.as_str(),
+                    Some(&[("ConsistencyLevel", "eventual")]),
+                )?;
+                let messages = parse_graph_list(&body)?;
+                Ok(format_inbox_list("graph", &messages))
+            }
+        },
+    )
 }
 
 /// Run `email_get`.
@@ -111,20 +118,23 @@ pub(crate) fn run_email_get(args: &EmailGetArgs) -> Result<String, String> {
     if id.is_empty() {
         return Err("email_get needs id".to_owned());
     }
-    with_account(|provider, connection| match provider {
-        AccountProvider::Google => {
-            let url = gmail_get_url(id);
-            let body = get_json(&url, connection.access_token.as_str(), None)?;
-            let msg = parse_gmail_message(&body)?;
-            Ok(format_inbox_message("gmail", &msg))
-        }
-        AccountProvider::Microsoft => {
-            let url = graph_get_url(id);
-            let body = get_json(&url, connection.access_token.as_str(), None)?;
-            let msg = parse_graph_message(&body)?;
-            Ok(format_inbox_message("graph", &msg))
-        }
-    })
+    with_account(
+        args.account.as_deref(),
+        |provider, connection| match provider {
+            AccountProvider::Google => {
+                let url = gmail_get_url(id);
+                let body = get_json(&url, connection.access_token.as_str(), None)?;
+                let msg = parse_gmail_message(&body)?;
+                Ok(format_inbox_message("gmail", &msg))
+            }
+            AccountProvider::Microsoft => {
+                let url = graph_get_url(id);
+                let body = get_json(&url, connection.access_token.as_str(), None)?;
+                let msg = parse_graph_message(&body)?;
+                Ok(format_inbox_message("graph", &msg))
+            }
+        },
+    )
 }
 
 /// Run `calendar_list`.
@@ -135,24 +145,27 @@ pub(crate) fn run_calendar_list(args: &CalendarListArgs) -> Result<String, Strin
     let end = now + i64::from(days) * 86_400;
     let time_min = format_rfc3339(now);
     let time_max = format_rfc3339(end);
-    with_account(|provider, connection| match provider {
-        AccountProvider::Google => {
-            let url = google_events_url(&time_min, &time_max, max);
-            let body = get_json(&url, connection.access_token.as_str(), None)?;
-            let events = parse_google_events(&body)?;
-            Ok(format_calendar_list("google", &events))
-        }
-        AccountProvider::Microsoft => {
-            let url = graph_calendar_view_url(&time_min, &time_max, max);
-            let body = get_json(
-                &url,
-                connection.access_token.as_str(),
-                Some(&[("Prefer", "outlook.timezone=\"UTC\"")]),
-            )?;
-            let events = parse_graph_events(&body)?;
-            Ok(format_calendar_list("graph", &events))
-        }
-    })
+    with_account(
+        args.account.as_deref(),
+        |provider, connection| match provider {
+            AccountProvider::Google => {
+                let url = google_events_url(&time_min, &time_max, max);
+                let body = get_json(&url, connection.access_token.as_str(), None)?;
+                let events = parse_google_events(&body)?;
+                Ok(format_calendar_list("google", &events))
+            }
+            AccountProvider::Microsoft => {
+                let url = graph_calendar_view_url(&time_min, &time_max, max);
+                let body = get_json(
+                    &url,
+                    connection.access_token.as_str(),
+                    Some(&[("Prefer", "outlook.timezone=\"UTC\"")]),
+                )?;
+                let events = parse_graph_events(&body)?;
+                Ok(format_calendar_list("graph", &events))
+            }
+        },
+    )
 }
 
 /// Run `calendar_get`.
@@ -161,39 +174,45 @@ pub(crate) fn run_calendar_get(args: &CalendarGetArgs) -> Result<String, String>
     if id.is_empty() {
         return Err("calendar_get needs id".to_owned());
     }
-    with_account(|provider, connection| match provider {
-        AccountProvider::Google => {
-            let url = google_event_get_url(id);
-            let body = get_json(&url, connection.access_token.as_str(), None)?;
-            let event = parse_google_event(&body)?;
-            Ok(format_calendar_event("google", &event))
-        }
-        AccountProvider::Microsoft => {
-            let url = graph_event_get_url(id);
-            let body = get_json(&url, connection.access_token.as_str(), None)?;
-            let event = parse_graph_event(&body)?;
-            Ok(format_calendar_event("graph", &event))
-        }
-    })
+    with_account(
+        args.account.as_deref(),
+        |provider, connection| match provider {
+            AccountProvider::Google => {
+                let url = google_event_get_url(id);
+                let body = get_json(&url, connection.access_token.as_str(), None)?;
+                let event = parse_google_event(&body)?;
+                Ok(format_calendar_event("google", &event))
+            }
+            AccountProvider::Microsoft => {
+                let url = graph_event_get_url(id);
+                let body = get_json(&url, connection.access_token.as_str(), None)?;
+                let event = parse_graph_event(&body)?;
+                Ok(format_calendar_event("graph", &event))
+            }
+        },
+    )
 }
 
 /// Run `drive_list`.
 pub(crate) fn run_drive_list(args: &DriveListArgs) -> Result<String, String> {
     let max = clamp_drive_max(args.max_results);
-    with_account(|provider, connection| match provider {
-        AccountProvider::Google => {
-            let url = google_drive_list_url(max, None);
-            let body = get_json(&url, connection.access_token.as_str(), None)?;
-            let files = parse_google_drive_list(&body)?;
-            Ok(format_drive_list("google", &files))
-        }
-        AccountProvider::Microsoft => {
-            let url = graph_approot_children_url(max);
-            let body = get_json(&url, connection.access_token.as_str(), None)?;
-            let files = parse_graph_drive_list(&body)?;
-            Ok(format_drive_list("graph", &files))
-        }
-    })
+    with_account(
+        args.account.as_deref(),
+        |provider, connection| match provider {
+            AccountProvider::Google => {
+                let url = google_drive_list_url(max, None);
+                let body = get_json(&url, connection.access_token.as_str(), None)?;
+                let files = parse_google_drive_list(&body)?;
+                Ok(format_drive_list("google", &files))
+            }
+            AccountProvider::Microsoft => {
+                let url = graph_approot_children_url(max);
+                let body = get_json(&url, connection.access_token.as_str(), None)?;
+                let files = parse_graph_drive_list(&body)?;
+                Ok(format_drive_list("graph", &files))
+            }
+        },
+    )
 }
 
 /// Run `drive_search`.
@@ -203,20 +222,23 @@ pub(crate) fn run_drive_search(args: &DriveSearchArgs) -> Result<String, String>
     if query.is_empty() {
         return Err("drive_search needs query".to_owned());
     }
-    with_account(|provider, connection| match provider {
-        AccountProvider::Google => {
-            let url = google_drive_list_url(max, Some(query));
-            let body = get_json(&url, connection.access_token.as_str(), None)?;
-            let files = parse_google_drive_list(&body)?;
-            Ok(format_drive_list("google", &files))
-        }
-        AccountProvider::Microsoft => {
-            let url = graph_approot_search_url(query, max);
-            let body = get_json(&url, connection.access_token.as_str(), None)?;
-            let files = parse_graph_drive_list(&body)?;
-            Ok(format_drive_list("graph", &files))
-        }
-    })
+    with_account(
+        args.account.as_deref(),
+        |provider, connection| match provider {
+            AccountProvider::Google => {
+                let url = google_drive_list_url(max, Some(query));
+                let body = get_json(&url, connection.access_token.as_str(), None)?;
+                let files = parse_google_drive_list(&body)?;
+                Ok(format_drive_list("google", &files))
+            }
+            AccountProvider::Microsoft => {
+                let url = graph_approot_search_url(query, max);
+                let body = get_json(&url, connection.access_token.as_str(), None)?;
+                let files = parse_graph_drive_list(&body)?;
+                Ok(format_drive_list("graph", &files))
+            }
+        },
+    )
 }
 
 /// Run `drive_get`.
@@ -225,36 +247,39 @@ pub(crate) fn run_drive_get(args: &DriveGetArgs) -> Result<String, String> {
     if id.is_empty() {
         return Err("drive_get needs id".to_owned());
     }
-    with_account(|provider, connection| match provider {
-        AccountProvider::Google => {
-            let url = google_drive_get_url(id);
-            let body = get_json(&url, connection.access_token.as_str(), None)?;
-            let mut file = parse_google_drive_file(&body)?;
-            if args.read_text && is_cheap_text_mime(&file.mime_type) {
-                let text_url = if file.mime_type == "application/vnd.google-apps.document" {
-                    google_drive_export_text_url(id)
-                } else {
-                    google_drive_media_url(id)
-                };
-                if let Ok(raw) = get_text(&text_url, connection.access_token.as_str()) {
-                    file.text = truncate_drive_text(&raw);
+    with_account(
+        args.account.as_deref(),
+        |provider, connection| match provider {
+            AccountProvider::Google => {
+                let url = google_drive_get_url(id);
+                let body = get_json(&url, connection.access_token.as_str(), None)?;
+                let mut file = parse_google_drive_file(&body)?;
+                if args.read_text && is_cheap_text_mime(&file.mime_type) {
+                    let text_url = if file.mime_type == "application/vnd.google-apps.document" {
+                        google_drive_export_text_url(id)
+                    } else {
+                        google_drive_media_url(id)
+                    };
+                    if let Ok(raw) = get_text(&text_url, connection.access_token.as_str()) {
+                        file.text = truncate_drive_text(&raw);
+                    }
                 }
+                Ok(format_drive_file("google", &file))
             }
-            Ok(format_drive_file("google", &file))
-        }
-        AccountProvider::Microsoft => {
-            let url = graph_drive_item_url(id);
-            let body = get_json(&url, connection.access_token.as_str(), None)?;
-            let mut file = parse_graph_drive_file(&body)?;
-            if args.read_text && is_cheap_text_mime(&file.mime_type) {
-                let content_url = graph_drive_content_url(id);
-                if let Ok(raw) = get_text(&content_url, connection.access_token.as_str()) {
-                    file.text = truncate_drive_text(&raw);
+            AccountProvider::Microsoft => {
+                let url = graph_drive_item_url(id);
+                let body = get_json(&url, connection.access_token.as_str(), None)?;
+                let mut file = parse_graph_drive_file(&body)?;
+                if args.read_text && is_cheap_text_mime(&file.mime_type) {
+                    let content_url = graph_drive_content_url(id);
+                    if let Ok(raw) = get_text(&content_url, connection.access_token.as_str()) {
+                        file.text = truncate_drive_text(&raw);
+                    }
                 }
+                Ok(format_drive_file("graph", &file))
             }
-            Ok(format_drive_file("graph", &file))
-        }
-    })
+        },
+    )
 }
 
 /// Connector action for a cloud read tool name.
@@ -273,22 +298,24 @@ pub(crate) fn connector_action_for(tool: &str) -> Option<(&'static str, &'static
     }
 }
 
-/// Refresh the preferred account and pass that connection to `f`.
+/// Refresh the chosen account and pass that connection to `f`.
 ///
-/// Google wins when both providers are connected. Without `live-http` this
-/// returns [`LIVE_REQUIRED`] and does not call `f`.
-pub(crate) fn with_account<F>(f: F) -> Result<String, String>
+/// `account` is a connection id or email substring. With no hint, one usable
+/// account is used; otherwise the active Google account when any Google
+/// account is usable, else the active Microsoft account. Without `live-http`
+/// this returns [`LIVE_REQUIRED`] and does not call `f`.
+pub(crate) fn with_account<F>(account: Option<&str>, f: F) -> Result<String, String>
 where
     F: FnOnce(AccountProvider, &AccountConnection) -> Result<String, String>,
 {
     #[cfg(not(feature = "live-http"))]
     {
-        let _ = f;
+        let _ = (account, f);
         Err(LIVE_REQUIRED.to_owned())
     }
     #[cfg(feature = "live-http")]
     {
-        let (provider, connection) = load_preferred_account()?;
+        let (provider, connection) = load_resolved_account(account)?;
         let transport =
             softwake_providers::live::LiveTransport::bounded(std::time::Duration::from_secs(30));
         let fresh = ensure_fresh_account(provider, &transport, &connection, now_ms())?;
@@ -301,21 +328,13 @@ where
     }
 }
 
-fn load_preferred_account() -> Result<(AccountProvider, AccountConnection), String> {
+fn load_resolved_account(
+    account: Option<&str>,
+) -> Result<(AccountProvider, AccountConnection), String> {
     let path = resolve_secrets_file().map_err(|e| e.to_string())?;
     let store = open_store(&path).map_err(|e| e.to_string())?;
     let bag = store.load().map_err(|e| e.to_string())?;
-    if let Some(connection) = bag.google_connections.first().cloned() {
-        if !connection.access_token.is_empty() || !connection.refresh_token.is_empty() {
-            return Ok((AccountProvider::Google, connection));
-        }
-    }
-    if let Some(connection) = bag.microsoft_connections.first().cloned() {
-        if !connection.access_token.is_empty() || !connection.refresh_token.is_empty() {
-            return Ok((AccountProvider::Microsoft, connection));
-        }
-    }
-    Err(NO_ACCOUNT.to_owned())
+    bag.resolve_account(account)
 }
 
 /// Whether confirmed `email_send` should post via Gmail or Graph.
@@ -329,16 +348,15 @@ pub(crate) fn oauth_send_available() -> bool {
     }
     #[cfg(feature = "live-http")]
     {
-        load_preferred_account().is_ok()
+        load_resolved_account(None).is_ok()
     }
 }
 
 fn persist_account(provider: AccountProvider, connection: AccountConnection) -> Result<(), String> {
     let path = resolve_secrets_file().map_err(|e| e.to_string())?;
     let store = open_store(&path).map_err(|e| e.to_string())?;
-    update_bag(store.as_ref(), |bag| match provider {
-        AccountProvider::Google => bag.google_connections = vec![connection],
-        AccountProvider::Microsoft => bag.microsoft_connections = vec![connection],
+    update_bag(store.as_ref(), |bag| {
+        bag.upsert_account(provider, connection);
     })
     .map_err(|e| e.to_string())?;
     Ok(())

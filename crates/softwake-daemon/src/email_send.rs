@@ -46,15 +46,18 @@ pub(crate) fn choose_email_transport(oauth_usable: bool) -> EmailTransport {
 ///
 /// Refresh failure, HTTP failure, or a Gmail response without an id. A failure
 /// here is the operator-facing result; callers must not fall through to SMTP.
-pub(crate) fn run_email_send(message: &OutboundEmail) -> Result<String, String> {
+pub(crate) fn run_email_send(
+    message: &OutboundEmail,
+    account: Option<&str>,
+) -> Result<String, String> {
     #[cfg(not(feature = "live-http"))]
     {
-        let _ = message;
+        let _ = (message, account);
         Err(crate::cloud_tools::LIVE_REQUIRED.to_owned())
     }
     #[cfg(feature = "live-http")]
     {
-        send_live(message)
+        send_live(message, account)
     }
 }
 
@@ -91,8 +94,8 @@ fn scope_failure_hint(provider: AccountProvider, scope: &str, error: String) -> 
 }
 
 #[cfg(feature = "live-http")]
-fn send_live(message: &OutboundEmail) -> Result<String, String> {
-    with_account(|provider, connection| match provider {
+fn send_live(message: &OutboundEmail, account: Option<&str>) -> Result<String, String> {
+    with_account(account, |provider, connection| match provider {
         AccountProvider::Google => {
             let from = from_address(connection);
             let payload = gmail_send_body(&message.to, &message.subject, &message.body, from);
@@ -238,7 +241,7 @@ mod tests {
             subject: "hello".to_owned(),
             body: "a short note".to_owned(),
         };
-        let err = run_email_send(&message).expect_err("offline");
+        let err = run_email_send(&message, None).expect_err("offline");
         assert_eq!(err, crate::cloud_tools::LIVE_REQUIRED);
     }
 }

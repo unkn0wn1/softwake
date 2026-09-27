@@ -7,10 +7,10 @@
 use std::time::Duration;
 
 use softwake_providers::{
-    CHAT_MAX_TOKENS, ChatMessage, ChatRole, PreparedChat, ProviderHandle, estimate_tokens_parts,
-    extractive_summary, prepare_chat, resolve_compact_at_percent, resolve_context_limit,
-    resolve_keep_recent_turns, resolve_providers_file, resolve_secrets_file, should_compact,
-    usage_percent,
+    AccountProvider, CHAT_MAX_TOKENS, ChatMessage, ChatRole, PreparedChat, ProviderHandle,
+    estimate_tokens_parts, extractive_summary, prepare_chat, resolve_compact_at_percent,
+    resolve_context_limit, resolve_keep_recent_turns, resolve_providers_file, resolve_secrets_file,
+    should_compact, usage_percent,
 };
 #[cfg(feature = "live-http")]
 use softwake_providers::{complete_chat, complete_compact};
@@ -125,14 +125,29 @@ pub(crate) fn email_oauth_status_for_appendix() -> softwake_tools::EmailOauthSta
     let Ok(bag) = store.load() else {
         return softwake_tools::EmailOauthStatus::default();
     };
-    let google = bag.google_connections.first();
-    let microsoft = bag.microsoft_connections.first();
+    let google = bag.effective_account(AccountProvider::Google);
+    let microsoft = bag.effective_account(AccountProvider::Microsoft);
     softwake_tools::EmailOauthStatus {
-        google_connected: google.is_some(),
-        google_email: google.and_then(|c| c.account_email.clone()),
-        microsoft_connected: microsoft.is_some(),
-        microsoft_email: microsoft.and_then(|c| c.account_email.clone()),
+        google_connected: !bag.google_connections.is_empty(),
+        google_email: google.and_then(|connection| connection.account_email.clone()),
+        google_accounts: account_briefs(&bag.google_connections, google),
+        microsoft_connected: !bag.microsoft_connections.is_empty(),
+        microsoft_email: microsoft.and_then(|connection| connection.account_email.clone()),
+        microsoft_accounts: account_briefs(&bag.microsoft_connections, microsoft),
     }
+}
+
+fn account_briefs(
+    rows: &[softwake_providers::AccountConnection],
+    effective: Option<&softwake_providers::AccountConnection>,
+) -> Vec<softwake_tools::ConnectedAccount> {
+    rows.iter()
+        .map(|row| softwake_tools::ConnectedAccount {
+            id: row.id.clone(),
+            email: row.account_email.clone(),
+            active: effective.is_some_and(|chosen| std::ptr::eq(chosen, row)),
+        })
+        .collect()
 }
 
 /// Context usage recorded for Status after one ask.

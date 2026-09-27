@@ -7,6 +7,8 @@ use crate::ToolError;
 pub struct EmailListArgs {
     /// Optional max results.
     pub max_results: Option<u32>,
+    /// Optional connection id or email substring.
+    pub account: Option<String>,
 }
 
 /// Parsed `email_search` args.
@@ -16,6 +18,8 @@ pub struct EmailSearchArgs {
     pub query: String,
     /// Optional max results.
     pub max_results: Option<u32>,
+    /// Optional connection id or email substring.
+    pub account: Option<String>,
 }
 
 /// Parsed `email_get` args.
@@ -23,6 +27,8 @@ pub struct EmailSearchArgs {
 pub struct EmailGetArgs {
     /// Message id.
     pub id: String,
+    /// Optional connection id or email substring.
+    pub account: Option<String>,
 }
 
 /// Parsed `calendar_list` args.
@@ -32,6 +38,8 @@ pub struct CalendarListArgs {
     pub days: Option<u32>,
     /// Optional max events.
     pub max_results: Option<u32>,
+    /// Optional connection id or email substring.
+    pub account: Option<String>,
 }
 
 /// Parsed `calendar_get` args.
@@ -39,6 +47,8 @@ pub struct CalendarListArgs {
 pub struct CalendarGetArgs {
     /// Event id.
     pub id: String,
+    /// Optional connection id or email substring.
+    pub account: Option<String>,
 }
 
 /// Parsed `drive_list` args.
@@ -46,6 +56,8 @@ pub struct CalendarGetArgs {
 pub struct DriveListArgs {
     /// Optional max files.
     pub max_results: Option<u32>,
+    /// Optional connection id or email substring.
+    pub account: Option<String>,
 }
 
 /// Parsed `drive_search` args.
@@ -55,6 +67,8 @@ pub struct DriveSearchArgs {
     pub query: String,
     /// Optional max files.
     pub max_results: Option<u32>,
+    /// Optional connection id or email substring.
+    pub account: Option<String>,
 }
 
 /// Parsed `drive_get` args.
@@ -64,6 +78,8 @@ pub struct DriveGetArgs {
     pub id: String,
     /// When true, fetch cheap text body when MIME allows.
     pub read_text: bool,
+    /// Optional connection id or email substring.
+    pub account: Option<String>,
 }
 
 fn parse_u32(raw: &str) -> Option<u32> {
@@ -76,18 +92,49 @@ fn needs(name: &str) -> ToolError {
     }
 }
 
-/// Parse `email_list` positional args: optional max.
+/// Peel a trailing `account=<value>` when the caller passed more than `min_positional` args.
+///
+/// A body or id that is itself `account=…` and sits in the minimum slot stays put.
 ///
 /// # Errors
 ///
-/// Non-numeric max.
+/// The trailing value is empty.
+pub(crate) fn split_trailing_account<'a>(
+    args: &'a [String],
+    min_positional: usize,
+    tool: &str,
+) -> Result<(Option<String>, &'a [String]), ToolError> {
+    if args.len() > min_positional {
+        if let Some(last) = args.last() {
+            if let Some(value) = last.strip_prefix("account=") {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    return Err(needs(tool));
+                }
+                return Ok((Some(trimmed.to_owned()), &args[..args.len() - 1]));
+            }
+        }
+    }
+    Ok((None, args))
+}
+
+/// Parse `email_list` positional args: optional max, optional trailing `account=`.
+///
+/// # Errors
+///
+/// Non-numeric max, or an empty account value.
 pub fn parse_email_list_args(args: &[String]) -> Result<EmailListArgs, ToolError> {
+    let (account, args) = split_trailing_account(args, 0, crate::EMAIL_LIST_TOOL)?;
     match args {
-        [] => Ok(EmailListArgs { max_results: None }),
+        [] => Ok(EmailListArgs {
+            max_results: None,
+            account,
+        }),
         [max] => {
             let max_results = parse_u32(max).ok_or_else(|| needs(crate::EMAIL_LIST_TOOL))?;
             Ok(EmailListArgs {
                 max_results: Some(max_results),
+                account,
             })
         }
         _ => Err(needs(crate::EMAIL_LIST_TOOL)),
@@ -100,16 +147,19 @@ pub fn parse_email_list_args(args: &[String]) -> Result<EmailListArgs, ToolError
 ///
 /// Missing query.
 pub fn parse_email_search_args(args: &[String]) -> Result<EmailSearchArgs, ToolError> {
+    let (account, args) = split_trailing_account(args, 1, crate::EMAIL_SEARCH_TOOL)?;
     match args {
         [query] if !query.trim().is_empty() => Ok(EmailSearchArgs {
             query: query.clone(),
             max_results: None,
+            account,
         }),
         [query, max] if !query.trim().is_empty() => {
             let max_results = parse_u32(max).ok_or_else(|| needs(crate::EMAIL_SEARCH_TOOL))?;
             Ok(EmailSearchArgs {
                 query: query.clone(),
                 max_results: Some(max_results),
+                account,
             })
         }
         _ => Err(needs(crate::EMAIL_SEARCH_TOOL)),
@@ -122,8 +172,12 @@ pub fn parse_email_search_args(args: &[String]) -> Result<EmailSearchArgs, ToolE
 ///
 /// Missing id.
 pub fn parse_email_get_args(args: &[String]) -> Result<EmailGetArgs, ToolError> {
+    let (account, args) = split_trailing_account(args, 1, crate::EMAIL_GET_TOOL)?;
     match args {
-        [id] if !id.trim().is_empty() => Ok(EmailGetArgs { id: id.clone() }),
+        [id] if !id.trim().is_empty() => Ok(EmailGetArgs {
+            id: id.clone(),
+            account,
+        }),
         _ => Err(needs(crate::EMAIL_GET_TOOL)),
     }
 }
@@ -134,16 +188,19 @@ pub fn parse_email_get_args(args: &[String]) -> Result<EmailGetArgs, ToolError> 
 ///
 /// Non-numeric values.
 pub fn parse_calendar_list_args(args: &[String]) -> Result<CalendarListArgs, ToolError> {
+    let (account, args) = split_trailing_account(args, 0, crate::CALENDAR_LIST_TOOL)?;
     match args {
         [] => Ok(CalendarListArgs {
             days: None,
             max_results: None,
+            account,
         }),
         [days] => {
             let days = parse_u32(days).ok_or_else(|| needs(crate::CALENDAR_LIST_TOOL))?;
             Ok(CalendarListArgs {
                 days: Some(days),
                 max_results: None,
+                account,
             })
         }
         [days, max] => {
@@ -152,6 +209,7 @@ pub fn parse_calendar_list_args(args: &[String]) -> Result<CalendarListArgs, Too
             Ok(CalendarListArgs {
                 days: Some(days),
                 max_results: Some(max_results),
+                account,
             })
         }
         _ => Err(needs(crate::CALENDAR_LIST_TOOL)),
@@ -164,8 +222,12 @@ pub fn parse_calendar_list_args(args: &[String]) -> Result<CalendarListArgs, Too
 ///
 /// Missing id.
 pub fn parse_calendar_get_args(args: &[String]) -> Result<CalendarGetArgs, ToolError> {
+    let (account, args) = split_trailing_account(args, 1, crate::CALENDAR_GET_TOOL)?;
     match args {
-        [id] if !id.trim().is_empty() => Ok(CalendarGetArgs { id: id.clone() }),
+        [id] if !id.trim().is_empty() => Ok(CalendarGetArgs {
+            id: id.clone(),
+            account,
+        }),
         _ => Err(needs(crate::CALENDAR_GET_TOOL)),
     }
 }
@@ -176,12 +238,17 @@ pub fn parse_calendar_get_args(args: &[String]) -> Result<CalendarGetArgs, ToolE
 ///
 /// Non-numeric max.
 pub fn parse_drive_list_args(args: &[String]) -> Result<DriveListArgs, ToolError> {
+    let (account, args) = split_trailing_account(args, 0, crate::DRIVE_LIST_TOOL)?;
     match args {
-        [] => Ok(DriveListArgs { max_results: None }),
+        [] => Ok(DriveListArgs {
+            max_results: None,
+            account,
+        }),
         [max] => {
             let max_results = parse_u32(max).ok_or_else(|| needs(crate::DRIVE_LIST_TOOL))?;
             Ok(DriveListArgs {
                 max_results: Some(max_results),
+                account,
             })
         }
         _ => Err(needs(crate::DRIVE_LIST_TOOL)),
@@ -194,16 +261,19 @@ pub fn parse_drive_list_args(args: &[String]) -> Result<DriveListArgs, ToolError
 ///
 /// Missing query.
 pub fn parse_drive_search_args(args: &[String]) -> Result<DriveSearchArgs, ToolError> {
+    let (account, args) = split_trailing_account(args, 1, crate::DRIVE_SEARCH_TOOL)?;
     match args {
         [query] if !query.trim().is_empty() => Ok(DriveSearchArgs {
             query: query.clone(),
             max_results: None,
+            account,
         }),
         [query, max] if !query.trim().is_empty() => {
             let max_results = parse_u32(max).ok_or_else(|| needs(crate::DRIVE_SEARCH_TOOL))?;
             Ok(DriveSearchArgs {
                 query: query.clone(),
                 max_results: Some(max_results),
+                account,
             })
         }
         _ => Err(needs(crate::DRIVE_SEARCH_TOOL)),
@@ -216,10 +286,12 @@ pub fn parse_drive_search_args(args: &[String]) -> Result<DriveSearchArgs, ToolE
 ///
 /// Missing id.
 pub fn parse_drive_get_args(args: &[String]) -> Result<DriveGetArgs, ToolError> {
+    let (account, args) = split_trailing_account(args, 1, crate::DRIVE_GET_TOOL)?;
     match args {
         [id] if !id.trim().is_empty() => Ok(DriveGetArgs {
             id: id.clone(),
             read_text: false,
+            account,
         }),
         [id, flag] if !id.trim().is_empty() => {
             let read_text = matches!(
@@ -229,6 +301,7 @@ pub fn parse_drive_get_args(args: &[String]) -> Result<DriveGetArgs, ToolError> 
             Ok(DriveGetArgs {
                 id: id.clone(),
                 read_text,
+                account,
             })
         }
         _ => Err(needs(crate::DRIVE_GET_TOOL)),
@@ -243,13 +316,47 @@ mod tests {
     fn parsers_round_trip() {
         assert_eq!(
             parse_email_list_args(&[]).unwrap(),
-            EmailListArgs { max_results: None }
+            EmailListArgs {
+                max_results: None,
+                account: None
+            }
+        );
+        assert_eq!(
+            parse_email_list_args(&["10".into(), "account=ada@example.com".into()]).unwrap(),
+            EmailListArgs {
+                max_results: Some(10),
+                account: Some("ada@example.com".into())
+            }
+        );
+        assert_eq!(
+            parse_email_list_args(&["account=ada@example.com".into()]).unwrap(),
+            EmailListArgs {
+                max_results: None,
+                account: Some("ada@example.com".into())
+            }
         );
         assert_eq!(
             parse_email_search_args(&["from:ada".into(), "5".into()]).unwrap(),
             EmailSearchArgs {
                 query: "from:ada".into(),
-                max_results: Some(5)
+                max_results: Some(5),
+                account: None
+            }
+        );
+        assert_eq!(
+            parse_email_search_args(&["from:ada".into(), "account=id-1".into()])
+                .unwrap()
+                .account
+                .as_deref(),
+            Some("id-1")
+        );
+        assert_eq!(
+            parse_email_search_args(&["from:ada".into(), "5".into(), "account=id-1".into()])
+                .unwrap(),
+            EmailSearchArgs {
+                query: "from:ada".into(),
+                max_results: Some(5),
+                account: Some("id-1".into())
             }
         );
         assert_eq!(parse_email_get_args(&["abc".into()]).unwrap().id, "abc");
@@ -257,7 +364,8 @@ mod tests {
             parse_calendar_list_args(&["14".into(), "10".into()]).unwrap(),
             CalendarListArgs {
                 days: Some(14),
-                max_results: Some(10)
+                max_results: Some(10),
+                account: None
             }
         );
         assert!(

@@ -84,11 +84,12 @@ pub use registry::{
 };
 pub use secrets::{
     BackendChoice, BackendPref, KEYRING_PROBE_USER, KEYRING_SERVICE, KEYRING_STATUS, KEYRING_USER,
-    KeyringClient, MAX_SECRETS_BYTES, OnDiskKind, PLAINTEXT_OPT_IN_MESSAGE, PLAINTEXT_WARNING,
-    POINTER_IDENTITY_MESSAGE, SECRETS_FILE_NAME, SecretBackend, SecretBag, SecretStore,
-    SecretStoreError, StorageReport, UNSUPPORTED_BACKEND_MESSAGE, UnavailableSecretStore,
-    open_store, open_store_with, opt_in_plaintext, opt_in_plaintext_resolved, resolve_backend,
-    resolve_secrets_file, resolve_secrets_file_from, update_bag,
+    KeyringClient, MAX_SECRETS_BYTES, NO_CONNECTED_EMAIL_ACCOUNT, OnDiskKind,
+    PLAINTEXT_OPT_IN_MESSAGE, PLAINTEXT_WARNING, POINTER_IDENTITY_MESSAGE, SECRETS_FILE_NAME,
+    SecretBackend, SecretBag, SecretStore, SecretStoreError, StorageReport,
+    UNSUPPORTED_BACKEND_MESSAGE, UnavailableSecretStore, open_store, open_store_with,
+    opt_in_plaintext, opt_in_plaintext_resolved, resolve_backend, resolve_secrets_file,
+    resolve_secrets_file_from, update_bag,
 };
 pub use secrets_file::FileSecretStore;
 pub use secrets_keyring::KeyringSecretStore;

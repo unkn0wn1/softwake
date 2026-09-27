@@ -875,8 +875,31 @@ impl Hands {
                 message: error_message,
             });
         }
+        let account_hint = parsed
+            .account
+            .as_deref()
+            .filter(|hint| !hint.trim().is_empty());
+        #[cfg(not(feature = "live-http"))]
+        let _ = account_hint;
+        #[cfg(feature = "live-http")]
+        if account_hint.is_some() {
+            return match run_email_send(&message, account_hint) {
+                Ok(detail) => Ok(detail),
+                Err(error_message) => {
+                    self.record(
+                        name,
+                        Some(ToolRisk::Confirm),
+                        ToolOutcome::Unknown,
+                        Some(error_message.clone()),
+                    );
+                    Err(DispatchError::Connector {
+                        message: error_message,
+                    })
+                }
+            };
+        }
         if choose_email_transport(oauth_send_available()) == EmailTransport::OAuth {
-            return match run_email_send(&message) {
+            return match run_email_send(&message, None) {
                 Ok(detail) => Ok(detail),
                 Err(error_message) => {
                     self.record(
@@ -1727,7 +1750,7 @@ mod tests {
         assert_eq!(pending.name, "email_send");
         assert_eq!(
             pending.description,
-            "Email tool: draft or send one message (to, subject, body)."
+            "Email tool: draft or send one message (to, subject, body). Optional account selects a connected mailbox (connection id or email substring)."
         );
         assert!(hands.outbox().is_empty());
         assert!(hands.notifications().is_empty());
