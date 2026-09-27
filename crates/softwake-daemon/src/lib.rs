@@ -10,7 +10,7 @@
 //! socket. `ctl ask` and `ctl chat` forward one awake turn to that daemon.
 //! The demo uses mock capture and does not open a microphone.
 //! Native `PipeWire` capture stays behind the daemon `pipewire-capture` feature (audio `pipewire-native`). While awake, `echo`
-//! runs immediately. `notify`, `email_send`, `skill_save`, and `schedule` wait for confirmation. `shell` is confirm-gated and off until Tools Settings enable it.
+//! runs immediately. `notify`, `email_send`, inbox/calendar/Drive read tools, `skill_save`, and `schedule` wait for confirmation (operator Always allow may skip the prompt). `shell` is confirm-gated and off until Tools Settings enable it.
 //! Sleep and hibernate refuse every tool. Confirming `email_send` appends one
 //! in-memory message and does not open a socket.
 
@@ -18,6 +18,7 @@ mod announce;
 mod capture;
 mod chat;
 mod cli;
+mod cloud_tools;
 mod ctl;
 mod demo;
 mod dispatch;

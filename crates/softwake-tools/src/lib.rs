@@ -14,12 +14,19 @@
 //! aliases, then may spawn `/bin/sh -c` via [`shell`]. This crate still does not spawn on invoke.
 
 mod chat_schema;
+mod cloud_read;
 mod messengers;
 mod schedule;
 mod settings;
 mod shell;
 
 pub use chat_schema::{advertise_chat_tools, tool_args_from_json};
+pub use cloud_read::{
+    CalendarGetArgs, CalendarListArgs, DriveGetArgs, DriveListArgs, DriveSearchArgs, EmailGetArgs,
+    EmailListArgs, EmailSearchArgs, parse_calendar_get_args, parse_calendar_list_args,
+    parse_drive_get_args, parse_drive_list_args, parse_drive_search_args, parse_email_get_args,
+    parse_email_list_args, parse_email_search_args,
+};
 pub use messengers::{
     CHANNEL_DESKTOP, CHANNEL_TELEGRAM, ChannelFlags, HUD_CHAT_INBOX_FILE_NAME, HudChatInbox,
     InboxTurn, MESSENGERS_FILE_NAME, MessengersError, MessengersFile, TelegramChannel,
@@ -53,11 +60,41 @@ pub const NOTIFY_TOOL: &str = "notify";
 /// Confirm-gated send. The daemon appends one in-memory message after confirm.
 pub const EMAIL_SEND_TOOL: &str = "email_send";
 
+/// Inbox list (Gmail / Graph). Default Always allow.
+pub const EMAIL_LIST_TOOL: &str = "email_list";
+
+/// Inbox search. Default Ask.
+pub const EMAIL_SEARCH_TOOL: &str = "email_search";
+
+/// Inbox get-by-id. Default Ask.
+pub const EMAIL_GET_TOOL: &str = "email_get";
+
+/// Upcoming calendar events. Default Always allow.
+pub const CALENDAR_LIST_TOOL: &str = "calendar_list";
+
+/// Calendar get-by-id. Default Ask.
+pub const CALENDAR_GET_TOOL: &str = "calendar_get";
+
+/// Drive / `AppFolder` list. Default Always allow.
+pub const DRIVE_LIST_TOOL: &str = "drive_list";
+
+/// Drive search. Default Ask.
+pub const DRIVE_SEARCH_TOOL: &str = "drive_search";
+
+/// Drive metadata (+ optional cheap text). Default Ask.
+pub const DRIVE_GET_TOOL: &str = "drive_get";
+
 /// Confirm-gated shell. Operator default is deny; the daemon spawns only after Ask or Always allow.
 pub const SHELL_TOOL: &str = "shell";
 
 /// Confirm-gated skill write. Daemon saves Markdown after confirm.
 pub const SKILL_SAVE_TOOL: &str = "skill_save";
+
+/// List saved skills (id + title). Default Always allow.
+pub const SKILL_LIST_TOOL: &str = "skill_list";
+
+/// Get one skill by id (full sections). Default Ask.
+pub const SKILL_GET_TOOL: &str = "skill_get";
 
 /// Confirm-gated schedule mutate (create/edit/delete). `list` is included and confirm-gated.
 pub const SCHEDULE_TOOL: &str = "schedule";
@@ -119,6 +156,46 @@ const PHASE2: &[ToolMeta] = &[
         description: "Email tool: draft or send one message (to, subject, body).",
     },
     ToolMeta {
+        name: EMAIL_LIST_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "List recent inbox messages (Gmail or Microsoft Graph via Email OAuth).",
+    },
+    ToolMeta {
+        name: EMAIL_SEARCH_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Search inbox (Gmail q or Graph search) via Email OAuth.",
+    },
+    ToolMeta {
+        name: EMAIL_GET_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Get one inbox message by id via Email OAuth.",
+    },
+    ToolMeta {
+        name: CALENDAR_LIST_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "List upcoming calendar events via Email OAuth.",
+    },
+    ToolMeta {
+        name: CALENDAR_GET_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Get one calendar event by id via Email OAuth.",
+    },
+    ToolMeta {
+        name: DRIVE_LIST_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "List Drive/AppFolder files visible under Email OAuth scopes.",
+    },
+    ToolMeta {
+        name: DRIVE_SEARCH_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Search Drive/AppFolder files via Email OAuth.",
+    },
+    ToolMeta {
+        name: DRIVE_GET_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Get Drive file metadata; optional cheap text body via Email OAuth.",
+    },
+    ToolMeta {
         name: SHELL_TOOL,
         risk: ToolRisk::Confirm,
         description: "Run a shell command after confirm. Off until enabled in Tools Settings.",
@@ -127,6 +204,16 @@ const PHASE2: &[ToolMeta] = &[
         name: SKILL_SAVE_TOOL,
         risk: ToolRisk::Confirm,
         description: "Skills tool: save a Markdown skill (procedure / pitfalls / verify) after confirm.",
+    },
+    ToolMeta {
+        name: SKILL_LIST_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "List saved skills (id and title).",
+    },
+    ToolMeta {
+        name: SKILL_GET_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Get one saved skill by id (procedure, pitfalls, verify).",
     },
     ToolMeta {
         name: SCHEDULE_TOOL,
@@ -273,10 +360,40 @@ impl ToolRegistry {
                 if name == SKILL_SAVE_TOOL {
                     parse_skill_save_args(args)?;
                 }
+                if name == SKILL_LIST_TOOL {
+                    parse_skill_list_args(args)?;
+                }
+                if name == SKILL_GET_TOOL {
+                    parse_skill_get_args(args)?;
+                }
                 if name == SCHEDULE_TOOL {
                     parse_schedule_args(args).map_err(|_| ToolError::InvalidArgs {
                         name: SCHEDULE_TOOL.to_owned(),
                     })?;
+                }
+                if name == EMAIL_LIST_TOOL {
+                    parse_email_list_args(args)?;
+                }
+                if name == EMAIL_SEARCH_TOOL {
+                    parse_email_search_args(args)?;
+                }
+                if name == EMAIL_GET_TOOL {
+                    parse_email_get_args(args)?;
+                }
+                if name == CALENDAR_LIST_TOOL {
+                    parse_calendar_list_args(args)?;
+                }
+                if name == CALENDAR_GET_TOOL {
+                    parse_calendar_get_args(args)?;
+                }
+                if name == DRIVE_LIST_TOOL {
+                    parse_drive_list_args(args)?;
+                }
+                if name == DRIVE_SEARCH_TOOL {
+                    parse_drive_search_args(args)?;
+                }
+                if name == DRIVE_GET_TOOL {
+                    parse_drive_get_args(args)?;
                 }
                 Ok(ToolResult {
                     detail: render(name, args),
@@ -396,6 +513,42 @@ pub fn parse_skill_save_args(args: &[String]) -> Result<SkillSaveArgs, ToolError
     })
 }
 
+/// `skill_list` takes no arguments.
+///
+/// # Errors
+///
+/// Unexpected args.
+pub fn parse_skill_list_args(args: &[String]) -> Result<(), ToolError> {
+    if args.is_empty() {
+        Ok(())
+    } else {
+        Err(ToolError::InvalidArgs {
+            name: SKILL_LIST_TOOL.to_owned(),
+        })
+    }
+}
+
+/// Parsed `skill_get` args.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillGetArgs {
+    /// Skill id (filename stem).
+    pub id: String,
+}
+
+/// Parse `skill_get`: id.
+///
+/// # Errors
+///
+/// Missing id.
+pub fn parse_skill_get_args(args: &[String]) -> Result<SkillGetArgs, ToolError> {
+    match args {
+        [id] if !id.trim().is_empty() => Ok(SkillGetArgs { id: id.clone() }),
+        _ => Err(ToolError::InvalidArgs {
+            name: SKILL_GET_TOOL.to_owned(),
+        }),
+    }
+}
+
 fn invalid_email_args() -> ToolError {
     ToolError::InvalidArgs {
         name: EMAIL_SEND_TOOL.to_owned(),
@@ -418,7 +571,9 @@ fn echo_detail(args: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ECHO_TOOL, EMAIL_SEND_TOOL, EmailSendArgs, NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL,
+        CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL,
+        ECHO_TOOL, EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL,
+        EmailSendArgs, NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL,
         SKILL_SAVE_TOOL, ToolError, ToolRegistry, ToolResult, ToolRisk, parse_email_send_args,
     };
 
@@ -439,8 +594,18 @@ mod tests {
                 (ECHO_TOOL, ToolRisk::Safe),
                 (NOTIFY_TOOL, ToolRisk::Confirm),
                 (EMAIL_SEND_TOOL, ToolRisk::Confirm),
+                (EMAIL_LIST_TOOL, ToolRisk::Confirm),
+                (EMAIL_SEARCH_TOOL, ToolRisk::Confirm),
+                (EMAIL_GET_TOOL, ToolRisk::Confirm),
+                (CALENDAR_LIST_TOOL, ToolRisk::Confirm),
+                (CALENDAR_GET_TOOL, ToolRisk::Confirm),
+                (DRIVE_LIST_TOOL, ToolRisk::Confirm),
+                (DRIVE_SEARCH_TOOL, ToolRisk::Confirm),
+                (DRIVE_GET_TOOL, ToolRisk::Confirm),
                 (SHELL_TOOL, ToolRisk::Confirm),
                 (SKILL_SAVE_TOOL, ToolRisk::Confirm),
+                (SKILL_LIST_TOOL, ToolRisk::Confirm),
+                (SKILL_GET_TOOL, ToolRisk::Confirm),
                 (SCHEDULE_TOOL, ToolRisk::Confirm),
             ]
         );

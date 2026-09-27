@@ -15,6 +15,15 @@ pub const EMAIL: &str = "email";
 /// caller's step after [`ConnectorRegistry::authorize_confirmed`].
 pub const EMAIL_SEND: &str = "send";
 
+/// Confirm-gated inbox list (Gmail / Graph).
+pub const EMAIL_LIST: &str = "list";
+
+/// Confirm-gated inbox search.
+pub const EMAIL_SEARCH: &str = "search";
+
+/// Confirm-gated inbox get-by-id.
+pub const EMAIL_GET: &str = "get";
+
 /// Denied email action. It has no backend.
 pub const EMAIL_DELETE: &str = "delete";
 
@@ -27,6 +36,12 @@ pub const DRIVE: &str = "drive";
 /// caller's step after [`ConnectorRegistry::authorize_confirmed`].
 pub const DRIVE_LIST: &str = "list";
 
+/// Confirm-gated Drive search.
+pub const DRIVE_SEARCH: &str = "search";
+
+/// Confirm-gated Drive metadata / cheap text get.
+pub const DRIVE_GET: &str = "get";
+
 /// Denied Drive action. It has no backend.
 pub const DRIVE_DELETE: &str = "delete";
 
@@ -38,6 +53,9 @@ pub const CALENDAR: &str = "calendar";
 /// [`crate::MockCalendar::list`] is what returns the events. Calling it is the
 /// caller's step after [`ConnectorRegistry::authorize_confirmed`].
 pub const CALENDAR_LIST: &str = "list";
+
+/// Confirm-gated calendar get-by-id.
+pub const CALENDAR_GET: &str = "get";
 
 /// Denied calendar action. It has no backend.
 pub const CALENDAR_DELETE: &str = "delete";
@@ -92,6 +110,24 @@ const PHASE3: &[ConnectorMeta] = &[
     },
     ConnectorMeta {
         connector: EMAIL,
+        action: EMAIL_LIST,
+        risk: ConnectorRisk::Confirm,
+        description: "List recent inbox messages. Runs only after confirmation.",
+    },
+    ConnectorMeta {
+        connector: EMAIL,
+        action: EMAIL_SEARCH,
+        risk: ConnectorRisk::Confirm,
+        description: "Search inbox messages. Runs only after confirmation.",
+    },
+    ConnectorMeta {
+        connector: EMAIL,
+        action: EMAIL_GET,
+        risk: ConnectorRisk::Confirm,
+        description: "Get one inbox message by id. Runs only after confirmation.",
+    },
+    ConnectorMeta {
+        connector: EMAIL,
         action: EMAIL_DELETE,
         risk: ConnectorRisk::Deny,
         description: "Delete email. Denied.",
@@ -104,6 +140,18 @@ const PHASE3: &[ConnectorMeta] = &[
     },
     ConnectorMeta {
         connector: DRIVE,
+        action: DRIVE_SEARCH,
+        risk: ConnectorRisk::Confirm,
+        description: "Search Drive files. Runs only after confirmation.",
+    },
+    ConnectorMeta {
+        connector: DRIVE,
+        action: DRIVE_GET,
+        risk: ConnectorRisk::Confirm,
+        description: "Get Drive file metadata (optional text). Runs only after confirmation.",
+    },
+    ConnectorMeta {
+        connector: DRIVE,
         action: DRIVE_DELETE,
         risk: ConnectorRisk::Deny,
         description: "Delete a Drive file. Denied.",
@@ -113,6 +161,12 @@ const PHASE3: &[ConnectorMeta] = &[
         action: CALENDAR_LIST,
         risk: ConnectorRisk::Confirm,
         description: "List calendar events through the connector. Runs only after confirmation.",
+    },
+    ConnectorMeta {
+        connector: CALENDAR,
+        action: CALENDAR_GET,
+        risk: ConnectorRisk::Confirm,
+        description: "Get one calendar event by id. Runs only after confirmation.",
     },
     ConnectorMeta {
         connector: CALENDAR,
@@ -214,8 +268,8 @@ impl ConnectorRegistry {
     ///
     /// This function does not check a token, does not send, and does not list.
     /// `Ok(())` means the caller may perform the action. The confirm actions in
-    /// [`Self::phase3`] are [`EMAIL`] / [`EMAIL_SEND`], [`DRIVE`] / [`DRIVE_LIST`],
-    /// and [`CALENDAR`] / [`CALENDAR_LIST`].
+    /// [`Self::phase3`] include [`EMAIL`] send/list/search/get, [`DRIVE`]
+    /// list/search/get, and [`CALENDAR`] list/get.
     ///
     /// # Errors
     ///
@@ -260,8 +314,9 @@ fn needs_confirm(connector: &str, action: &str) -> ConnectorError {
 #[cfg(test)]
 mod tests {
     use super::{
-        CALENDAR, CALENDAR_DELETE, CALENDAR_LIST, ConnectorError, ConnectorRegistry, ConnectorRisk,
-        DRIVE, DRIVE_DELETE, DRIVE_LIST, EMAIL, EMAIL_DELETE, EMAIL_SEND,
+        CALENDAR, CALENDAR_DELETE, CALENDAR_GET, CALENDAR_LIST, ConnectorError, ConnectorRegistry,
+        ConnectorRisk, DRIVE, DRIVE_DELETE, DRIVE_GET, DRIVE_LIST, DRIVE_SEARCH, EMAIL,
+        EMAIL_DELETE, EMAIL_GET, EMAIL_LIST, EMAIL_SEARCH, EMAIL_SEND,
     };
 
     fn registry() -> ConnectorRegistry {
@@ -279,10 +334,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 (EMAIL, EMAIL_SEND, ConnectorRisk::Confirm),
+                (EMAIL, EMAIL_LIST, ConnectorRisk::Confirm),
+                (EMAIL, EMAIL_SEARCH, ConnectorRisk::Confirm),
+                (EMAIL, EMAIL_GET, ConnectorRisk::Confirm),
                 (EMAIL, EMAIL_DELETE, ConnectorRisk::Deny),
                 (DRIVE, DRIVE_LIST, ConnectorRisk::Confirm),
+                (DRIVE, DRIVE_SEARCH, ConnectorRisk::Confirm),
+                (DRIVE, DRIVE_GET, ConnectorRisk::Confirm),
                 (DRIVE, DRIVE_DELETE, ConnectorRisk::Deny),
                 (CALENDAR, CALENDAR_LIST, ConnectorRisk::Confirm),
+                (CALENDAR, CALENDAR_GET, ConnectorRisk::Confirm),
                 (CALENDAR, CALENDAR_DELETE, ConnectorRisk::Deny),
             ]
         );
@@ -300,10 +361,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "Send one email through the connector. Runs only after confirmation.",
+                "List recent inbox messages. Runs only after confirmation.",
+                "Search inbox messages. Runs only after confirmation.",
+                "Get one inbox message by id. Runs only after confirmation.",
                 "Delete email. Denied.",
                 "List Drive files through the connector. Runs only after confirmation.",
+                "Search Drive files. Runs only after confirmation.",
+                "Get Drive file metadata (optional text). Runs only after confirmation.",
                 "Delete a Drive file. Denied.",
                 "List calendar events through the connector. Runs only after confirmation.",
+                "Get one calendar event by id. Runs only after confirmation.",
                 "Delete a calendar event. Denied.",
             ]
         );
@@ -312,7 +379,7 @@ mod tests {
             .iter()
             .filter(|entry| entry.risk == ConnectorRisk::Confirm)
             .count();
-        assert_eq!(confirmations, 3);
+        assert_eq!(confirmations, 9);
         for entry in registry.entries() {
             match entry.risk {
                 ConnectorRisk::Confirm | ConnectorRisk::Deny => {

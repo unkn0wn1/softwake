@@ -12,20 +12,42 @@
 //! password lives in the provider secret bag and is only checked as a bool here.
 
 mod calendar;
+mod calendar_api;
 mod drive;
+mod drive_api;
 mod email;
 mod email_settings;
+mod inbox_api;
 mod live_email;
 mod mock;
 mod registry;
 
 pub use calendar::{CalendarConnector, CalendarEvent};
+pub use calendar_api::{
+    DEFAULT_CALENDAR_DAYS, DEFAULT_CALENDAR_MAX, LiveCalendarEvent, MAX_CALENDAR_MAX,
+    clamp_calendar_days, clamp_calendar_max, format_calendar_event, format_calendar_list,
+    google_event_get_url, google_events_url, graph_calendar_view_url, graph_event_get_url,
+    parse_google_event, parse_google_events, parse_graph_event, parse_graph_events,
+};
 pub use drive::{DriveConnector, DriveFile};
+pub use drive_api::{
+    DEFAULT_DRIVE_MAX, LiveDriveFile, MAX_DRIVE_MAX, MAX_DRIVE_TEXT_BYTES, clamp_drive_max,
+    format_drive_file, format_drive_list, google_drive_export_text_url, google_drive_get_url,
+    google_drive_list_url, google_drive_media_url, graph_approot_children_url,
+    graph_approot_search_url, graph_drive_content_url, graph_drive_item_url, is_cheap_text_mime,
+    parse_google_drive_file, parse_google_drive_list, parse_graph_drive_file,
+    parse_graph_drive_list, truncate_drive_text,
+};
 pub use email::{EmailConnector, OutboundEmail, SendReceipt};
 pub use email_settings::{
     DEFAULT_SMTP_PORT, EMAIL_FILE_NAME, EmailSettings, EmailSettingsError, FileEmailSettings,
     LiveEmailMode, MAX_EMAIL_SETTINGS_BYTES, parse_live_email_mode, resolve_email_file,
     resolve_email_file_from,
+};
+pub use inbox_api::{
+    DEFAULT_INBOX_MAX, InboxMessage, MAX_INBOX_MAX, clamp_inbox_max, format_inbox_list,
+    format_inbox_message, gmail_get_url, gmail_list_url, graph_get_url, graph_list_url,
+    parse_gmail_list, parse_gmail_message, parse_graph_list, parse_graph_message,
 };
 pub use live_email::{
     EmailBackend, LIVE_EMAIL_DISABLED, LIVE_EMAIL_NOT_CONFIGURED, LIVE_EMAIL_TEST_DRAFT_OK,
@@ -33,8 +55,9 @@ pub use live_email::{
 };
 pub use mock::{MockCalendar, MockDrive, MockEmail};
 pub use registry::{
-    CALENDAR, CALENDAR_DELETE, CALENDAR_LIST, ConnectorError, ConnectorMeta, ConnectorRegistry,
-    ConnectorRisk, DRIVE, DRIVE_DELETE, DRIVE_LIST, EMAIL, EMAIL_DELETE, EMAIL_SEND,
+    CALENDAR, CALENDAR_DELETE, CALENDAR_GET, CALENDAR_LIST, ConnectorError, ConnectorMeta,
+    ConnectorRegistry, ConnectorRisk, DRIVE, DRIVE_DELETE, DRIVE_GET, DRIVE_LIST, DRIVE_SEARCH,
+    EMAIL, EMAIL_DELETE, EMAIL_GET, EMAIL_LIST, EMAIL_SEARCH, EMAIL_SEND,
 };
 
 #[cfg(test)]

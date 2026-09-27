@@ -411,6 +411,87 @@ fn form_body(pairs: &[(&str, &str)]) -> String {
     out
 }
 
+/// Whether an account access token should be refreshed before use.
+#[must_use]
+pub fn account_needs_refresh(connection: &AccountConnection, now_ms: u64) -> bool {
+    connection.expires_at_ms == 0 || now_ms + 60_000 >= connection.expires_at_ms
+}
+
+/// Keep prior refresh token / id / email when a refresh response omits them.
+#[must_use]
+pub fn merge_account_refresh(
+    previous: &AccountConnection,
+    next: AccountConnection,
+) -> AccountConnection {
+    AccountConnection {
+        id: if next.id.is_empty() {
+            previous.id.clone()
+        } else {
+            next.id
+        },
+        access_token: next.access_token,
+        refresh_token: if next.refresh_token.is_empty() {
+            previous.refresh_token.clone()
+        } else {
+            next.refresh_token
+        },
+        expires_at_ms: next.expires_at_ms,
+        token_type: next.token_type,
+        scope: if next.scope.is_empty() {
+            previous.scope.clone()
+        } else {
+            next.scope
+        },
+        account_email: next
+            .account_email
+            .or_else(|| previous.account_email.clone()),
+    }
+}
+
+/// Refresh Google/Microsoft account access when near expiry.
+///
+/// # Errors
+///
+/// Missing publisher client id, transport failure, or token response errors.
+pub fn ensure_fresh_account(
+    provider: AccountProvider,
+    transport: &dyn Transport,
+    connection: &AccountConnection,
+    now_ms: u64,
+) -> Result<AccountConnection, String> {
+    if !account_needs_refresh(connection, now_ms) {
+        return Ok(connection.clone());
+    }
+    if connection.refresh_token.trim().is_empty() {
+        return Err("account refresh token is missing; reconnect in Settings → Email".to_owned());
+    }
+    let (token_url, client_id, client_secret, scopes) = match provider {
+        AccountProvider::Google => {
+            let id = publisher_google_client_id().ok_or_else(|| OAUTH_CLIENT_MISSING.to_owned())?;
+            let secret = publisher_google_client_secret();
+            (GOOGLE_TOKEN_URL, id, secret, GOOGLE_EMAIL_SCOPES)
+        }
+        AccountProvider::Microsoft => {
+            let id =
+                publisher_microsoft_client_id().ok_or_else(|| OAUTH_CLIENT_MISSING.to_owned())?;
+            (MICROSOFT_TOKEN_URL, id, None, MICROSOFT_EMAIL_SCOPES)
+        }
+    };
+    let body = refresh_token_body(
+        &connection.refresh_token,
+        &client_id,
+        client_secret.as_deref(),
+    );
+    let response = transport
+        .post_form(token_url, &body)
+        .map_err(transport_message)?;
+    if !(200..300).contains(&response.status) {
+        return Err("account token refresh failed".to_owned());
+    }
+    let next = parse_token_json(&response.body, now_ms, scopes)?;
+    Ok(merge_account_refresh(connection, next))
+}
+
 /// Parse a token endpoint JSON body into an [`AccountConnection`] shell (id/email filled later).
 ///
 /// # Errors

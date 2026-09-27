@@ -130,10 +130,20 @@ pub fn parse_tool_permission(value: &str) -> Result<ToolPermission, ToolsSetting
 #[must_use]
 pub fn default_permission(name: &str) -> Option<ToolPermission> {
     match name {
-        crate::ECHO_TOOL => Some(ToolPermission::AlwaysAllow),
+        crate::ECHO_TOOL
+        | crate::EMAIL_LIST_TOOL
+        | crate::CALENDAR_LIST_TOOL
+        | crate::DRIVE_LIST_TOOL
+        | crate::SKILL_LIST_TOOL => Some(ToolPermission::AlwaysAllow),
         crate::NOTIFY_TOOL
         | crate::EMAIL_SEND_TOOL
+        | crate::EMAIL_SEARCH_TOOL
+        | crate::EMAIL_GET_TOOL
+        | crate::CALENDAR_GET_TOOL
+        | crate::DRIVE_SEARCH_TOOL
+        | crate::DRIVE_GET_TOOL
         | crate::SKILL_SAVE_TOOL
+        | crate::SKILL_GET_TOOL
         | crate::SCHEDULE_TOOL => Some(ToolPermission::Ask),
         crate::SHELL_TOOL => Some(ToolPermission::Deny),
         _ => None,
@@ -210,7 +220,17 @@ impl ToolsSettings {
             crate::ECHO_TOOL,
             crate::NOTIFY_TOOL,
             crate::EMAIL_SEND_TOOL,
+            crate::EMAIL_LIST_TOOL,
+            crate::EMAIL_SEARCH_TOOL,
+            crate::EMAIL_GET_TOOL,
+            crate::CALENDAR_LIST_TOOL,
+            crate::CALENDAR_GET_TOOL,
+            crate::DRIVE_LIST_TOOL,
+            crate::DRIVE_SEARCH_TOOL,
+            crate::DRIVE_GET_TOOL,
             crate::SKILL_SAVE_TOOL,
+            crate::SKILL_LIST_TOOL,
+            crate::SKILL_GET_TOOL,
             crate::SCHEDULE_TOOL,
         ] {
             if !self.permissions.contains_key(name) {
@@ -515,7 +535,7 @@ pub fn tools_permissions_appendix(settings: &ToolsSettings, email: &EmailOauthSt
     out.push_str(&email_oauth_line(email));
     out.push('\n');
     out.push_str(
-        "Do not claim a tool is denied when this list says otherwise. When a tool is listed as always_allow or ask, Softwake advertises it as a chat function tool — call it when you need real results (email_send, skill_save, schedule/timers, notify, echo, shell). Ask-mode tools wait for HUD Approve before they run; the turn may pause with a pending confirmation. Saying `run <command>` or `shell <command>` still works as a fast path. Never invent command output; only report stdout/stderr Softwake returns from a tool result. If email_send is always_allow or ask, you have an email tool — do not claim you lack inbox/email tools. Live Gmail/Graph list APIs are not separate tools yet; use email_send for outbound.",
+        "Do not claim a tool is denied when this list says otherwise. When a tool is listed as always_allow or ask, Softwake advertises it as a chat function tool — call it when you need real results (email_list/email_search/email_get, calendar_list/calendar_get, drive_list/drive_search/drive_get, email_send, skill_list/skill_get/skill_save, schedule/timers, notify, echo, shell). Ask-mode tools wait for HUD Approve before they run; the turn may pause with a pending confirmation. Saying `run <command>` or `shell <command>` still works as a fast path. Never invent command output; only report stdout/stderr Softwake returns from a tool result. When Email OAuth is connected and inbox/calendar/drive tools are always_allow or ask, call those tools for real mailbox/calendar/Drive data — do not claim you lack them. Drive is limited to Google drive.file / Microsoft AppFolder scopes. Use email_send for outbound only.",
     );
     out
 }
@@ -546,10 +566,10 @@ fn email_oauth_line(email: &EmailOauthStatus) -> String {
         "Microsoft",
     );
     if !email.google_connected && !email.microsoft_connected {
-        return "Email OAuth: no Google or Microsoft account connected (Settings → Email). email_send still follows the permission above (draft/mock until live send is wired).".to_owned();
+        return "Email OAuth: no Google or Microsoft account connected (Settings → Email). Inbox/calendar/Drive tools need a connected account; email_send still follows its permission (draft/mock until live send is wired).".to_owned();
     }
     format!(
-        "Email OAuth: {google}; {microsoft}. Tokens stay in the secret bag. email_send follows the permission above."
+        "Email OAuth: {google}; {microsoft}. Tokens stay in the secret bag. Inbox/calendar/Drive tools and email_send follow their permissions above (Google preferred when both connected)."
     )
 }
 
@@ -602,6 +622,38 @@ mod tests {
         assert_eq!(settings.permission(ECHO_TOOL), ToolPermission::AlwaysAllow);
         assert_eq!(settings.permission(NOTIFY_TOOL), ToolPermission::Ask);
         assert_eq!(settings.permission(EMAIL_SEND_TOOL), ToolPermission::Ask);
+        assert_eq!(
+            settings.permission(crate::EMAIL_LIST_TOOL),
+            ToolPermission::AlwaysAllow
+        );
+        assert_eq!(
+            settings.permission(crate::EMAIL_SEARCH_TOOL),
+            ToolPermission::Ask
+        );
+        assert_eq!(
+            settings.permission(crate::EMAIL_GET_TOOL),
+            ToolPermission::Ask
+        );
+        assert_eq!(
+            settings.permission(crate::CALENDAR_LIST_TOOL),
+            ToolPermission::AlwaysAllow
+        );
+        assert_eq!(
+            settings.permission(crate::CALENDAR_GET_TOOL),
+            ToolPermission::Ask
+        );
+        assert_eq!(
+            settings.permission(crate::DRIVE_LIST_TOOL),
+            ToolPermission::AlwaysAllow
+        );
+        assert_eq!(
+            settings.permission(crate::DRIVE_SEARCH_TOOL),
+            ToolPermission::Ask
+        );
+        assert_eq!(
+            settings.permission(crate::DRIVE_GET_TOOL),
+            ToolPermission::Ask
+        );
         assert_eq!(settings.permission(SCHEDULE_TOOL), ToolPermission::Ask);
         assert_eq!(settings.permission(SHELL_TOOL), ToolPermission::Deny);
         assert_eq!(settings.permission("volume"), ToolPermission::Deny);
@@ -817,7 +869,7 @@ mod tests {
         let settings = ToolsSettings::default();
         let disconnected = tools_permissions_appendix(&settings, &EmailOauthStatus::default());
         assert!(disconnected.contains("Email OAuth: no Google or Microsoft account connected"));
-        assert!(disconnected.contains("you have an email tool"));
+        assert!(disconnected.contains("Inbox/calendar/Drive tools need a connected account"));
         let email = EmailOauthStatus {
             google_connected: true,
             google_email: Some("ada@example.com".to_owned()),
@@ -829,7 +881,11 @@ mod tests {
             "Email OAuth: Google connected as ada@example.com; Microsoft not connected."
         ));
         assert!(appendix.contains("- email_send: ask"));
+        assert!(appendix.contains("- email_list: always_allow"));
+        assert!(appendix.contains("- skill_list: always_allow"));
+        assert!(appendix.contains("- skill_get: ask"));
         assert!(appendix.contains("- skill_save:"));
         assert!(appendix.contains("- schedule:"));
+        assert!(appendix.contains("do not claim you lack them"));
     }
 }
