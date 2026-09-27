@@ -4,7 +4,8 @@
 //! this module owns the broader operator surface and disk helpers.
 
 use softwake_providers::{
-    FileProviderSettings, resolve_providers_file, resolve_tts_voice, tts_voice_roster,
+    FileProviderSettings, REASONING_EFFORT_MODES, normalize_reasoning_effort,
+    reasoning_effort_label, resolve_providers_file, resolve_tts_voice, tts_voice_roster,
 };
 use std::path::PathBuf;
 
@@ -31,6 +32,10 @@ pub(crate) enum SlashCommand {
     Resume,
     /// Full live-config refresh (profile soul + chat + MCP). ADR-0031.
     Refresh,
+    /// `/reasoning` or `/reasoning list`.
+    ReasoningList,
+    /// `/reasoning <mode>`.
+    ReasoningSet(String),
     /// Leading `/` with an unknown verb — show a short hint, do not chat.
     Unknown(String),
 }
@@ -89,6 +94,10 @@ pub(crate) fn parse_slash_command(text: &str) -> Option<SlashCommand> {
         ("hibernate", [], true) => Some(SlashCommand::Hibernate),
         ("resume", [], true) => Some(SlashCommand::Resume),
         ("refresh", [], _) => Some(SlashCommand::Refresh),
+        ("reasoning", [], true) | ("reasoning", ["list"], true) => {
+            Some(SlashCommand::ReasoningList)
+        }
+        ("reasoning", [mode, ..], true) => Some(SlashCommand::ReasoningSet((*mode).to_owned())),
         (_, _, true) => Some(SlashCommand::Unknown(body.to_owned())),
         _ => None,
     }
@@ -97,7 +106,7 @@ pub(crate) fn parse_slash_command(text: &str) -> Option<SlashCommand> {
 /// Help text for `/help`.
 #[must_use]
 pub(crate) fn help_text() -> String {
-    "Commands: /help /status /clear /halve|/reduce /compact /model [ai|voice <id>] /voice [list|<id>] /new /profile [<name>] /sleep /hibernate /resume /refresh"
+    "Commands: /help /status /clear /halve|/reduce /compact /model [ai|voice <id>] /voice [list|<id>] /reasoning [list|<mode>] /new /profile [<name>] /sleep /hibernate /resume /refresh"
         .to_owned()
 }
 
@@ -213,6 +222,31 @@ fn config_dir() -> Result<PathBuf, String> {
     let xdg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
     let home = std::env::var_os("HOME").map(PathBuf::from);
     resolve_config_dir(xdg.as_deref(), home.as_deref()).map_err(|e| e.to_string())
+}
+
+/// Format `/reasoning` list reply.
+pub(crate) fn format_reasoning_list() -> Result<String, String> {
+    let store = open_provider_store()?;
+    let settings = store.load().map_err(|e| e.to_string())?;
+    let current = reasoning_effort_label(&settings.reasoning_effort);
+    let modes = REASONING_EFFORT_MODES.join(", ");
+    Ok(format!(
+        "Reasoning effort: {current}. Modes: {modes} (or default to omit)."
+    ))
+}
+
+/// Set chat `reasoning_effort` (or clear with default/off/none).
+pub(crate) fn set_reasoning_effort(mode: &str) -> Result<String, String> {
+    let store = open_provider_store()?;
+    let mut settings = store.load().map_err(|e| e.to_string())?;
+    let normalized = normalize_reasoning_effort(mode)?;
+    settings.set_reasoning_effort(normalized.clone());
+    store.save(&settings).map_err(|e| e.to_string())?;
+    if normalized.is_empty() {
+        Ok("Reasoning effort cleared (provider default)".to_owned())
+    } else {
+        Ok(format!("Reasoning effort set to {normalized}"))
+    }
 }
 
 /// List profiles for `/profile`.
@@ -347,6 +381,18 @@ mod tests {
         assert_eq!(parse_slash_command("/resume"), Some(SlashCommand::Resume));
         assert_eq!(parse_slash_command("/refresh"), Some(SlashCommand::Refresh));
         assert_eq!(parse_slash_command("refresh"), Some(SlashCommand::Refresh));
+        assert_eq!(
+            parse_slash_command("/reasoning"),
+            Some(SlashCommand::ReasoningList)
+        );
+        assert_eq!(
+            parse_slash_command("/reasoning list"),
+            Some(SlashCommand::ReasoningList)
+        );
+        assert_eq!(
+            parse_slash_command("/reasoning xhigh"),
+            Some(SlashCommand::ReasoningSet("xhigh".into()))
+        );
     }
 
     #[test]

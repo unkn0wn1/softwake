@@ -138,7 +138,8 @@ pub fn default_permission(name: &str) -> Option<ToolPermission> {
         | crate::SOFTWAKE_STATUS_TOOL
         | crate::SOFTWAKE_LIST_MODELS_TOOL
         | crate::SOFTWAKE_LIST_VOICES_TOOL
-        | crate::SOFTWAKE_LIST_PROFILES_TOOL => Some(ToolPermission::AlwaysAllow),
+        | crate::SOFTWAKE_LIST_PROFILES_TOOL
+        | crate::SOFTWAKE_LIST_REASONING_TOOL => Some(ToolPermission::AlwaysAllow),
         crate::NOTIFY_TOOL
         | crate::EMAIL_SEND_TOOL
         | crate::EMAIL_SEARCH_TOOL
@@ -152,6 +153,7 @@ pub fn default_permission(name: &str) -> Option<ToolPermission> {
         | crate::SOFTWAKE_SET_MODEL_TOOL
         | crate::SOFTWAKE_SET_VOICE_TOOL
         | crate::SOFTWAKE_SET_PROFILE_TOOL
+        | crate::SOFTWAKE_SET_REASONING_TOOL
         | crate::SOFTWAKE_SLEEP_TOOL
         | crate::SOFTWAKE_HIBERNATE_TOOL
         | crate::SOFTWAKE_RESUME_TOOL
@@ -249,9 +251,11 @@ impl ToolsSettings {
             crate::SOFTWAKE_LIST_MODELS_TOOL,
             crate::SOFTWAKE_LIST_VOICES_TOOL,
             crate::SOFTWAKE_LIST_PROFILES_TOOL,
+            crate::SOFTWAKE_LIST_REASONING_TOOL,
             crate::SOFTWAKE_SET_MODEL_TOOL,
             crate::SOFTWAKE_SET_VOICE_TOOL,
             crate::SOFTWAKE_SET_PROFILE_TOOL,
+            crate::SOFTWAKE_SET_REASONING_TOOL,
             crate::SOFTWAKE_SLEEP_TOOL,
             crate::SOFTWAKE_HIBERNATE_TOOL,
             crate::SOFTWAKE_RESUME_TOOL,

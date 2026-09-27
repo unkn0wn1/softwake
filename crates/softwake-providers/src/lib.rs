@@ -18,6 +18,7 @@ mod models;
 mod oauth;
 mod pkce;
 mod probe;
+mod reasoning;
 mod registry;
 mod secrets;
 mod secrets_file;
@@ -72,6 +73,10 @@ pub use pkce::{code_challenge, code_verifier, oauth_state};
 pub use probe::{
     ProbeError, TestOutcome, apply_test_outcome, ensure_fresh_access, poll_device_code,
     resolve_bearer, run_test, start_device_code,
+};
+pub use reasoning::{
+    REASONING_EFFORT_MODES, insert_reasoning_effort, normalize_reasoning_effort,
+    reasoning_effort_label,
 };
 pub use registry::{
     ApiBaseError, CredentialKind, PROVIDER_REGISTRY, ProviderDefinition, ProviderFamily,

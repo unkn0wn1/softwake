@@ -109,6 +109,17 @@ impl ProviderHandle {
         if voice.is_empty() { None } else { Some(voice) }
     }
 
+    /// Selected chat `reasoning_effort`, if set. Empty means omit on the wire.
+    #[must_use]
+    pub fn selected_reasoning_effort(&self) -> Option<&str> {
+        let effort = self.settings.reasoning_effort.trim();
+        if effort.is_empty() {
+            None
+        } else {
+            Some(effort)
+        }
+    }
+
     /// Cached voice / STT models for the selected provider (empty until Test).
     #[must_use]
     pub fn cached_voice_models(&self) -> &[String] {

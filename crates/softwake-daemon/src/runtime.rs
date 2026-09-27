@@ -668,6 +668,8 @@ impl Runtime {
             | SlashCommand::ModelVoice(_)
             | SlashCommand::VoiceList
             | SlashCommand::VoiceSet(_)
+            | SlashCommand::ReasoningList
+            | SlashCommand::ReasoningSet(_)
             | SlashCommand::NewSession
             | SlashCommand::Refresh
             | SlashCommand::ProfileList
@@ -700,6 +702,14 @@ impl Runtime {
                 Err(err) => self.quiet_slash(err),
             },
             SlashCommand::VoiceSet(name) => match crate::slash::set_tts_voice(&name) {
+                Ok(line) => self.quiet_slash(line),
+                Err(err) => self.quiet_slash(err),
+            },
+            SlashCommand::ReasoningList => match crate::slash::format_reasoning_list() {
+                Ok(line) => self.quiet_slash(line),
+                Err(err) => self.quiet_slash(err),
+            },
+            SlashCommand::ReasoningSet(mode) => match crate::slash::set_reasoning_effort(&mode) {
                 Ok(line) => self.quiet_slash(line),
                 Err(err) => self.quiet_slash(err),
             },
@@ -738,6 +748,8 @@ impl Runtime {
         let profile = self.soul.agent_name();
         let model =
             crate::slash::format_model_list().unwrap_or_else(|_| "model unknown".to_owned());
+        let reasoning = crate::slash::format_reasoning_list()
+            .unwrap_or_else(|_| "reasoning unknown".to_owned());
         let meter = match (
             self.last_context_used,
             self.last_context_limit,
@@ -749,7 +761,7 @@ impl Runtime {
             }
             _ => "context n/a".to_owned(),
         };
-        format!("status: {state}; profile={profile}; {model}; {meter}")
+        format!("status: {state}; profile={profile}; {model}; {reasoning}; {meter}")
     }
 
     fn slash_set_profile(&mut self, name: &str) -> Outcome {
@@ -866,8 +878,10 @@ impl Runtime {
             SoftwakeCtlEffect::ListModels
             | SoftwakeCtlEffect::ListVoices
             | SoftwakeCtlEffect::ListProfiles
+            | SoftwakeCtlEffect::ListReasoning
             | SoftwakeCtlEffect::SetModel { .. }
-            | SoftwakeCtlEffect::SetVoice { .. } => {
+            | SoftwakeCtlEffect::SetVoice { .. }
+            | SoftwakeCtlEffect::SetReasoning { .. } => {
                 Err("internal: disk ctl effect not applied".to_owned())
             }
         }

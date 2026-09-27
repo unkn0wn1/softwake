@@ -118,12 +118,16 @@ pub const SOFTWAKE_LIST_MODELS_TOOL: &str = softwake_ctl::SOFTWAKE_LIST_MODELS_T
 pub const SOFTWAKE_LIST_VOICES_TOOL: &str = softwake_ctl::SOFTWAKE_LIST_VOICES_TOOL;
 /// Softwake ctl: list profiles. Default Always allow.
 pub const SOFTWAKE_LIST_PROFILES_TOOL: &str = softwake_ctl::SOFTWAKE_LIST_PROFILES_TOOL;
+/// Softwake ctl: list reasoning effort modes. Default Always allow.
+pub const SOFTWAKE_LIST_REASONING_TOOL: &str = softwake_ctl::SOFTWAKE_LIST_REASONING_TOOL;
 /// Softwake ctl: set chat or voice model. Default Ask.
 pub const SOFTWAKE_SET_MODEL_TOOL: &str = softwake_ctl::SOFTWAKE_SET_MODEL_TOOL;
 /// Softwake ctl: set TTS voice. Default Ask.
 pub const SOFTWAKE_SET_VOICE_TOOL: &str = softwake_ctl::SOFTWAKE_SET_VOICE_TOOL;
 /// Softwake ctl: switch profile. Default Ask.
 pub const SOFTWAKE_SET_PROFILE_TOOL: &str = softwake_ctl::SOFTWAKE_SET_PROFILE_TOOL;
+/// Softwake ctl: set reasoning effort. Default Ask.
+pub const SOFTWAKE_SET_REASONING_TOOL: &str = softwake_ctl::SOFTWAKE_SET_REASONING_TOOL;
 /// Softwake ctl: sleep. Default Ask.
 pub const SOFTWAKE_SLEEP_TOOL: &str = softwake_ctl::SOFTWAKE_SLEEP_TOOL;
 /// Softwake ctl: hibernate. Default Ask.
@@ -277,6 +281,11 @@ const PHASE2: &[ToolMeta] = &[
         description: "List Softwake profiles (mirrors /profile).",
     },
     ToolMeta {
+        name: SOFTWAKE_LIST_REASONING_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "List chat reasoning_effort modes (mirrors /reasoning list).",
+    },
+    ToolMeta {
         name: SOFTWAKE_SET_MODEL_TOOL,
         risk: ToolRisk::Confirm,
         description: "Set chat (ai) or voice/STT model id after confirm (mirrors /model ai|voice).",
@@ -290,6 +299,11 @@ const PHASE2: &[ToolMeta] = &[
         name: SOFTWAKE_SET_PROFILE_TOOL,
         risk: ToolRisk::Confirm,
         description: "Switch active Softwake profile after confirm (mirrors /profile <name>).",
+    },
+    ToolMeta {
+        name: SOFTWAKE_SET_REASONING_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Set chat reasoning_effort (low|medium|high|xhigh|default) after confirm (mirrors /reasoning).",
     },
     ToolMeta {
         name: SOFTWAKE_SLEEP_TOOL,
@@ -674,10 +688,11 @@ mod tests {
         ECHO_TOOL, EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL,
         EmailSendArgs, NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL,
         SKILL_SAVE_TOOL, SOFTWAKE_HIBERNATE_TOOL, SOFTWAKE_LIST_MODELS_TOOL,
-        SOFTWAKE_LIST_PROFILES_TOOL, SOFTWAKE_LIST_VOICES_TOOL, SOFTWAKE_NEW_SESSION_TOOL,
-        SOFTWAKE_REFRESH_TOOL, SOFTWAKE_RESUME_TOOL, SOFTWAKE_SET_MODEL_TOOL,
-        SOFTWAKE_SET_PROFILE_TOOL, SOFTWAKE_SET_VOICE_TOOL, SOFTWAKE_SLEEP_TOOL,
-        SOFTWAKE_STATUS_TOOL, ToolError, ToolRegistry, ToolResult, ToolRisk, parse_email_send_args,
+        SOFTWAKE_LIST_PROFILES_TOOL, SOFTWAKE_LIST_REASONING_TOOL, SOFTWAKE_LIST_VOICES_TOOL,
+        SOFTWAKE_NEW_SESSION_TOOL, SOFTWAKE_REFRESH_TOOL, SOFTWAKE_RESUME_TOOL,
+        SOFTWAKE_SET_MODEL_TOOL, SOFTWAKE_SET_PROFILE_TOOL, SOFTWAKE_SET_REASONING_TOOL,
+        SOFTWAKE_SET_VOICE_TOOL, SOFTWAKE_SLEEP_TOOL, SOFTWAKE_STATUS_TOOL, ToolError,
+        ToolRegistry, ToolResult, ToolRisk, parse_email_send_args,
     };
 
     fn registry() -> ToolRegistry {
@@ -714,9 +729,11 @@ mod tests {
                 (SOFTWAKE_LIST_MODELS_TOOL, ToolRisk::Confirm),
                 (SOFTWAKE_LIST_VOICES_TOOL, ToolRisk::Confirm),
                 (SOFTWAKE_LIST_PROFILES_TOOL, ToolRisk::Confirm),
+                (SOFTWAKE_LIST_REASONING_TOOL, ToolRisk::Confirm),
                 (SOFTWAKE_SET_MODEL_TOOL, ToolRisk::Confirm),
                 (SOFTWAKE_SET_VOICE_TOOL, ToolRisk::Confirm),
                 (SOFTWAKE_SET_PROFILE_TOOL, ToolRisk::Confirm),
+                (SOFTWAKE_SET_REASONING_TOOL, ToolRisk::Confirm),
                 (SOFTWAKE_SLEEP_TOOL, ToolRisk::Confirm),
                 (SOFTWAKE_HIBERNATE_TOOL, ToolRisk::Confirm),
                 (SOFTWAKE_RESUME_TOOL, ToolRisk::Confirm),

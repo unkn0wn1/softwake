@@ -64,6 +64,10 @@ pub struct ProviderSettings {
     /// Document version stays 1. Older files omit this field.
     #[serde(default)]
     pub selected_tts_voice: String,
+    /// Chat Completions `reasoning_effort` (`low`/`medium`/`high`/`xhigh`).
+    /// Empty means omit the field (provider default). Document version stays 1.
+    #[serde(default)]
+    pub reasoning_effort: String,
     /// Per-provider model catalogs from Test.
     #[serde(default)]
     pub model_cache: BTreeMap<String, ModelCache>,
@@ -106,6 +110,7 @@ impl Default for ProviderSettings {
             selected_model: String::new(),
             selected_voice_model: String::new(),
             selected_tts_voice: String::new(),
+            reasoning_effort: String::new(),
             model_cache: BTreeMap::new(),
             last_test: BTreeMap::new(),
             openai_compatible_base_url: String::new(),
@@ -200,6 +205,17 @@ impl ProviderSettings {
     /// Store keep-recent message count. `0` restores default on resolve.
     pub fn set_keep_recent_turns(&mut self, turns: u32) {
         self.keep_recent_turns = turns;
+    }
+
+    /// Stored reasoning effort (may be empty = omit on the wire).
+    #[must_use]
+    pub fn reasoning_effort(&self) -> &str {
+        self.reasoning_effort.trim()
+    }
+
+    /// Store a normalized reasoning effort (empty clears the override).
+    pub fn set_reasoning_effort(&mut self, effort: impl Into<String>) {
+        self.reasoning_effort = effort.into();
     }
 }
 
@@ -456,6 +472,7 @@ mod tests {
         assert!(settings.voice_models_for(ProviderId::XaiKey).is_empty());
         assert!(settings.selected_voice_model.is_empty());
         assert!(settings.selected_tts_voice.is_empty());
+        assert!(settings.reasoning_effort.is_empty());
     }
 
     #[test]
@@ -482,6 +499,7 @@ mod tests {
         };
         settings.selected_voice_model = "whisper-1".to_owned();
         settings.selected_tts_voice = "eve".to_owned();
+        settings.reasoning_effort = "high".to_owned();
         settings.store_models(
             ProviderId::Openai,
             vec!["gpt-4.1-mini".to_owned()],
@@ -501,6 +519,7 @@ mod tests {
         );
         assert_eq!(loaded.selected_voice_model, "whisper-1");
         assert_eq!(loaded.selected_tts_voice, "eve");
+        assert_eq!(loaded.reasoning_effort, "high");
         assert_eq!(loaded.context_limit_tokens, 0);
         assert_eq!(loaded.compact_at_percent, 80);
         assert_eq!(loaded.keep_recent_turns, 8);
