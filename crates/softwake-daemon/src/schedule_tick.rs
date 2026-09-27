@@ -4,8 +4,9 @@
 //! Softwake's control; catch-up grace applies when the daemon resumes.
 
 use softwake_tools::{
-    ScheduleEntry, advance_after_fire, fire_notify_line, fire_speak_line, list_profile_ids,
-    load_schedules, now_ms, resolve_schedules_file, save_schedules, should_fire, skip_missed,
+    ScheduleActionKind, ScheduleEntry, advance_after_fire, fire_notify_line, fire_speak_line,
+    list_profile_ids, load_schedules, now_ms, resolve_schedules_file, save_schedules, should_fire,
+    skip_missed,
 };
 
 use crate::runtime::Runtime;
@@ -68,7 +69,14 @@ fn tick_profile(runtime: &mut Runtime, profile_id: &str, now: u64) -> usize {
 }
 
 fn fire_one(runtime: &mut Runtime, profile_id: &str, entry: &ScheduleEntry) {
-    let notify = fire_notify_line(entry);
-    let speak = fire_speak_line(entry);
-    runtime.fire_schedule_reminder(profile_id, notify, speak);
+    match entry.action {
+        ScheduleActionKind::Notify => {
+            let notify = fire_notify_line(entry);
+            let speak = fire_speak_line(entry);
+            runtime.fire_schedule_reminder(profile_id, notify, speak);
+        }
+        ScheduleActionKind::AgentTask => {
+            runtime.fire_schedule_agent_task(profile_id, entry);
+        }
+    }
 }

@@ -11,6 +11,37 @@ pub(crate) fn propose_schedule(text: &str) -> Option<Vec<String>> {
     }
     let lower = trimmed.to_ascii_lowercase();
 
+    // "agent task daily at 07:30 …" / "run agent daily at 07:30 …"
+    for prefix in [
+        "agent task daily at ",
+        "run agent daily at ",
+        "agent task at ",
+        "run agent at ",
+    ] {
+        if let Some(rest) = strip_prefix_ci(&lower, prefix) {
+            if prefix.contains("daily") {
+                if let Some(args) = daily_from(rest, trimmed) {
+                    // daily_from returns create daily … — prepend agent_task after create
+                    return Some(vec![
+                        "create".into(),
+                        "agent_task".into(),
+                        args[1].clone(),
+                        args[2].clone(),
+                        args[3].clone(),
+                    ]);
+                }
+            } else if let Some(args) = once_or_daily_from(rest, trimmed, prefix.len()) {
+                return Some(vec![
+                    "create".into(),
+                    "agent_task".into(),
+                    args[1].clone(),
+                    args[2].clone(),
+                    args[3].clone(),
+                ]);
+            }
+        }
+    }
+
     // "remind me daily at 07:30 …"
     if let Some(rest) = strip_prefix_ci(&lower, "remind me daily at ") {
         return daily_from(rest, trimmed);
@@ -137,5 +168,15 @@ mod tests {
         let args = propose_schedule("remind me at 2026-09-27T09:00 call bank").expect("args");
         assert_eq!(args[1], "once");
         assert_eq!(args[2], "2026-09-27T09:00");
+    }
+
+    #[test]
+    fn agent_task_daily() {
+        let args = propose_schedule("agent task daily at 07:30 summarize inbox").expect("args");
+        assert_eq!(args[0], "create");
+        assert_eq!(args[1], "agent_task");
+        assert_eq!(args[2], "daily");
+        assert_eq!(args[3], "07:30");
+        assert!(args[4].contains("inbox"));
     }
 }

@@ -613,5 +613,6 @@ cargo test -p softwake-daemon --features pipewire-capture
 | [docs/ADR-0033-multi-account-oauth.md](docs/ADR-0033-multi-account-oauth.md) | Multiple Google and Microsoft Email accounts; active id; optional `account` |
 | [docs/ADR-0034-calendar-write.md](docs/ADR-0034-calendar-write.md) | Confirm-gated calendar create, update, and delete; write scopes; reconnect |
 | [docs/ADR-0035-drive-read-scope.md](docs/ADR-0035-drive-read-scope.md) | Drive read scope widen (`drive.readonly` / `Files.Read`); Graph root list/search |
-| [docs/ADR-0024-timers-cron.md](docs/ADR-0024-timers-cron.md) | Per-profile timers / cron; confirm-gated `schedule`; Settings → Timers |
+| [docs/ADR-0036-agent-task-cron.md](docs/ADR-0036-agent-task-cron.md) | Agent-task cron: scheduled prompt → bounded agent turn → deliver |
+| [docs/ADR-0024-timers-cron.md](docs/ADR-0024-timers-cron.md) | Per-profile timers / cron; confirm-gated `schedule`; Settings → Timers (see also ADR-0036 agent tasks) |
 | [docs/ADR-0029-messengers-telegram.md](docs/ADR-0029-messengers-telegram.md) | Expandable Settings nav; Messengers + Telegram; shared HUD history; dual-login TTS |

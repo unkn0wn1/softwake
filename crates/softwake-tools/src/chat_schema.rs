@@ -280,13 +280,17 @@ fn parameters_for(name: &str) -> Value {
                     "type": "string",
                     "description": "For create/edit: once, daily, or cron."
                 },
+                "fire": {
+                    "type": "string",
+                    "description": "notify (default fixed reminder) or agent_task (run prompt on fire)."
+                },
                 "when": {
                     "type": "string",
                     "description": "When expression (time, datetime, or cron)."
                 },
                 "text": {
                     "type": "string",
-                    "description": "Reminder message text."
+                    "description": "Reminder message text, or agent prompt when fire=agent_task."
                 },
                 "id": {
                     "type": "string",
@@ -640,6 +644,16 @@ fn schedule_args_from_object(obj: &serde_json::Map<String, Value>) -> Result<Vec
                 string_field(obj, "when").ok_or_else(|| "schedule create needs when".to_owned())?;
             let text =
                 string_field(obj, "text").ok_or_else(|| "schedule create needs text".to_owned())?;
+            if let Some(fire) = string_field(obj, "fire") {
+                let fire = fire.to_ascii_lowercase();
+                if fire == "agent_task" || fire == "agent" || fire == "task" {
+                    args.push("agent_task".to_owned());
+                } else if fire != "notify" && fire != "reminder" {
+                    return Err(format!(
+                        "unknown schedule fire: {fire} (want notify|agent_task)"
+                    ));
+                }
+            }
             args.push(kind);
             args.push(when);
             args.push(text);
@@ -651,6 +665,10 @@ fn schedule_args_from_object(obj: &serde_json::Map<String, Value>) -> Result<Vec
             if let Some(kind) = string_field(obj, "kind") {
                 args.push("kind".to_owned());
                 args.push(kind);
+            }
+            if let Some(fire) = string_field(obj, "fire") {
+                args.push("action".to_owned());
+                args.push(fire);
             }
             if let Some(when) = string_field(obj, "when") {
                 args.push("when".to_owned());

@@ -86,6 +86,34 @@ impl std::fmt::Display for ScheduleKind {
     }
 }
 
+/// What happens when a schedule fires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduleActionKind {
+    /// Fixed notify / TTS string (ADR-0024).
+    #[default]
+    Notify,
+    /// Run a bounded agent turn with `message` as the prompt (ADR-0036).
+    AgentTask,
+}
+
+impl ScheduleActionKind {
+    /// Stable spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Notify => "notify",
+            Self::AgentTask => "agent_task",
+        }
+    }
+}
+
+impl std::fmt::Display for ScheduleActionKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// One schedule row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScheduleEntry {
@@ -93,10 +121,13 @@ pub struct ScheduleEntry {
     pub id: String,
     /// Kind.
     pub kind: ScheduleKind,
+    /// Fire behavior (`notify` default for back-compat).
+    #[serde(default)]
+    pub action: ScheduleActionKind,
     /// Short label.
     #[serde(default)]
     pub title: String,
-    /// Spoken / notify body.
+    /// Spoken / notify body, or agent prompt when `action` is `agent_task`.
     pub message: String,
     /// Whether the scheduler may fire this row.
     #[serde(default = "default_true")]
@@ -584,8 +615,10 @@ pub fn skip_missed(entry: &mut ScheduleEntry, now_ms: u64) -> Result<(), Schedul
 pub enum ScheduleAction {
     /// Create a row.
     Create {
-        /// Kind.
+        /// Timing kind.
         kind: ScheduleKind,
+        /// Fire action (`notify` vs `agent_task`).
+        action: ScheduleActionKind,
         /// When field (`at_local` / `daily_time` / cron).
         when: String,
         /// Title/message body (rest of args).
@@ -595,8 +628,10 @@ pub enum ScheduleAction {
     Edit {
         /// Id.
         id: String,
-        /// Optional kind.
+        /// Optional timing kind.
         kind: Option<ScheduleKind>,
+        /// Optional fire action.
+        action: Option<ScheduleActionKind>,
         /// Optional when string.
         when: Option<String>,
         /// Optional text.
@@ -618,6 +653,7 @@ pub enum ScheduleAction {
 /// # Errors
 ///
 /// Bad args.
+#[allow(clippy::too_many_lines)]
 pub fn parse_schedule_args(args: &[String]) -> Result<ScheduleAction, ScheduleError> {
     let mut iter = args.iter().map(String::as_str);
     let action = iter
@@ -633,9 +669,24 @@ pub fn parse_schedule_args(args: &[String]) -> Result<ScheduleAction, ScheduleEr
             Ok(ScheduleAction::Delete { id: id.to_owned() })
         }
         "create" => {
-            let kind_raw = iter
+            let first = iter
                 .next()
                 .ok_or_else(|| ScheduleError::Invalid("schedule create needs kind".to_owned()))?;
+            let (action_kind, kind_raw) = if first.eq_ignore_ascii_case("agent_task")
+                || first.eq_ignore_ascii_case("agent")
+            {
+                let kind_raw = iter.next().ok_or_else(|| {
+                    ScheduleError::Invalid("schedule create agent_task needs kind".to_owned())
+                })?;
+                (ScheduleActionKind::AgentTask, kind_raw)
+            } else if first.eq_ignore_ascii_case("notify") {
+                let kind_raw = iter.next().ok_or_else(|| {
+                    ScheduleError::Invalid("schedule create notify needs kind".to_owned())
+                })?;
+                (ScheduleActionKind::Notify, kind_raw)
+            } else {
+                (ScheduleActionKind::Notify, first)
+            };
             let kind = parse_kind(kind_raw)?;
             let when = iter
                 .next()
@@ -649,6 +700,7 @@ pub fn parse_schedule_args(args: &[String]) -> Result<ScheduleAction, ScheduleEr
             }
             Ok(ScheduleAction::Create {
                 kind,
+                action: action_kind,
                 when,
                 text: rest.join(" "),
             })
@@ -659,6 +711,7 @@ pub fn parse_schedule_args(args: &[String]) -> Result<ScheduleAction, ScheduleEr
                 .ok_or_else(|| ScheduleError::Invalid("schedule edit needs id".to_owned()))?
                 .to_owned();
             let mut kind = None;
+            let mut action = None;
             let mut when = None;
             let mut text = None;
             let mut enabled = None;
@@ -671,6 +724,12 @@ pub fn parse_schedule_args(args: &[String]) -> Result<ScheduleAction, ScheduleEr
                             ScheduleError::Invalid("edit kind needs value".to_owned())
                         })?;
                         kind = Some(parse_kind(v)?);
+                    }
+                    "action" => {
+                        let v = iter.next().ok_or_else(|| {
+                            ScheduleError::Invalid("edit action needs value".to_owned())
+                        })?;
+                        action = Some(parse_action_kind(v)?);
                     }
                     "when" => {
                         let v = iter.next().ok_or_else(|| {
@@ -697,6 +756,7 @@ pub fn parse_schedule_args(args: &[String]) -> Result<ScheduleAction, ScheduleEr
             Ok(ScheduleAction::Edit {
                 id,
                 kind,
+                action,
                 when,
                 text,
                 enabled,
@@ -715,6 +775,16 @@ fn parse_kind(raw: &str) -> Result<ScheduleKind, ScheduleError> {
         "cron" => Ok(ScheduleKind::Cron),
         other => Err(ScheduleError::Invalid(format!(
             "unknown kind: {other} (want once|daily|cron)"
+        ))),
+    }
+}
+
+fn parse_action_kind(raw: &str) -> Result<ScheduleActionKind, ScheduleError> {
+    match raw.to_ascii_lowercase().as_str() {
+        "notify" | "reminder" => Ok(ScheduleActionKind::Notify),
+        "agent_task" | "agent" | "task" => Ok(ScheduleActionKind::AgentTask),
+        other => Err(ScheduleError::Invalid(format!(
+            "unknown action: {other} (want notify|agent_task)"
         ))),
     }
 }
@@ -750,6 +820,7 @@ fn apply_when(entry: &mut ScheduleEntry, when: &str) -> Result<(), ScheduleError
 /// # Errors
 ///
 /// Validation / not found / cap.
+#[allow(clippy::too_many_lines)]
 pub fn apply_action(
     file: &mut SchedulesFile,
     action: &ScheduleAction,
@@ -765,9 +836,10 @@ pub fn apply_action(
                 .iter()
                 .map(|e| {
                     format!(
-                        "{} {} {} enabled={} next={} | {} — {}",
+                        "{} {} action={} {} enabled={} next={} | {} — {}",
                         e.id,
                         e.kind,
+                        e.action,
                         when_label(e),
                         e.enabled,
                         e.next_fire_ms
@@ -787,13 +859,19 @@ pub fn apply_action(
             }
             Ok(format!("schedule deleted: {id}"))
         }
-        ScheduleAction::Create { kind, when, text } => {
+        ScheduleAction::Create {
+            kind,
+            action,
+            when,
+            text,
+        } => {
             if file.entries.len() >= MAX_ENTRIES {
                 return Err(ScheduleError::CapReached);
             }
             let mut entry = ScheduleEntry {
                 id: new_schedule_id(),
                 kind: *kind,
+                action: *action,
                 title: text.clone(),
                 message: text.clone(),
                 enabled: true,
@@ -809,9 +887,10 @@ pub fn apply_action(
             validate_entry(&mut entry)?;
             refresh_next_fire(&mut entry, now_ms)?;
             let detail = format!(
-                "schedule created: {} {} {} next={}",
+                "schedule created: {} {} action={} {} next={}",
                 entry.id,
                 entry.kind,
+                entry.action,
                 when_label(&entry),
                 entry
                     .next_fire_ms
@@ -823,6 +902,7 @@ pub fn apply_action(
         ScheduleAction::Edit {
             id,
             kind,
+            action,
             when,
             text,
             enabled,
@@ -834,6 +914,9 @@ pub fn apply_action(
                 .ok_or_else(|| ScheduleError::NotFound(id.clone()))?;
             if let Some(k) = kind {
                 entry.kind = *k;
+            }
+            if let Some(a) = action {
+                entry.action = *a;
             }
             if let Some(w) = when {
                 apply_when(entry, w)?;
@@ -861,7 +944,10 @@ fn when_label(entry: &ScheduleEntry) -> String {
     }
 }
 
-/// Format fire notify / speak lines.
+/// Max chars spoken for an agent-task result (TTS courtesy).
+pub const AGENT_TASK_SPEAK_MAX: usize = 400;
+
+/// Format fire notify / speak lines for fixed notify schedules.
 #[must_use]
 pub fn fire_notify_line(entry: &ScheduleEntry) -> String {
     if entry.title == entry.message {
@@ -871,10 +957,54 @@ pub fn fire_notify_line(entry: &ScheduleEntry) -> String {
     }
 }
 
-/// Spoken reminder line.
+/// Spoken reminder line for fixed notify schedules.
 #[must_use]
 pub fn fire_speak_line(entry: &ScheduleEntry) -> String {
     format!("Reminder: {}", entry.message)
+}
+
+/// Truncate text on a char boundary for TTS / short notify.
+#[must_use]
+pub fn truncate_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let mut out = text.chars().take(max.saturating_sub(1)).collect::<String>();
+    out.push('…');
+    out
+}
+
+/// Notify sink line after an agent-task fire.
+#[must_use]
+pub fn fire_agent_notify_line(title: &str, summary: &str) -> String {
+    let summary = summary.trim();
+    let title = title.trim();
+    if title.is_empty() || title == summary {
+        format!("agent-task: {summary}")
+    } else {
+        format!("agent-task: {title}: {summary}")
+    }
+}
+
+/// Spoken / Telegram body after an agent-task fire (truncated for TTS callers).
+#[must_use]
+pub fn fire_agent_speak_line(summary: &str) -> String {
+    format!(
+        "Agent task: {}",
+        truncate_chars(summary.trim(), AGENT_TASK_SPEAK_MAX)
+    )
+}
+
+/// User prompt text for a scheduled agent task (title context + message body).
+#[must_use]
+pub fn agent_task_user_prompt(entry: &ScheduleEntry) -> String {
+    let title = entry.title.trim();
+    let body = entry.message.trim();
+    if title.is_empty() || title == body {
+        format!("[scheduled agent task]\n{body}")
+    } else {
+        format!("[scheduled agent task: {title}]\n{body}")
+    }
 }
 
 #[cfg(test)]
@@ -915,6 +1045,7 @@ mod tests {
         let mut entry = ScheduleEntry {
             id: "sch-1".into(),
             kind: ScheduleKind::Daily,
+            action: ScheduleActionKind::Notify,
             title: "Standup".into(),
             message: "Standup".into(),
             enabled: true,
@@ -957,6 +1088,7 @@ mod tests {
         let mut entry = ScheduleEntry {
             id: "sch-2".into(),
             kind: ScheduleKind::Once,
+            action: ScheduleActionKind::Notify,
             title: "Past".into(),
             message: "Past".into(),
             enabled: true,
@@ -977,6 +1109,7 @@ mod tests {
         let entry = ScheduleEntry {
             id: "sch-3".into(),
             kind: ScheduleKind::Once,
+            action: ScheduleActionKind::Notify,
             title: "t".into(),
             message: "t".into(),
             enabled: true,
@@ -1004,8 +1137,14 @@ mod tests {
         ];
         let action = parse_schedule_args(&args).unwrap();
         match action {
-            ScheduleAction::Create { kind, when, text } => {
+            ScheduleAction::Create {
+                kind,
+                action,
+                when,
+                text,
+            } => {
                 assert_eq!(kind, ScheduleKind::Daily);
+                assert_eq!(action, ScheduleActionKind::Notify);
                 assert_eq!(when, "07:30");
                 assert_eq!(text, "Morning note");
             }
@@ -1018,6 +1157,7 @@ mod tests {
         let mut file = SchedulesFile::default();
         let action = ScheduleAction::Create {
             kind: ScheduleKind::Daily,
+            action: ScheduleActionKind::Notify,
             when: "08:00".into(),
             text: "Hi".into(),
         };
@@ -1026,5 +1166,95 @@ mod tests {
         assert_eq!(file.entries.len(), 1);
         let listed = apply_action(&mut file, &ScheduleAction::List, now_ms()).unwrap();
         assert!(listed.contains("Hi"));
+        assert!(listed.contains("action=notify"));
+    }
+
+    #[test]
+    fn missing_action_defaults_to_notify() {
+        let raw = r#"{
+            "version": 1,
+            "timezone": "local",
+            "entries": [{
+                "id": "sch-old",
+                "kind": "daily",
+                "title": "Old",
+                "message": "Old",
+                "enabled": true,
+                "daily_time": "07:00",
+                "created_ms": 1,
+                "updated_ms": 1
+            }]
+        }"#;
+        let file: SchedulesFile = serde_json::from_str(raw).unwrap();
+        assert_eq!(file.entries[0].action, ScheduleActionKind::Notify);
+    }
+
+    #[test]
+    fn parse_create_agent_task() {
+        let args = vec![
+            "create".into(),
+            "agent_task".into(),
+            "daily".into(),
+            "07:30".into(),
+            "Summarize".into(),
+            "inbox".into(),
+        ];
+        let action = parse_schedule_args(&args).unwrap();
+        match action {
+            ScheduleAction::Create {
+                kind,
+                action,
+                when,
+                text,
+            } => {
+                assert_eq!(kind, ScheduleKind::Daily);
+                assert_eq!(action, ScheduleActionKind::AgentTask);
+                assert_eq!(when, "07:30");
+                assert_eq!(text, "Summarize inbox");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn agent_task_lines_and_truncate() {
+        assert_eq!(
+            fire_agent_notify_line("Inbox", "hello"),
+            "agent-task: Inbox: hello"
+        );
+        assert_eq!(fire_agent_speak_line("hello"), "Agent task: hello");
+        let long = "x".repeat(500);
+        let spoken = fire_agent_speak_line(&long);
+        assert!(spoken.chars().count() <= "Agent task: ".chars().count() + AGENT_TASK_SPEAK_MAX);
+        assert!(spoken.ends_with('…'));
+    }
+
+    #[test]
+    fn round_trip_agent_task_action() {
+        let tmp = Tmp::new();
+        let mut file = SchedulesFile::default();
+        let mut entry = ScheduleEntry {
+            id: "sch-a".into(),
+            kind: ScheduleKind::Once,
+            action: ScheduleActionKind::AgentTask,
+            title: "Brief".into(),
+            message: "Check calendar".into(),
+            enabled: true,
+            at_local: Some("2099-01-01T09:00".into()),
+            daily_time: None,
+            cron: None,
+            next_fire_ms: None,
+            last_fired_ms: None,
+            created_ms: 1,
+            updated_ms: 1,
+        };
+        refresh_next_fire(&mut entry, now_ms()).unwrap();
+        file.entries.push(entry);
+        save_schedules(&tmp.path, &file).unwrap();
+        let loaded = load_schedules(&tmp.path).unwrap();
+        assert_eq!(loaded.entries[0].action, ScheduleActionKind::AgentTask);
+        let prompt = agent_task_user_prompt(&loaded.entries[0]);
+        assert!(prompt.contains("Check calendar"));
+        assert!(prompt.contains("Brief"));
     }
 }

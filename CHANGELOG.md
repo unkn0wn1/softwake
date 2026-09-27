@@ -4,6 +4,9 @@
 
 ### Added
 
+- **Agent-task cron:** schedule rows may set `action: agent_task` so a fire runs a bounded agent turn (prompt in `message`, tools under live Ask/Deny) and delivers the summary via HUD + Telegram timer fan-out / TTS. Fixed `notify` schedules unchanged. Create via Settings → Timers (Action = Agent task) or `schedule create agent_task daily 07:30 …`. See [ADR-0036](docs/ADR-0036-agent-task-cron.md).
+
+
 - **Drive read scope widen:** Connect replaces Google `drive.file` with `drive.readonly` and Microsoft `Files.ReadWrite.AppFolder` with `Files.Read`. Graph `drive_list` / `drive_search` use `/me/drive/root/children` and `/me/drive/root/search` (not App Folder). Existing `drive_get` unchanged. Token refresh does not enlarge a grant: Settings → Email → Accounts → Remove that account → Connect again unless stored `scope` already contains `drive.readonly` / `Files.Read`. No Drive create/upload in this slice. See [ADR-0035](docs/ADR-0035-drive-read-scope.md).
 
 - **Calendar write:** confirm-gated `calendar_create`, `calendar_update`, and `calendar_delete` (Ask by default) on the primary calendar through the connected Email account. Google Calendar `events` and Microsoft Graph `/me/events`. Optional `account` uses the same routing as inbox and `email_send`. Connect keeps Google `calendar.readonly` and adds `calendar.events` (not the full calendar ACL scope). Microsoft `Calendars.Read` is replaced by `Calendars.ReadWrite`. Token refresh does not enlarge a grant: Settings → Email → Accounts → Remove that account → Connect again, unless stored `scope` already contains `calendar.events` or `Calendars.ReadWrite`. See [ADR-0034](docs/ADR-0034-calendar-write.md).

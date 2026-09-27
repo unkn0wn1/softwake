@@ -40,3 +40,10 @@ gate and announce/notify paths.
   creates; Ask remains the default.
 - Reinstall daemon + UI; Spencer restarts softwaked himself so the tick thread
   starts.
+
+## Amendment (2026-09-28)
+
+Schedules may set `action: agent_task` so a fire runs a bounded agent turn and
+delivers the result (not only a fixed notify string). See
+[ADR-0036](ADR-0036-agent-task-cron.md). Default `action` remains `notify`.
+

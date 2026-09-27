@@ -104,6 +104,7 @@
 
 Linux and Windows x86_64 GitHub Releases (AppImage, tar.gz + systemd --user install, Windows setup.exe + portable): [ADR 0019](ADR-0019-multiplatform-releases.md), [releases.md](releases.md).
 - [x] Per-profile timers / cron (`schedule` tool + Settings → Timers; ADR-0024)
+- [x] Agent-task cron (`action: agent_task` prompt schedules; ADR-0036)
 
 ## Context meter + slash commands ([ADR-0027](ADR-0027-context-meter-slash.md))
 
