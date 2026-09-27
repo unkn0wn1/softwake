@@ -75,3 +75,24 @@ Process env still wins. `softwake-ui` warms the lookup once at startup. Allowed 
 Missing Softwake and MeetRec ids still surfaces
 `This build has no OAuth client configured`. Never log or paste client secrets.
 
+
+## Amendment — Gmail API + MeetRec scope delta + reconnect (2026-09-27)
+
+Softwake Google Connect already requests `gmail.readonly` and `gmail.send` in
+addition to MeetRec’s `calendar.readonly` / `drive.file` (see
+[oauth-clients.md](oauth-clients.md)). Microsoft likewise requests `Mail.Read` /
+`Mail.Send` beyond calendar / AppFolder.
+
+Publisher Google Cloud projects that reuse a MeetRec client **must enable the
+Gmail API**. Calendar and Drive APIs alone are not enough: Connect and
+calendar/Drive tools can succeed while inbox tools (`email_list` / search / get)
+return HTTP 403 with Google’s “Gmail API has not been used in project … or it is
+disabled” message. Enable Gmail API on the same project as the OAuth client,
+then retry; reconnect is unnecessary when the stored token’s `scope` already
+includes `gmail.readonly`.
+
+When Softwake **adds** mail (or other) scopes to `GOOGLE_EMAIL_SCOPES`, operators
+must **Disconnect** then **Connect** Google in Settings → Email so consent runs
+again (`prompt=consent`). Token refresh does not enlarge the grant. Settings
+copy states this; the authorize URL keeps `access_type=offline`,
+`prompt=consent`, and `include_granted_scopes=true`.

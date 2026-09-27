@@ -666,6 +666,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn google_email_scopes_include_gmail_read_and_send() {
+        assert!(GOOGLE_EMAIL_SCOPES.contains("gmail.readonly"));
+        assert!(GOOGLE_EMAIL_SCOPES.contains("gmail.send"));
+        assert!(GOOGLE_EMAIL_SCOPES.contains("calendar.readonly"));
+        assert!(GOOGLE_EMAIL_SCOPES.contains("drive.file"));
+        // Softwake mail delta vs MeetRec calendar/Drive-only Connect.
+        assert!(GOOGLE_EMAIL_SCOPES.contains("https://www.googleapis.com/auth/gmail.readonly"));
+        assert!(GOOGLE_EMAIL_SCOPES.contains("https://www.googleapis.com/auth/gmail.send"));
+    }
+
+    #[test]
     fn google_authorize_contains_pkce_and_scopes() {
         let url = google_authorize_url(
             "client",
@@ -677,11 +688,16 @@ mod tests {
         assert!(url.contains("code_challenge=challenge-1"));
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("access_type=offline"));
+        assert!(url.contains("prompt=consent"));
+        let readonly = form_encode("https://www.googleapis.com/auth/gmail.readonly");
+        let send = form_encode("https://www.googleapis.com/auth/gmail.send");
         assert!(
-            url.contains("gmail.send")
-                || url.contains("gmail%2Esend")
-                || url.contains(form_encode("https://www.googleapis.com/auth/gmail.send").as_str())
-                || url.contains("gmail")
+            url.contains(readonly.as_str()),
+            "authorize URL must request gmail.readonly"
+        );
+        assert!(
+            url.contains(send.as_str()),
+            "authorize URL must request gmail.send"
         );
     }
 
