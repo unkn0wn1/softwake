@@ -32,6 +32,11 @@
         <div id="messengers-subnav" class="nav-sub hidden" hidden>
           <ul id="messengers-sub-list" class="nav-sub-list" role="listbox" aria-label="Channels"></ul>
         </div>
+        <button type="button" class="nav" id="nav-mcp" data-pane="mcp">MCP</button>
+        <div id="mcp-subnav" class="nav-sub hidden" hidden>
+          <ul id="mcp-sub-list" class="nav-sub-list" role="listbox" aria-label="MCP servers"></ul>
+          <button type="button" class="nav-sub-action btn-compact" id="mcp-sub-new" title="Add MCP server">+ New</button>
+        </div>
         <button type="button" class="nav" id="nav-email" data-pane="email">Email</button>
         <button type="button" class="nav" id="nav-status" data-pane="status" aria-current="page">Status</button>
       </nav>
@@ -476,6 +481,75 @@
 
           <p id="messengers-status" class="meta" aria-live="polite"></p>
           <p id="messengers-error" class="error" role="alert"></p>
+        </section>
+
+        <section id="pane-mcp" class="pane glass hidden" hidden aria-labelledby="mcp-title">
+          <h2 id="mcp-title">MCP</h2>
+          <p class="meta">
+            Connect Model Context Protocol servers. Softwake advertises their tools as
+            <code>mcp_&lt;server&gt;_&lt;tool&gt;</code> when the server is enabled and not Deny.
+            Auth secrets stay in the secret bag. After edits, awake <code>/refresh</code> (or
+            <code>softwake_refresh</code>) rediscovers tools and reloads the active profile chat.
+            See ADR-0031.
+          </p>
+          <p id="mcp-storage" class="meta">Storage: …</p>
+          <div id="mcp-detail">
+            <label class="field">
+              <span>Id</span>
+              <input id="mcp-id" type="text" autocomplete="off" spellcheck="false" placeholder="filesystem" />
+            </label>
+            <label class="field">
+              <span>Label</span>
+              <input id="mcp-label" type="text" autocomplete="off" spellcheck="false" />
+            </label>
+            <label class="field row-check">
+              <input type="checkbox" id="mcp-enabled" />
+              <span>Enabled</span>
+            </label>
+            <label class="field">
+              <span>Transport</span>
+              <select id="mcp-transport">
+                <option value="stdio">stdio (command)</option>
+                <option value="url">url (stored; stdio invoke in v1)</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Command</span>
+              <input id="mcp-command" type="text" autocomplete="off" spellcheck="false" placeholder="npx" />
+            </label>
+            <label class="field">
+              <span>Args (whitespace-separated)</span>
+              <input id="mcp-args" type="text" autocomplete="off" spellcheck="false" placeholder="-y @modelcontextprotocol/server-filesystem /tmp" />
+            </label>
+            <label class="field">
+              <span>URL</span>
+              <input id="mcp-url" type="text" autocomplete="off" spellcheck="false" placeholder="https://…" />
+            </label>
+            <label class="field">
+              <span>Auth header name</span>
+              <input id="mcp-auth-header" type="text" autocomplete="off" spellcheck="false" placeholder="Authorization" />
+            </label>
+            <label class="field">
+              <span>Group permission</span>
+              <select id="mcp-permission">
+                <option value="ask">Ask</option>
+                <option value="always_allow">Always allow</option>
+                <option value="deny">Deny</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Auth secret</span>
+              <input id="mcp-secret" type="password" autocomplete="new-password" placeholder="Leave blank to keep" />
+            </label>
+            <p id="mcp-secret-status" class="meta">Secret: …</p>
+            <div class="row row-compact">
+              <button type="button" class="btn-primary btn-compact" id="mcp-save">Save</button>
+              <button type="button" class="btn-compact" id="mcp-clear-secret">Clear secret</button>
+              <button type="button" class="btn-compact" id="mcp-delete">Delete</button>
+            </div>
+          </div>
+          <p id="mcp-status" class="meta" aria-live="polite"></p>
+          <p id="mcp-error" class="error" role="alert"></p>
         </section>
 
         <section id="pane-email" class="pane glass hidden" hidden aria-labelledby="email-title">

@@ -15,10 +15,12 @@
 
 mod chat_schema;
 mod cloud_read;
+mod mcp_config;
 mod messengers;
 mod schedule;
 mod settings;
 mod shell;
+mod softwake_ctl;
 
 pub use chat_schema::{advertise_chat_tools, tool_args_from_json};
 pub use cloud_read::{
@@ -26,6 +28,11 @@ pub use cloud_read::{
     EmailListArgs, EmailSearchArgs, parse_calendar_get_args, parse_calendar_list_args,
     parse_drive_get_args, parse_drive_list_args, parse_drive_search_args, parse_email_get_args,
     parse_email_list_args, parse_email_search_args,
+};
+pub use mcp_config::{
+    MAX_MCP_BYTES, MCP_FILE_NAME, McpConfigError, McpFile, McpServerConfig, McpTransport,
+    is_mcp_tool_name, load_mcp, mcp_tool_name, parse_mcp_permission, resolve_mcp_file,
+    sanitize_mcp_id, save_mcp, split_mcp_tool_name,
 };
 pub use messengers::{
     CHANNEL_DESKTOP, CHANNEL_TELEGRAM, ChannelFlags, HUD_CHAT_INBOX_FILE_NAME, HudChatInbox,
@@ -49,6 +56,10 @@ pub use settings::{
 pub use shell::{
     DEFAULT_OUTPUT_CAP, DEFAULT_SHELL_TIMEOUT, ShellError, ShellOutput, format_shell_output,
     run_shell, run_shell_with,
+};
+pub use softwake_ctl::{
+    SOFTWAKE_CTL_TOOLS, SoftwakeCtlEffect, is_softwake_ctl, parse_softwake_ctl,
+    softwake_ctl_is_list,
 };
 
 /// Name of the safe tool. Behaviour matches phase 1.
@@ -98,6 +109,31 @@ pub const SKILL_GET_TOOL: &str = "skill_get";
 
 /// Confirm-gated schedule mutate (create/edit/delete). `list` is included and confirm-gated.
 pub const SCHEDULE_TOOL: &str = "schedule";
+
+/// Softwake ctl: `/status` mirror. Default Always allow.
+pub const SOFTWAKE_STATUS_TOOL: &str = softwake_ctl::SOFTWAKE_STATUS_TOOL;
+/// Softwake ctl: list chat/voice models. Default Always allow.
+pub const SOFTWAKE_LIST_MODELS_TOOL: &str = softwake_ctl::SOFTWAKE_LIST_MODELS_TOOL;
+/// Softwake ctl: list TTS voices. Default Always allow.
+pub const SOFTWAKE_LIST_VOICES_TOOL: &str = softwake_ctl::SOFTWAKE_LIST_VOICES_TOOL;
+/// Softwake ctl: list profiles. Default Always allow.
+pub const SOFTWAKE_LIST_PROFILES_TOOL: &str = softwake_ctl::SOFTWAKE_LIST_PROFILES_TOOL;
+/// Softwake ctl: set chat or voice model. Default Ask.
+pub const SOFTWAKE_SET_MODEL_TOOL: &str = softwake_ctl::SOFTWAKE_SET_MODEL_TOOL;
+/// Softwake ctl: set TTS voice. Default Ask.
+pub const SOFTWAKE_SET_VOICE_TOOL: &str = softwake_ctl::SOFTWAKE_SET_VOICE_TOOL;
+/// Softwake ctl: switch profile. Default Ask.
+pub const SOFTWAKE_SET_PROFILE_TOOL: &str = softwake_ctl::SOFTWAKE_SET_PROFILE_TOOL;
+/// Softwake ctl: sleep. Default Ask.
+pub const SOFTWAKE_SLEEP_TOOL: &str = softwake_ctl::SOFTWAKE_SLEEP_TOOL;
+/// Softwake ctl: hibernate. Default Ask.
+pub const SOFTWAKE_HIBERNATE_TOOL: &str = softwake_ctl::SOFTWAKE_HIBERNATE_TOOL;
+/// Softwake ctl: resume from hibernate. Default Ask.
+pub const SOFTWAKE_RESUME_TOOL: &str = softwake_ctl::SOFTWAKE_RESUME_TOOL;
+/// Softwake ctl: `/new` fresh session. Default Ask.
+pub const SOFTWAKE_NEW_SESSION_TOOL: &str = softwake_ctl::SOFTWAKE_NEW_SESSION_TOOL;
+/// Softwake ctl: full refresh (profile soul + clear session + HUD reseed + MCP). Default Ask.
+pub const SOFTWAKE_REFRESH_TOOL: &str = softwake_ctl::SOFTWAKE_REFRESH_TOOL;
 
 /// How the daemon may treat a registered tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,6 +255,66 @@ const PHASE2: &[ToolMeta] = &[
         name: SCHEDULE_TOOL,
         risk: ToolRisk::Confirm,
         description: "Timers/schedule tool: create, edit, delete, or list a per-profile timer/reminder/cron after confirm.",
+    },
+    ToolMeta {
+        name: SOFTWAKE_STATUS_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Softwake status: voice state, profile, model, context meter (mirrors /status).",
+    },
+    ToolMeta {
+        name: SOFTWAKE_LIST_MODELS_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "List configured chat and voice/STT models (mirrors /model).",
+    },
+    ToolMeta {
+        name: SOFTWAKE_LIST_VOICES_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "List TTS voices for the selected provider (mirrors /voice list).",
+    },
+    ToolMeta {
+        name: SOFTWAKE_LIST_PROFILES_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "List Softwake profiles (mirrors /profile).",
+    },
+    ToolMeta {
+        name: SOFTWAKE_SET_MODEL_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Set chat (ai) or voice/STT model id after confirm (mirrors /model ai|voice).",
+    },
+    ToolMeta {
+        name: SOFTWAKE_SET_VOICE_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Set TTS voice id after confirm (mirrors /voice <id>).",
+    },
+    ToolMeta {
+        name: SOFTWAKE_SET_PROFILE_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Switch active Softwake profile after confirm (mirrors /profile <name>).",
+    },
+    ToolMeta {
+        name: SOFTWAKE_SLEEP_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Enter sleep after confirm (mirrors /sleep).",
+    },
+    ToolMeta {
+        name: SOFTWAKE_HIBERNATE_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Enter hibernate after confirm (mirrors /hibernate).",
+    },
+    ToolMeta {
+        name: SOFTWAKE_RESUME_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Resume from hibernate to sleep after confirm (mirrors /resume).",
+    },
+    ToolMeta {
+        name: SOFTWAKE_NEW_SESSION_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Reload soul pack and open a fresh awake session after confirm (mirrors /new).",
+    },
+    ToolMeta {
+        name: SOFTWAKE_REFRESH_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Full refresh: reload active profile soul, clear model session, reseed HUD, rediscover MCP (mirrors /refresh).",
     },
 ];
 
@@ -394,6 +490,9 @@ impl ToolRegistry {
                 }
                 if name == DRIVE_GET_TOOL {
                     parse_drive_get_args(args)?;
+                }
+                if softwake_ctl::is_softwake_ctl(name) {
+                    softwake_ctl::parse_softwake_ctl(name, args)?;
                 }
                 Ok(ToolResult {
                     detail: render(name, args),
@@ -574,7 +673,11 @@ mod tests {
         CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL,
         ECHO_TOOL, EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL,
         EmailSendArgs, NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL,
-        SKILL_SAVE_TOOL, ToolError, ToolRegistry, ToolResult, ToolRisk, parse_email_send_args,
+        SKILL_SAVE_TOOL, SOFTWAKE_HIBERNATE_TOOL, SOFTWAKE_LIST_MODELS_TOOL,
+        SOFTWAKE_LIST_PROFILES_TOOL, SOFTWAKE_LIST_VOICES_TOOL, SOFTWAKE_NEW_SESSION_TOOL,
+        SOFTWAKE_REFRESH_TOOL, SOFTWAKE_RESUME_TOOL, SOFTWAKE_SET_MODEL_TOOL,
+        SOFTWAKE_SET_PROFILE_TOOL, SOFTWAKE_SET_VOICE_TOOL, SOFTWAKE_SLEEP_TOOL,
+        SOFTWAKE_STATUS_TOOL, ToolError, ToolRegistry, ToolResult, ToolRisk, parse_email_send_args,
     };
 
     fn registry() -> ToolRegistry {
@@ -607,6 +710,18 @@ mod tests {
                 (SKILL_LIST_TOOL, ToolRisk::Confirm),
                 (SKILL_GET_TOOL, ToolRisk::Confirm),
                 (SCHEDULE_TOOL, ToolRisk::Confirm),
+                (SOFTWAKE_STATUS_TOOL, ToolRisk::Confirm),
+                (SOFTWAKE_LIST_MODELS_TOOL, ToolRisk::Confirm),
+                (SOFTWAKE_LIST_VOICES_TOOL, ToolRisk::Confirm),
+                (SOFTWAKE_LIST_PROFILES_TOOL, ToolRisk::Confirm),
+                (SOFTWAKE_SET_MODEL_TOOL, ToolRisk::Confirm),
+                (SOFTWAKE_SET_VOICE_TOOL, ToolRisk::Confirm),
+                (SOFTWAKE_SET_PROFILE_TOOL, ToolRisk::Confirm),
+                (SOFTWAKE_SLEEP_TOOL, ToolRisk::Confirm),
+                (SOFTWAKE_HIBERNATE_TOOL, ToolRisk::Confirm),
+                (SOFTWAKE_RESUME_TOOL, ToolRisk::Confirm),
+                (SOFTWAKE_NEW_SESSION_TOOL, ToolRisk::Confirm),
+                (SOFTWAKE_REFRESH_TOOL, ToolRisk::Confirm),
             ]
         );
         assert_eq!(registry.risk("echo"), Some(ToolRisk::Safe));

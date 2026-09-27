@@ -406,3 +406,29 @@ commands.allow = ["hud_seed_session"]
 identifier = "allow-hud-drop-session-turns"
 description = "Best-effort drop matching model-session turns after HUD delete"
 commands.allow = ["hud_drop_session_turns"]
+
+
+[[permission]]
+identifier = "allow-mcp-snapshot"
+description = "Load MCP server Settings (mcp.json + secret bag flags)."
+commands.allow = ["mcp_snapshot"]
+
+[[permission]]
+identifier = "allow-mcp-add-server"
+description = "Add an MCP server stub in mcp.json."
+commands.allow = ["mcp_add_server"]
+
+[[permission]]
+identifier = "allow-mcp-save"
+description = "Save one MCP server row and optional auth secret."
+commands.allow = ["mcp_save"]
+
+[[permission]]
+identifier = "allow-mcp-delete"
+description = "Delete an MCP server and its secret."
+commands.allow = ["mcp_delete"]
+
+[[permission]]
+identifier = "allow-mcp-clear-secret"
+description = "Clear the auth secret for one MCP server."
+commands.allow = ["mcp_clear_secret"]

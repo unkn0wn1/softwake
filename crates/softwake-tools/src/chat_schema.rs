@@ -9,7 +9,11 @@ use crate::settings::{ToolPermission, ToolsSettings};
 use crate::{
     CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL,
     ECHO_TOOL, EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL,
-    SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL, ToolRegistry,
+    SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL,
+    SOFTWAKE_HIBERNATE_TOOL, SOFTWAKE_LIST_MODELS_TOOL, SOFTWAKE_LIST_PROFILES_TOOL,
+    SOFTWAKE_LIST_VOICES_TOOL, SOFTWAKE_NEW_SESSION_TOOL, SOFTWAKE_REFRESH_TOOL,
+    SOFTWAKE_RESUME_TOOL, SOFTWAKE_SET_MODEL_TOOL, SOFTWAKE_SET_PROFILE_TOOL,
+    SOFTWAKE_SET_VOICE_TOOL, SOFTWAKE_SLEEP_TOOL, SOFTWAKE_STATUS_TOOL, ToolRegistry,
 };
 
 /// Build the `tools` array for one chat/completions request.
@@ -215,6 +219,31 @@ fn parameters_for(name: &str) -> Value {
             },
             "required": ["action"]
         }),
+        SOFTWAKE_SET_MODEL_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "which": {
+                    "type": "string",
+                    "description": "ai for chat model, or voice for STT/voice model."
+                },
+                "id": { "type": "string", "description": "Model id from softwake_list_models / Test catalog." }
+            },
+            "required": ["which", "id"]
+        }),
+        SOFTWAKE_SET_VOICE_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "TTS voice id from softwake_list_voices." }
+            },
+            "required": ["id"]
+        }),
+        SOFTWAKE_SET_PROFILE_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string", "description": "Profile name or id." }
+            },
+            "required": ["name"]
+        }),
         _ => json!({"type": "object", "properties": {}}),
     }
 }
@@ -325,7 +354,16 @@ pub fn tool_args_from_json(name: &str, arguments: &str) -> Result<Vec<String>, S
             }
             Ok(args)
         }
-        SKILL_LIST_TOOL => Ok(Vec::new()),
+        SKILL_LIST_TOOL
+        | SOFTWAKE_STATUS_TOOL
+        | SOFTWAKE_LIST_MODELS_TOOL
+        | SOFTWAKE_LIST_VOICES_TOOL
+        | SOFTWAKE_LIST_PROFILES_TOOL
+        | SOFTWAKE_SLEEP_TOOL
+        | SOFTWAKE_HIBERNATE_TOOL
+        | SOFTWAKE_RESUME_TOOL
+        | SOFTWAKE_NEW_SESSION_TOOL
+        | SOFTWAKE_REFRESH_TOOL => Ok(Vec::new()),
         SKILL_GET_TOOL => {
             let id = string_field(obj, "id").ok_or_else(|| "skill_get needs id".to_owned())?;
             Ok(vec![id])
@@ -342,6 +380,36 @@ pub fn tool_args_from_json(name: &str, arguments: &str) -> Result<Vec<String>, S
             Ok(vec![title, procedure, pitfalls, verify])
         }
         SCHEDULE_TOOL => schedule_args_from_object(obj),
+        SOFTWAKE_SET_MODEL_TOOL => {
+            let which = string_field(obj, "which")
+                .ok_or_else(|| "softwake_set_model needs which (ai|voice)".to_owned())?
+                .to_ascii_lowercase();
+            if which != "ai" && which != "voice" {
+                return Err("softwake_set_model which must be ai or voice".to_owned());
+            }
+            let id =
+                string_field(obj, "id").ok_or_else(|| "softwake_set_model needs id".to_owned())?;
+            if id.trim().is_empty() {
+                return Err("softwake_set_model needs id".to_owned());
+            }
+            Ok(vec![which, id])
+        }
+        SOFTWAKE_SET_VOICE_TOOL => {
+            let id =
+                string_field(obj, "id").ok_or_else(|| "softwake_set_voice needs id".to_owned())?;
+            if id.trim().is_empty() {
+                return Err("softwake_set_voice needs id".to_owned());
+            }
+            Ok(vec![id])
+        }
+        SOFTWAKE_SET_PROFILE_TOOL => {
+            let name = string_field(obj, "name")
+                .ok_or_else(|| "softwake_set_profile needs name".to_owned())?;
+            if name.trim().is_empty() {
+                return Err("softwake_set_profile needs name".to_owned());
+            }
+            Ok(vec![name])
+        }
         other => Err(format!("unknown tool for API args: {other}")),
     }
 }

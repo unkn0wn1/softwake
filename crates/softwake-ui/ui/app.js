@@ -10,7 +10,7 @@ const confirmBtn = document.querySelector("#confirm");
 const cancelBtn = document.querySelector("#cancel");
 const navStatus = document.querySelector("#nav-status");
 
-const panes = ["general", "profiles", "providers", "tools", "timers", "skills", "messengers", "email", "status"];
+const panes = ["general", "profiles", "providers", "tools", "timers", "skills", "messengers", "mcp", "email", "status"];
 
 const providerSelect = document.querySelector("#provider-select");
 const keyPanel = document.querySelector("#key-panel");
@@ -1923,6 +1923,145 @@ if (skillsSubNew && skillsNewBtn) {
 }
 
 
+
+/* ---- MCP ---- */
+const mcpSubnav = document.querySelector("#mcp-subnav");
+const mcpStorage = document.querySelector("#mcp-storage");
+const mcpStatus = document.querySelector("#mcp-status");
+const mcpError = document.querySelector("#mcp-error");
+const mcpId = document.querySelector("#mcp-id");
+const mcpLabel = document.querySelector("#mcp-label");
+const mcpEnabled = document.querySelector("#mcp-enabled");
+const mcpTransport = document.querySelector("#mcp-transport");
+const mcpCommand = document.querySelector("#mcp-command");
+const mcpArgs = document.querySelector("#mcp-args");
+const mcpUrl = document.querySelector("#mcp-url");
+const mcpAuthHeader = document.querySelector("#mcp-auth-header");
+const mcpPermission = document.querySelector("#mcp-permission");
+const mcpSecret = document.querySelector("#mcp-secret");
+const mcpSecretStatus = document.querySelector("#mcp-secret-status");
+const mcpSave = document.querySelector("#mcp-save");
+const mcpClearSecret = document.querySelector("#mcp-clear-secret");
+const mcpDelete = document.querySelector("#mcp-delete");
+const mcpSubNew = document.querySelector("#mcp-sub-new");
+let mcpSnap = null;
+
+function showMcpError(error) {
+  if (!mcpError) return;
+  mcpError.textContent =
+    typeof error === "string" ? error : error && error.message ? error.message : "request failed";
+}
+
+function applyMcpSnapshot(snap, statusText) {
+  mcpSnap = snap;
+  if (mcpError) mcpError.textContent = "";
+  if (mcpStatus) mcpStatus.textContent = statusText || "";
+  if (mcpStorage) {
+    mcpStorage.textContent =
+      "Storage: " + (snap.storageBackend || "—") + (snap.storageMessage ? " — " + snap.storageMessage : "");
+  }
+  if (mcpId) mcpId.value = snap.id || "";
+  if (mcpLabel) mcpLabel.value = snap.label || "";
+  if (mcpEnabled) mcpEnabled.checked = !!snap.enabled;
+  if (mcpTransport) mcpTransport.value = snap.transport || "stdio";
+  if (mcpCommand) mcpCommand.value = snap.command || "";
+  if (mcpArgs) mcpArgs.value = snap.argsText || "";
+  if (mcpUrl) mcpUrl.value = snap.url || "";
+  if (mcpAuthHeader) mcpAuthHeader.value = snap.authHeaderName || "Authorization";
+  if (mcpPermission) mcpPermission.value = snap.permission || "ask";
+  if (mcpSecret) mcpSecret.value = "";
+  if (mcpSecretStatus) {
+    mcpSecretStatus.textContent = snap.hasSecret ? "Secret: saved" : "Secret: not set";
+  }
+  renderMcpSubnav(snap);
+}
+
+function renderMcpSubnav(snap) {
+  const list = document.querySelector("#mcp-sub-list");
+  if (!list) return;
+  list.innerHTML = "";
+  for (const row of snap.servers || []) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "profile-chip";
+    btn.setAttribute("role", "option");
+    btn.setAttribute("aria-selected", row.id === (snap.selectedId || "") ? "true" : "false");
+    const title = document.createElement("span");
+    title.className = "profile-chip-label";
+    title.textContent = (row.label || row.id) + (row.enabled ? "" : " · off");
+    btn.appendChild(title);
+    btn.addEventListener("click", () => refreshMcp(row.id));
+    li.appendChild(btn);
+    list.appendChild(li);
+  }
+}
+
+async function refreshMcp(selectedId) {
+  try {
+    const args = {};
+    if (selectedId) args.selectedId = selectedId;
+    applyMcpSnapshot(await invoke("mcp_snapshot", args), "");
+  } catch (error) {
+    showMcpError(error);
+  }
+}
+
+async function saveMcp() {
+  try {
+    const args = {
+      id: mcpId ? mcpId.value : "",
+      label: mcpLabel ? mcpLabel.value : "",
+      enabled: mcpEnabled ? !!mcpEnabled.checked : false,
+      transport: mcpTransport ? mcpTransport.value : "stdio",
+      command: mcpCommand ? mcpCommand.value : "",
+      argsText: mcpArgs ? mcpArgs.value : "",
+      url: mcpUrl ? mcpUrl.value : "",
+      authHeaderName: mcpAuthHeader ? mcpAuthHeader.value : "Authorization",
+      permission: mcpPermission ? mcpPermission.value : "ask",
+      secret: mcpSecret && mcpSecret.value ? mcpSecret.value : null,
+      clearSecret: false,
+    };
+    applyMcpSnapshot(await invoke("mcp_save", { args }), "Saved. Awake /refresh to rediscover tools.");
+  } catch (error) {
+    showMcpError(error);
+  }
+}
+
+if (mcpSave) mcpSave.addEventListener("click", () => saveMcp());
+if (mcpClearSecret) {
+  mcpClearSecret.addEventListener("click", async () => {
+    try {
+      applyMcpSnapshot(
+        await invoke("mcp_clear_secret", { serverId: mcpSnap ? mcpSnap.id : "" }),
+        "Secret cleared."
+      );
+    } catch (error) {
+      showMcpError(error);
+    }
+  });
+}
+if (mcpDelete) {
+  mcpDelete.addEventListener("click", async () => {
+    if (!mcpSnap || !mcpSnap.id) return;
+    try {
+      applyMcpSnapshot(await invoke("mcp_delete", { serverId: mcpSnap.id }), "Deleted.");
+    } catch (error) {
+      showMcpError(error);
+    }
+  });
+}
+if (mcpSubNew) {
+  mcpSubNew.addEventListener("click", async () => {
+    try {
+      applyMcpSnapshot(await invoke("mcp_add_server"), "Added.");
+    } catch (error) {
+      showMcpError(error);
+    }
+  });
+}
+
+
 function showPane(name) {
   for (const pane of panes) {
     const section = document.querySelector(`#pane-${pane}`);
@@ -1942,6 +2081,7 @@ function showPane(name) {
   setSubnavVisible(timersSubnav, name === "timers");
   setSubnavVisible(skillsSubnav, name === "skills");
   setSubnavVisible(messengersSubnav, name === "messengers");
+  setSubnavVisible(mcpSubnav, name === "mcp");
   if (name === "profiles") {
     if (!profilesLoaded) {
       loadProfiles(selectedProfileId);
@@ -1963,6 +2103,9 @@ function showPane(name) {
   }
   if (name === "messengers") {
     refreshMessengers(null, messengersChannel || "telegram");
+  }
+  if (name === "mcp") {
+    refreshMcp(mcpSnap ? mcpSnap.selectedId : null);
   }
 
 }

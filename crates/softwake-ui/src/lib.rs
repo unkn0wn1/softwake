@@ -13,6 +13,7 @@ mod ensure_daemon;
 mod hud_chat;
 mod hud_pos;
 mod kws_prefs;
+mod mcp;
 mod messengers;
 mod oauth_open;
 mod pack;
@@ -89,6 +90,11 @@ pub fn run() {
             messengers::messengers_snapshot,
             messengers::messengers_save,
             messengers::messengers_clear_token,
+            mcp::mcp_snapshot,
+            mcp::mcp_add_server,
+            mcp::mcp_save,
+            mcp::mcp_delete,
+            mcp::mcp_clear_secret,
             email::email_snapshot,
             email::email_save,
             email::email_clear_password,
@@ -480,6 +486,11 @@ mod tests {
         "messengers_snapshot",
         "messengers_save",
         "messengers_clear_token",
+        "mcp_snapshot",
+        "mcp_add_server",
+        "mcp_save",
+        "mcp_delete",
+        "mcp_clear_secret",
         "email_snapshot",
         "email_save",
         "email_clear_password",

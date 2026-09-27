@@ -29,6 +29,7 @@ const SECRET_KEYS: &[&str] = &[
     "xai_oauth",
     "google_connections",
     "microsoft_connections",
+    "mcp_secrets",
 ];
 
 /// Parsed secrets file.
@@ -260,6 +261,7 @@ pub(crate) fn write_plaintext(path: &Path, bag: &SecretBag) -> Result<(), Secret
         xai_oauth: bag.xai_oauth.clone(),
         google_connections: bag.google_connections.clone(),
         microsoft_connections: bag.microsoft_connections.clone(),
+        mcp_secrets: bag.mcp_secrets.clone(),
     };
     let body = serde_json::to_vec_pretty(&document).map_err(|_| SecretStoreError::Invalid {
         path: path.to_owned(),
@@ -312,6 +314,8 @@ struct PlaintextFile {
     google_connections: Vec<AccountConnection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     microsoft_connections: Vec<AccountConnection>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    mcp_secrets: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]
