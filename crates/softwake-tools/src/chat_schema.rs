@@ -7,8 +7,9 @@ use serde_json::{Value, json};
 
 use crate::settings::{ToolPermission, ToolsSettings};
 use crate::{
-    ECHO_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_SAVE_TOOL,
-    ToolRegistry,
+    CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL,
+    ECHO_TOOL, EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL,
+    SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL, ToolRegistry,
 };
 
 /// Build the `tools` array for one chat/completions request.
@@ -36,6 +37,7 @@ fn function_tool(name: &str, description: &str, parameters: &Value) -> Value {
     })
 }
 
+#[allow(clippy::too_many_lines)]
 fn parameters_for(name: &str) -> Value {
     match name {
         SHELL_TOOL => json!({
@@ -75,6 +77,103 @@ fn parameters_for(name: &str) -> Value {
                 "body": { "type": "string", "description": "Body text." }
             },
             "required": ["to", "subject", "body"]
+        }),
+        EMAIL_LIST_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "max_results": {
+                    "type": "integer",
+                    "description": "Max messages to return (default 10, max 50)."
+                }
+            }
+        }),
+        EMAIL_SEARCH_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Gmail search query (e.g. from:ada newer_than:7d) or Graph search text."
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Max messages (default 10, max 50)."
+                }
+            },
+            "required": ["query"]
+        }),
+        EMAIL_GET_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "Message id from email_list or email_search." }
+            },
+            "required": ["id"]
+        }),
+        CALENDAR_LIST_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "Upcoming window in days (default 7, max 90)."
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Max events (default 20, max 50)."
+                }
+            }
+        }),
+        CALENDAR_GET_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "Event id from calendar_list." }
+            },
+            "required": ["id"]
+        }),
+        DRIVE_LIST_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "max_results": {
+                    "type": "integer",
+                    "description": "Max files (default 20, max 50). Scope-limited to drive.file / AppFolder."
+                }
+            }
+        }),
+        DRIVE_SEARCH_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "description": "File name or Drive query fragment." },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Max files (default 20, max 50)."
+                }
+            },
+            "required": ["query"]
+        }),
+        DRIVE_GET_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "File id from drive_list or drive_search." },
+                "read_text": {
+                    "type": "boolean",
+                    "description": "When true, include cheap text body for text/* or Google Docs."
+                }
+            },
+            "required": ["id"]
+        }),
+        SKILL_LIST_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "_": {
+                    "type": "string",
+                    "description": "Unused. skill_list takes no arguments."
+                }
+            }
+        }),
+        SKILL_GET_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "Skill id from skill_list." }
+            },
+            "required": ["id"]
         }),
         SKILL_SAVE_TOOL => json!({
             "type": "object",
@@ -126,6 +225,7 @@ fn parameters_for(name: &str) -> Value {
 ///
 /// Returns a short operator sentence when JSON is not an object or required
 /// fields are missing. Does not run the tool.
+#[allow(clippy::too_many_lines)]
 pub fn tool_args_from_json(name: &str, arguments: &str) -> Result<Vec<String>, String> {
     let trimmed = arguments.trim();
     let value: Value = if trimmed.is_empty() {
@@ -171,6 +271,65 @@ pub fn tool_args_from_json(name: &str, arguments: &str) -> Result<Vec<String>, S
                 string_field(obj, "body").ok_or_else(|| "email_send needs body".to_owned())?;
             Ok(vec![to, subject, body])
         }
+        EMAIL_LIST_TOOL | DRIVE_LIST_TOOL => {
+            let mut args = Vec::new();
+            if let Some(max) = int_field(obj, "max_results") {
+                args.push(max);
+            }
+            Ok(args)
+        }
+        EMAIL_SEARCH_TOOL => {
+            let query =
+                string_field(obj, "query").ok_or_else(|| "email_search needs query".to_owned())?;
+            let mut args = vec![query];
+            if let Some(max) = int_field(obj, "max_results") {
+                args.push(max);
+            }
+            Ok(args)
+        }
+        EMAIL_GET_TOOL => {
+            let id = string_field(obj, "id").ok_or_else(|| "email_get needs id".to_owned())?;
+            Ok(vec![id])
+        }
+        CALENDAR_LIST_TOOL => {
+            let mut args = Vec::new();
+            if let Some(days) = int_field(obj, "days") {
+                args.push(days);
+                if let Some(max) = int_field(obj, "max_results") {
+                    args.push(max);
+                }
+            } else if let Some(max) = int_field(obj, "max_results") {
+                args.push("7".to_owned());
+                args.push(max);
+            }
+            Ok(args)
+        }
+        CALENDAR_GET_TOOL => {
+            let id = string_field(obj, "id").ok_or_else(|| "calendar_get needs id".to_owned())?;
+            Ok(vec![id])
+        }
+        DRIVE_SEARCH_TOOL => {
+            let query =
+                string_field(obj, "query").ok_or_else(|| "drive_search needs query".to_owned())?;
+            let mut args = vec![query];
+            if let Some(max) = int_field(obj, "max_results") {
+                args.push(max);
+            }
+            Ok(args)
+        }
+        DRIVE_GET_TOOL => {
+            let id = string_field(obj, "id").ok_or_else(|| "drive_get needs id".to_owned())?;
+            let mut args = vec![id];
+            if obj.get("read_text").and_then(Value::as_bool) == Some(true) {
+                args.push("text".to_owned());
+            }
+            Ok(args)
+        }
+        SKILL_LIST_TOOL => Ok(Vec::new()),
+        SKILL_GET_TOOL => {
+            let id = string_field(obj, "id").ok_or_else(|| "skill_get needs id".to_owned())?;
+            Ok(vec![id])
+        }
         SKILL_SAVE_TOOL => {
             let title =
                 string_field(obj, "title").ok_or_else(|| "skill_save needs title".to_owned())?;
@@ -192,6 +351,21 @@ fn string_field(obj: &serde_json::Map<String, Value>, key: &str) -> Option<Strin
         Value::String(text) => Some(text.clone()),
         Value::Number(number) => Some(number.to_string()),
         Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    })
+}
+
+fn int_field(obj: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
+    obj.get(key).and_then(|value| match value {
+        Value::Number(number) => number.as_u64().map(|n| n.to_string()),
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.parse::<u32>().is_ok() {
+                Some(trimmed.to_owned())
+            } else {
+                None
+            }
+        }
         _ => None,
     })
 }

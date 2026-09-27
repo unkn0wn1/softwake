@@ -4,6 +4,11 @@
 
 ### Added
 
+### Added
+
+- Inbox / calendar / Drive read tools over Email OAuth (Google preferred, else Microsoft Graph): `email_list`, `email_search`, `email_get`, `calendar_list`, `calendar_get`, `drive_list`, `drive_search`, `drive_get`. Defaults: list Always allow; search/get Ask. Live HTTPS under daemon `live-http`. Scope-honest: Google `drive.file` / Microsoft AppFolder only for Drive. See [ADR-0030](docs/ADR-0030-inbox-calendar-drive-tools.md).
+- Skill read tools: `skill_list` (Always allow) and `skill_get` (Ask) so agents can see existing skills, not only `skill_save`. Advertised via OpenAI tools + live permissions appendix when not Deny.
+
 - Settings left-nav **expandable sublists** for Timers and Skills (same chip pattern as Profiles). New **Messengers** pane with Telegram as the first channel. Per-profile `messengers.json` holds Default / Receive all / Voice flags for desktop HUD and Telegram; bot token lives in the secret bag. softwaked long-polls Telegram (`live-http`), shares `hud-chat.json` history with the HUD, fans timer fires to Receive-all + Default, and sends TTS audio when Voice is on. Dual-login TTS rules in [ADR-0029](docs/ADR-0029-messengers-telegram.md). PROTOCOL stays 1.
 
 - Expanded awake slash commands: `/help`, `/status`, `/model` (`ai`/`voice`), `/voice`, `/new`, `/profile`, `/sleep`, `/hibernate`, `/resume` (plus clear-typed aliases where natural). Keeps `/clear` `/halve|/reduce` `/compact`. See [ADR 0028](docs/ADR-0028-slash-hud-self-sleep.md).

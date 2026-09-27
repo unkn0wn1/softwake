@@ -31,17 +31,27 @@ use softwake_connectors::{
 use softwake_policy::{
     PolicyDecision, PolicyEngine, Subject, effective_tool_decision, permits_confirmed_connector,
 };
-use softwake_skills::{Skill, SkillSource, resolve_skills_dir, save_skill};
+use softwake_skills::{
+    Skill, SkillSource, list_skills, load_skill, resolve_skills_dir, save_skill,
+};
 use softwake_soul::Glossary;
 use softwake_state::{Machine, StateError, VoiceState};
 use softwake_tools::{
-    EMAIL_SEND_TOOL, FileToolsSettings, NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_SAVE_TOOL,
+    CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL,
+    EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, FileToolsSettings,
+    NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL,
     ScheduleAction, ToolError, ToolPermission, ToolRegistry, ToolResult, ToolRisk, ToolsSettings,
-    apply_action, format_shell_output, load_schedules, now_ms, parse_email_send_args,
-    parse_schedule_args, parse_skill_save_args, resolve_active_schedules_file, resolve_tools_file,
-    run_shell, save_schedules,
+    apply_action, format_shell_output, load_schedules, now_ms, parse_calendar_get_args,
+    parse_calendar_list_args, parse_drive_get_args, parse_drive_list_args, parse_drive_search_args,
+    parse_email_get_args, parse_email_list_args, parse_email_search_args, parse_email_send_args,
+    parse_schedule_args, parse_skill_get_args, parse_skill_list_args, parse_skill_save_args,
+    resolve_active_schedules_file, resolve_tools_file, run_shell, save_schedules,
 };
 
+use crate::cloud_tools::{
+    connector_action_for, run_calendar_get, run_calendar_list, run_drive_get, run_drive_list,
+    run_drive_search, run_email_get, run_email_list, run_email_search,
+};
 use crate::email_tool::{commit_detail, commit_email_send};
 
 /// How many tool-log entries the runtime keeps.
@@ -643,6 +653,9 @@ impl Hands {
                 return Err(self.fail_tool(error));
             }
         }
+        if let Err(error) = validate_cloud_tool_args(name, args) {
+            return Err(self.fail_tool(error));
+        }
         let description = self
             .registry
             .lookup(name)
@@ -794,8 +807,17 @@ impl Hands {
         if name == SKILL_SAVE_TOOL {
             return self.save_skill_row(args);
         }
+        if name == SKILL_LIST_TOOL {
+            return self.list_skills_row(args);
+        }
+        if name == SKILL_GET_TOOL {
+            return self.get_skill_row(args);
+        }
         if name == SCHEDULE_TOOL {
             return self.apply_schedule_row(args);
+        }
+        if connector_action_for(name).is_some() {
+            return self.execute_cloud_read(name, args);
         }
         let detail = match self.registry.invoke_confirmed(name, args) {
             Ok(ToolResult { detail }) => detail,
@@ -804,6 +826,52 @@ impl Hands {
         if name == NOTIFY_TOOL {
             self.push_notification(detail.clone());
         }
+        Ok(detail)
+    }
+
+    /// Confirm-gated inbox / calendar / Drive read via Email OAuth.
+    fn execute_cloud_read(&mut self, name: &str, args: &[String]) -> Result<String, DispatchError> {
+        if let Err(error) = self.registry.invoke_confirmed(name, args) {
+            return Err(self.fail_tool(error));
+        }
+        let Some((connector, action)) = connector_action_for(name) else {
+            return Err(self.unknown_tool(name));
+        };
+        let decision = self
+            .policy
+            .evaluate(&Subject::Connector { connector, action });
+        if !permits_confirmed_connector(decision) {
+            let denied = format!("connector action denied: {connector}/{action}");
+            self.record(
+                name,
+                Some(ToolRisk::Confirm),
+                ToolOutcome::Unknown,
+                Some(denied.clone()),
+            );
+            return Err(DispatchError::Connector { message: denied });
+        }
+        if let Err(error) = self.connectors.authorize_confirmed(connector, action) {
+            let message = error.to_string();
+            self.record(
+                name,
+                Some(ToolRisk::Confirm),
+                ToolOutcome::Unknown,
+                Some(message.clone()),
+            );
+            return Err(DispatchError::Connector { message });
+        }
+        let detail = match run_cloud_tool(name, args) {
+            Ok(detail) => detail,
+            Err(message) => {
+                self.record(
+                    name,
+                    Some(ToolRisk::Confirm),
+                    ToolOutcome::Unknown,
+                    Some(message.clone()),
+                );
+                return Err(DispatchError::Connector { message });
+            }
+        };
         Ok(detail)
     }
 
@@ -873,6 +941,93 @@ impl Hands {
             }
         }
         Ok(detail)
+    }
+
+    /// List skills from the XDG data skills dir.
+    fn list_skills_row(&mut self, args: &[String]) -> Result<String, DispatchError> {
+        if let Err(error) = parse_skill_list_args(args) {
+            return Err(self.fail_tool(error));
+        }
+        if let Err(error) = self.registry.invoke_confirmed(SKILL_LIST_TOOL, args) {
+            return Err(self.fail_tool(error));
+        }
+        let dir = match resolve_skills_dir() {
+            Ok(dir) => dir,
+            Err(error) => {
+                let message = error.to_string();
+                self.record(
+                    SKILL_LIST_TOOL,
+                    Some(ToolRisk::Confirm),
+                    ToolOutcome::Unknown,
+                    Some(message.clone()),
+                );
+                return Err(DispatchError::Connector { message });
+            }
+        };
+        let skills = match list_skills(&dir) {
+            Ok(skills) => skills,
+            Err(error) => {
+                let message = error.to_string();
+                self.record(
+                    SKILL_LIST_TOOL,
+                    Some(ToolRisk::Confirm),
+                    ToolOutcome::Unknown,
+                    Some(message.clone()),
+                );
+                return Err(DispatchError::Connector { message });
+            }
+        };
+        if skills.is_empty() {
+            return Ok("skills: (none saved yet)".to_owned());
+        }
+        let mut lines = vec![format!("skills: {} saved", skills.len())];
+        for skill in skills {
+            lines.push(format!(
+                "- id={} title={} source={}",
+                skill.id, skill.title, skill.source
+            ));
+        }
+        Ok(lines.join("\n"))
+    }
+
+    /// Load one skill by id.
+    fn get_skill_row(&mut self, args: &[String]) -> Result<String, DispatchError> {
+        let parsed = match parse_skill_get_args(args) {
+            Ok(parsed) => parsed,
+            Err(error) => return Err(self.fail_tool(error)),
+        };
+        if let Err(error) = self.registry.invoke_confirmed(SKILL_GET_TOOL, args) {
+            return Err(self.fail_tool(error));
+        }
+        let dir = match resolve_skills_dir() {
+            Ok(dir) => dir,
+            Err(error) => {
+                let message = error.to_string();
+                self.record(
+                    SKILL_GET_TOOL,
+                    Some(ToolRisk::Confirm),
+                    ToolOutcome::Unknown,
+                    Some(message.clone()),
+                );
+                return Err(DispatchError::Connector { message });
+            }
+        };
+        match load_skill(&dir, &parsed.id) {
+            Ok(skill) => Ok(format!(
+                "skill id={}\ntitle={}\nsource={}\n\n## Procedure\n{}\n\n## Pitfalls\n{}\n\n## Verify\n{}",
+                skill.id, skill.title, skill.source, skill.procedure, skill.pitfalls, skill.verify
+            )),
+            Err(error) => {
+                let message = error.to_string();
+                self.record(
+                    SKILL_GET_TOOL,
+                    Some(ToolRisk::Confirm),
+                    ToolOutcome::Unknown,
+                    Some(message.clone()),
+                );
+                Err(DispatchError::Connector { message })
+            }
+        }
     }
 
     /// Persist a confirm-gated `skill_save` to the XDG data skills dir.
@@ -1083,6 +1238,60 @@ fn forbidden_state(machine: &Machine) -> Option<VoiceState> {
         Ok(()) => None,
         Err(StateError::ToolsForbidden { state }) => Some(state),
         Err(_) => Some(machine.state()),
+    }
+}
+
+fn validate_cloud_tool_args(name: &str, args: &[String]) -> Result<(), ToolError> {
+    match name {
+        SKILL_LIST_TOOL => parse_skill_list_args(args),
+        SKILL_GET_TOOL => parse_skill_get_args(args).map(|_| ()),
+        EMAIL_LIST_TOOL => parse_email_list_args(args).map(|_| ()),
+        EMAIL_SEARCH_TOOL => parse_email_search_args(args).map(|_| ()),
+        EMAIL_GET_TOOL => parse_email_get_args(args).map(|_| ()),
+        CALENDAR_LIST_TOOL => parse_calendar_list_args(args).map(|_| ()),
+        CALENDAR_GET_TOOL => parse_calendar_get_args(args).map(|_| ()),
+        DRIVE_LIST_TOOL => parse_drive_list_args(args).map(|_| ()),
+        DRIVE_SEARCH_TOOL => parse_drive_search_args(args).map(|_| ()),
+        DRIVE_GET_TOOL => parse_drive_get_args(args).map(|_| ()),
+        _ => Ok(()),
+    }
+}
+
+fn run_cloud_tool(name: &str, args: &[String]) -> Result<String, String> {
+    match name {
+        EMAIL_LIST_TOOL => {
+            let parsed = parse_email_list_args(args).map_err(|e| e.to_string())?;
+            run_email_list(&parsed)
+        }
+        EMAIL_SEARCH_TOOL => {
+            let parsed = parse_email_search_args(args).map_err(|e| e.to_string())?;
+            run_email_search(&parsed)
+        }
+        EMAIL_GET_TOOL => {
+            let parsed = parse_email_get_args(args).map_err(|e| e.to_string())?;
+            run_email_get(&parsed)
+        }
+        CALENDAR_LIST_TOOL => {
+            let parsed = parse_calendar_list_args(args).map_err(|e| e.to_string())?;
+            run_calendar_list(&parsed)
+        }
+        CALENDAR_GET_TOOL => {
+            let parsed = parse_calendar_get_args(args).map_err(|e| e.to_string())?;
+            run_calendar_get(&parsed)
+        }
+        DRIVE_LIST_TOOL => {
+            let parsed = parse_drive_list_args(args).map_err(|e| e.to_string())?;
+            run_drive_list(&parsed)
+        }
+        DRIVE_SEARCH_TOOL => {
+            let parsed = parse_drive_search_args(args).map_err(|e| e.to_string())?;
+            run_drive_search(&parsed)
+        }
+        DRIVE_GET_TOOL => {
+            let parsed = parse_drive_get_args(args).map_err(|e| e.to_string())?;
+            run_drive_get(&parsed)
+        }
+        other => Err(format!("not a cloud read tool: {other}")),
     }
 }
 
