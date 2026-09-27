@@ -13,6 +13,7 @@
 //! Tools Settings choose always allow, ask, or deny. The daemon expands glossary
 //! aliases, then may spawn `/bin/sh -c` via [`shell`]. This crate still does not spawn on invoke.
 
+mod calendar_write;
 mod chat_schema;
 mod cloud_read;
 mod mcp_config;
@@ -22,6 +23,10 @@ mod settings;
 mod shell;
 mod softwake_ctl;
 
+pub use calendar_write::{
+    CalendarCreateArgs, CalendarDeleteArgs, CalendarUpdateArgs, parse_calendar_create_args,
+    parse_calendar_delete_args, parse_calendar_update_args,
+};
 pub use chat_schema::{advertise_chat_tools, tool_args_from_json};
 pub use cloud_read::{
     CalendarGetArgs, CalendarListArgs, DriveGetArgs, DriveListArgs, DriveSearchArgs, EmailGetArgs,
@@ -86,6 +91,15 @@ pub const CALENDAR_LIST_TOOL: &str = "calendar_list";
 
 /// Calendar get-by-id. Default Ask.
 pub const CALENDAR_GET_TOOL: &str = "calendar_get";
+
+/// Create a calendar event. Default Ask.
+pub const CALENDAR_CREATE_TOOL: &str = "calendar_create";
+
+/// Update a calendar event by id. Default Ask.
+pub const CALENDAR_UPDATE_TOOL: &str = "calendar_update";
+
+/// Delete a calendar event by id. Default Ask.
+pub const CALENDAR_DELETE_TOOL: &str = "calendar_delete";
 
 /// Drive / `AppFolder` list. Default Always allow.
 pub const DRIVE_LIST_TOOL: &str = "drive_list";
@@ -220,6 +234,21 @@ const PHASE2: &[ToolMeta] = &[
         name: CALENDAR_GET_TOOL,
         risk: ToolRisk::Confirm,
         description: "Get one calendar event by id via Email OAuth. Optional account selects a connected mailbox (connection id or email substring).",
+    },
+    ToolMeta {
+        name: CALENDAR_CREATE_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Create a calendar event (title, start, end) on the primary calendar via Email OAuth. Optional account selects a connected mailbox (connection id or email substring).",
+    },
+    ToolMeta {
+        name: CALENDAR_UPDATE_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Update a calendar event by id via Email OAuth. Optional account selects a connected mailbox (connection id or email substring).",
+    },
+    ToolMeta {
+        name: CALENDAR_DELETE_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Delete a calendar event by id via Email OAuth. Optional account selects a connected mailbox (connection id or email substring).",
     },
     ToolMeta {
         name: DRIVE_LIST_TOOL,
@@ -371,12 +400,44 @@ pub enum ToolError {
         name: String,
     },
 
-    /// [`EMAIL_SEND_TOOL`] was missing to, subject, or body.
-    #[error("{name} needs to, subject, and body")]
+    /// Arguments did not match the tool.
+    ///
+    /// `detail` is the operator sentence.
+    /// [`EMAIL_SEND_TOOL`] stays `email_send needs to, subject, and body`.
+    #[error("{detail}")]
     InvalidArgs {
         /// Name that was rejected.
         name: String,
+        /// Operator sentence for this tool.
+        detail: String,
     },
+}
+
+impl ToolError {
+    /// Invalid arguments for `name`, with the stable operator sentence.
+    #[must_use]
+    pub fn invalid_args(name: &str) -> Self {
+        Self::InvalidArgs {
+            detail: invalid_args_message(name),
+            name: name.to_owned(),
+        }
+    }
+}
+
+/// Operator sentence for [`ToolError::InvalidArgs`].
+#[must_use]
+pub fn invalid_args_message(name: &str) -> String {
+    match name {
+        EMAIL_SEND_TOOL => format!("{name} needs to, subject, and body"),
+        CALENDAR_CREATE_TOOL => format!("{name} needs title, start, and end (RFC3339)"),
+        CALENDAR_UPDATE_TOOL => format!(
+            "{name} needs an id and at least one of title, start, end, location, or description"
+        ),
+        CALENDAR_DELETE_TOOL | CALENDAR_GET_TOOL | EMAIL_GET_TOOL | DRIVE_GET_TOOL
+        | SKILL_GET_TOOL => format!("{name} needs id"),
+        SHELL_TOOL => format!("{name} needs a command"),
+        _ => format!("{name} needs valid arguments"),
+    }
 }
 
 /// Registered tools and their pure runners.
@@ -478,9 +539,8 @@ impl ToolRegistry {
                     parse_skill_get_args(args)?;
                 }
                 if name == SCHEDULE_TOOL {
-                    parse_schedule_args(args).map_err(|_| ToolError::InvalidArgs {
-                        name: SCHEDULE_TOOL.to_owned(),
-                    })?;
+                    parse_schedule_args(args)
+                        .map_err(|_| ToolError::invalid_args(SCHEDULE_TOOL))?;
                 }
                 if name == EMAIL_LIST_TOOL {
                     parse_email_list_args(args)?;
@@ -496,6 +556,15 @@ impl ToolRegistry {
                 }
                 if name == CALENDAR_GET_TOOL {
                     parse_calendar_get_args(args)?;
+                }
+                if name == CALENDAR_CREATE_TOOL {
+                    parse_calendar_create_args(args)?;
+                }
+                if name == CALENDAR_UPDATE_TOOL {
+                    parse_calendar_update_args(args)?;
+                }
+                if name == CALENDAR_DELETE_TOOL {
+                    parse_calendar_delete_args(args)?;
                 }
                 if name == DRIVE_LIST_TOOL {
                     parse_drive_list_args(args)?;
@@ -613,15 +682,11 @@ pub struct SkillSaveArgs {
 /// [`ToolError::InvalidArgs`] when fewer than four arguments.
 pub fn parse_skill_save_args(args: &[String]) -> Result<SkillSaveArgs, ToolError> {
     if args.len() < 4 {
-        return Err(ToolError::InvalidArgs {
-            name: SKILL_SAVE_TOOL.to_owned(),
-        });
+        return Err(ToolError::invalid_args(SKILL_SAVE_TOOL));
     }
     let title = args[0].trim();
     if title.is_empty() {
-        return Err(ToolError::InvalidArgs {
-            name: SKILL_SAVE_TOOL.to_owned(),
-        });
+        return Err(ToolError::invalid_args(SKILL_SAVE_TOOL));
     }
     Ok(SkillSaveArgs {
         title: title.to_owned(),
@@ -640,9 +705,7 @@ pub fn parse_skill_list_args(args: &[String]) -> Result<(), ToolError> {
     if args.is_empty() {
         Ok(())
     } else {
-        Err(ToolError::InvalidArgs {
-            name: SKILL_LIST_TOOL.to_owned(),
-        })
+        Err(ToolError::invalid_args(SKILL_LIST_TOOL))
     }
 }
 
@@ -661,16 +724,12 @@ pub struct SkillGetArgs {
 pub fn parse_skill_get_args(args: &[String]) -> Result<SkillGetArgs, ToolError> {
     match args {
         [id] if !id.trim().is_empty() => Ok(SkillGetArgs { id: id.clone() }),
-        _ => Err(ToolError::InvalidArgs {
-            name: SKILL_GET_TOOL.to_owned(),
-        }),
+        _ => Err(ToolError::invalid_args(SKILL_GET_TOOL)),
     }
 }
 
 fn invalid_email_args() -> ToolError {
-    ToolError::InvalidArgs {
-        name: EMAIL_SEND_TOOL.to_owned(),
-    }
+    ToolError::invalid_args(EMAIL_SEND_TOOL)
 }
 
 fn echo_detail(args: &[String]) -> String {
@@ -689,15 +748,16 @@ fn echo_detail(args: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL,
-        ECHO_TOOL, EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL,
-        EmailSendArgs, NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL,
-        SKILL_SAVE_TOOL, SOFTWAKE_HIBERNATE_TOOL, SOFTWAKE_LIST_MODELS_TOOL,
-        SOFTWAKE_LIST_PROFILES_TOOL, SOFTWAKE_LIST_REASONING_TOOL, SOFTWAKE_LIST_VOICES_TOOL,
-        SOFTWAKE_NEW_SESSION_TOOL, SOFTWAKE_REFRESH_TOOL, SOFTWAKE_RESUME_TOOL,
-        SOFTWAKE_SET_MODEL_TOOL, SOFTWAKE_SET_PROFILE_TOOL, SOFTWAKE_SET_REASONING_TOOL,
-        SOFTWAKE_SET_VOICE_TOOL, SOFTWAKE_SLEEP_TOOL, SOFTWAKE_STATUS_TOOL, ToolError,
-        ToolRegistry, ToolResult, ToolRisk, parse_email_send_args,
+        CALENDAR_CREATE_TOOL, CALENDAR_DELETE_TOOL, CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL,
+        CALENDAR_UPDATE_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL, ECHO_TOOL,
+        EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, EmailSendArgs,
+        NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL,
+        SOFTWAKE_HIBERNATE_TOOL, SOFTWAKE_LIST_MODELS_TOOL, SOFTWAKE_LIST_PROFILES_TOOL,
+        SOFTWAKE_LIST_REASONING_TOOL, SOFTWAKE_LIST_VOICES_TOOL, SOFTWAKE_NEW_SESSION_TOOL,
+        SOFTWAKE_REFRESH_TOOL, SOFTWAKE_RESUME_TOOL, SOFTWAKE_SET_MODEL_TOOL,
+        SOFTWAKE_SET_PROFILE_TOOL, SOFTWAKE_SET_REASONING_TOOL, SOFTWAKE_SET_VOICE_TOOL,
+        SOFTWAKE_SLEEP_TOOL, SOFTWAKE_STATUS_TOOL, ToolError, ToolRegistry, ToolResult, ToolRisk,
+        parse_email_send_args,
     };
 
     fn registry() -> ToolRegistry {
@@ -722,6 +782,9 @@ mod tests {
                 (EMAIL_GET_TOOL, ToolRisk::Confirm),
                 (CALENDAR_LIST_TOOL, ToolRisk::Confirm),
                 (CALENDAR_GET_TOOL, ToolRisk::Confirm),
+                (CALENDAR_CREATE_TOOL, ToolRisk::Confirm),
+                (CALENDAR_UPDATE_TOOL, ToolRisk::Confirm),
+                (CALENDAR_DELETE_TOOL, ToolRisk::Confirm),
                 (DRIVE_LIST_TOOL, ToolRisk::Confirm),
                 (DRIVE_SEARCH_TOOL, ToolRisk::Confirm),
                 (DRIVE_GET_TOOL, ToolRisk::Confirm),
@@ -906,9 +969,7 @@ mod tests {
         ] {
             assert_eq!(
                 registry.invoke_confirmed("email_send", &short),
-                Err(ToolError::InvalidArgs {
-                    name: "email_send".to_owned(),
-                })
+                Err(ToolError::invalid_args("email_send"))
             );
             assert_eq!(
                 parse_email_send_args(&short)

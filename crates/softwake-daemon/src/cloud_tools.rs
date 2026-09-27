@@ -9,10 +9,11 @@
 #![cfg_attr(not(feature = "live-http"), allow(dead_code))]
 
 use softwake_connectors::{
-    CALENDAR, CALENDAR_GET, CALENDAR_LIST, DRIVE, DRIVE_GET, DRIVE_LIST, DRIVE_SEARCH, EMAIL,
-    EMAIL_GET, EMAIL_LIST, EMAIL_SEARCH, clamp_calendar_days, clamp_calendar_max, clamp_drive_max,
-    clamp_inbox_max, format_calendar_event, format_calendar_list, format_drive_file,
-    format_drive_list, format_inbox_list, format_inbox_message, gmail_get_url, gmail_list_url,
+    CALENDAR, CALENDAR_CREATE, CALENDAR_DELETE, CALENDAR_GET, CALENDAR_LIST, CALENDAR_UPDATE,
+    DRIVE, DRIVE_GET, DRIVE_LIST, DRIVE_SEARCH, EMAIL, EMAIL_GET, EMAIL_LIST, EMAIL_SEARCH,
+    clamp_calendar_days, clamp_calendar_max, clamp_drive_max, clamp_inbox_max,
+    format_calendar_event, format_calendar_list, format_drive_file, format_drive_list,
+    format_inbox_list, format_inbox_message, gmail_get_url, gmail_list_url,
     google_drive_export_text_url, google_drive_get_url, google_drive_list_url,
     google_drive_media_url, google_event_get_url, google_events_url, graph_approot_children_url,
     graph_approot_search_url, graph_calendar_view_url, graph_drive_content_url,
@@ -291,6 +292,9 @@ pub(crate) fn connector_action_for(tool: &str) -> Option<(&'static str, &'static
         softwake_tools::EMAIL_GET_TOOL => Some((EMAIL, EMAIL_GET)),
         softwake_tools::CALENDAR_LIST_TOOL => Some((CALENDAR, CALENDAR_LIST)),
         softwake_tools::CALENDAR_GET_TOOL => Some((CALENDAR, CALENDAR_GET)),
+        softwake_tools::CALENDAR_CREATE_TOOL => Some((CALENDAR, CALENDAR_CREATE)),
+        softwake_tools::CALENDAR_UPDATE_TOOL => Some((CALENDAR, CALENDAR_UPDATE)),
+        softwake_tools::CALENDAR_DELETE_TOOL => Some((CALENDAR, CALENDAR_DELETE)),
         softwake_tools::DRIVE_LIST_TOOL => Some((DRIVE, DRIVE_LIST)),
         softwake_tools::DRIVE_SEARCH_TOOL => Some((DRIVE, DRIVE_SEARCH)),
         softwake_tools::DRIVE_GET_TOOL => Some((DRIVE, DRIVE_GET)),
@@ -377,29 +381,61 @@ fn get_text(url: &str, bearer: &str) -> Result<String, String> {
 }
 
 #[cfg(feature = "live-http")]
-fn get_body(
-    url: &str,
-    bearer: &str,
-    extra_headers: Option<&[(&str, &str)]>,
-) -> Result<String, String> {
-    let agent = ureq::AgentBuilder::new()
+fn cloud_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
         .timeout_connect(std::time::Duration::from_secs(10))
         .timeout_read(std::time::Duration::from_secs(30))
         .timeout(std::time::Duration::from_secs(30))
-        .build();
-    let mut req = agent
-        .get(url)
+        .build()
+}
+
+/// POST JSON. Accepts HTTP 200..299, including an empty body.
+#[cfg(feature = "live-http")]
+pub(crate) fn post_json(url: &str, bearer: &str, payload: &str) -> Result<String, String> {
+    bearer_exchange("POST", url, bearer, Some(payload))
+}
+
+/// PATCH JSON. Accepts HTTP 200..299.
+#[cfg(feature = "live-http")]
+pub(crate) fn patch_json(url: &str, bearer: &str, payload: &str) -> Result<String, String> {
+    bearer_exchange("PATCH", url, bearer, Some(payload))
+}
+
+/// DELETE with a bearer token and no body. Accepts HTTP 200..299, including 204.
+#[cfg(feature = "live-http")]
+pub(crate) fn delete_bearer(url: &str, bearer: &str) -> Result<String, String> {
+    bearer_exchange("DELETE", url, bearer, None)
+}
+
+#[cfg(feature = "live-http")]
+fn bearer_exchange(
+    method: &str,
+    url: &str,
+    bearer: &str,
+    payload: Option<&str>,
+) -> Result<String, String> {
+    let req = cloud_agent()
+        .request(method, url)
         .set("Authorization", &format!("Bearer {bearer}"));
-    if let Some(headers) = extra_headers {
-        for (k, v) in headers {
-            req = req.set(k, v);
-        }
-    }
-    let response = match req.call() {
-        Ok(response) => response,
-        Err(ureq::Error::Status(_, response)) => response,
-        Err(_) => return Err("cloud API network transport failed".to_owned()),
+    let result = if let Some(payload) = payload {
+        req.set("Content-Type", "application/json")
+            .send_string(payload)
+    } else {
+        req.call()
     };
+    http_result(result)
+}
+
+#[cfg(feature = "live-http")]
+fn http_result(result: Result<ureq::Response, ureq::Error>) -> Result<String, String> {
+    let (Ok(response) | Err(ureq::Error::Status(_, response))) = result else {
+        return Err("cloud API network transport failed".to_owned());
+    };
+    read_cloud_response(response)
+}
+
+#[cfg(feature = "live-http")]
+fn read_cloud_response(response: ureq::Response) -> Result<String, String> {
     let status = response.status();
     let body = response
         .into_string()
@@ -408,6 +444,23 @@ fn get_body(
         return Err(cloud_http_error(status, &body));
     }
     Ok(body)
+}
+
+#[cfg(feature = "live-http")]
+fn get_body(
+    url: &str,
+    bearer: &str,
+    extra_headers: Option<&[(&str, &str)]>,
+) -> Result<String, String> {
+    let mut req = cloud_agent()
+        .get(url)
+        .set("Authorization", &format!("Bearer {bearer}"));
+    if let Some(headers) = extra_headers {
+        for (k, v) in headers {
+            req = req.set(k, v);
+        }
+    }
+    http_result(req.call())
 }
 
 #[cfg(not(feature = "live-http"))]
@@ -545,6 +598,18 @@ mod tests {
         assert_eq!(
             connector_action_for(softwake_tools::CALENDAR_LIST_TOOL),
             Some((CALENDAR, CALENDAR_LIST))
+        );
+        assert_eq!(
+            connector_action_for(softwake_tools::CALENDAR_CREATE_TOOL),
+            Some((CALENDAR, softwake_connectors::CALENDAR_CREATE))
+        );
+        assert_eq!(
+            connector_action_for(softwake_tools::CALENDAR_UPDATE_TOOL),
+            Some((CALENDAR, softwake_connectors::CALENDAR_UPDATE))
+        );
+        assert_eq!(
+            connector_action_for(softwake_tools::CALENDAR_DELETE_TOOL),
+            Some((CALENDAR, softwake_connectors::CALENDAR_DELETE))
         );
         assert_eq!(connector_action_for(softwake_tools::EMAIL_SEND_TOOL), None);
         assert_eq!(civil_from_days(0), (1970, 1, 1));

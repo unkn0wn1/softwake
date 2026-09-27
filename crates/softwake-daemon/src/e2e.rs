@@ -486,6 +486,7 @@ fn ctl_cancel_and_hibernate_clear_a_pending_notification() {
     let denied_text = denied.to_string();
     assert!(
         denied_text.contains("tool denied: shell")
+            || denied_text.contains("shell needs a command")
             || denied_text.contains("needs to, subject, and body"),
         "{denied_text}"
     );

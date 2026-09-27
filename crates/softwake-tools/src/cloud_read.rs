@@ -87,9 +87,7 @@ fn parse_u32(raw: &str) -> Option<u32> {
 }
 
 fn needs(name: &str) -> ToolError {
-    ToolError::InvalidArgs {
-        name: name.to_owned(),
-    }
+    ToolError::invalid_args(name)
 }
 
 /// Peel a trailing `account=<value>` when the caller passed more than `min_positional` args.

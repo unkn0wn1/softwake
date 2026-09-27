@@ -125,9 +125,7 @@ pub enum SoftwakeCtlEffect {
     reason = "one match arm per Softwake ctl tool keeps the table readable"
 )]
 pub fn parse_softwake_ctl(name: &str, args: &[String]) -> Result<SoftwakeCtlEffect, ToolError> {
-    let invalid = || ToolError::InvalidArgs {
-        name: name.to_owned(),
-    };
+    let invalid = || ToolError::invalid_args(name);
     match name {
         SOFTWAKE_STATUS_TOOL => {
             if args.is_empty() {

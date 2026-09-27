@@ -57,7 +57,15 @@ pub const CALENDAR_LIST: &str = "list";
 /// Confirm-gated calendar get-by-id.
 pub const CALENDAR_GET: &str = "get";
 
-/// Denied calendar action. It has no backend.
+/// Confirm-gated calendar event create on the primary calendar.
+pub const CALENDAR_CREATE: &str = "create";
+
+/// Confirm-gated calendar event update.
+pub const CALENDAR_UPDATE: &str = "update";
+
+/// Confirm-gated calendar event delete.
+///
+/// Event delete only. This is not a blanket connector deregister. Drive delete stays deny.
 pub const CALENDAR_DELETE: &str = "delete";
 
 /// How a registered connector action may be treated.
@@ -170,9 +178,21 @@ const PHASE3: &[ConnectorMeta] = &[
     },
     ConnectorMeta {
         connector: CALENDAR,
+        action: CALENDAR_CREATE,
+        risk: ConnectorRisk::Confirm,
+        description: "Create a calendar event on the primary calendar. Runs only after confirmation.",
+    },
+    ConnectorMeta {
+        connector: CALENDAR,
+        action: CALENDAR_UPDATE,
+        risk: ConnectorRisk::Confirm,
+        description: "Update a calendar event by id. Runs only after confirmation.",
+    },
+    ConnectorMeta {
+        connector: CALENDAR,
         action: CALENDAR_DELETE,
-        risk: ConnectorRisk::Deny,
-        description: "Delete a calendar event. Denied.",
+        risk: ConnectorRisk::Confirm,
+        description: "Delete a calendar event by id. Runs only after confirmation.",
     },
 ];
 
@@ -218,7 +238,7 @@ pub struct ConnectorRegistry {
 
 impl ConnectorRegistry {
     /// Registry for this slice: email send and delete, Drive list and delete,
-    /// calendar list and delete.
+    /// calendar list/get/create/update/delete.
     #[must_use]
     pub const fn phase3() -> Self {
         Self { actions: PHASE3 }
@@ -269,7 +289,7 @@ impl ConnectorRegistry {
     /// This function does not check a token, does not send, and does not list.
     /// `Ok(())` means the caller may perform the action. The confirm actions in
     /// [`Self::phase3`] include [`EMAIL`] send/list/search/get, [`DRIVE`]
-    /// list/search/get, and [`CALENDAR`] list/get.
+    /// list/search/get, and [`CALENDAR`] list/get/create/update/delete.
     ///
     /// # Errors
     ///
@@ -314,9 +334,10 @@ fn needs_confirm(connector: &str, action: &str) -> ConnectorError {
 #[cfg(test)]
 mod tests {
     use super::{
-        CALENDAR, CALENDAR_DELETE, CALENDAR_GET, CALENDAR_LIST, ConnectorError, ConnectorRegistry,
-        ConnectorRisk, DRIVE, DRIVE_DELETE, DRIVE_GET, DRIVE_LIST, DRIVE_SEARCH, EMAIL,
-        EMAIL_DELETE, EMAIL_GET, EMAIL_LIST, EMAIL_SEARCH, EMAIL_SEND,
+        CALENDAR, CALENDAR_CREATE, CALENDAR_DELETE, CALENDAR_GET, CALENDAR_LIST, CALENDAR_UPDATE,
+        ConnectorError, ConnectorRegistry, ConnectorRisk, DRIVE, DRIVE_DELETE, DRIVE_GET,
+        DRIVE_LIST, DRIVE_SEARCH, EMAIL, EMAIL_DELETE, EMAIL_GET, EMAIL_LIST, EMAIL_SEARCH,
+        EMAIL_SEND,
     };
 
     fn registry() -> ConnectorRegistry {
@@ -324,6 +345,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "phase-3 registration order is one table"
+    )]
     fn phase3_registers_confirm_and_deny_and_default_matches() {
         let registry = registry();
         assert_eq!(
@@ -344,7 +369,9 @@ mod tests {
                 (DRIVE, DRIVE_DELETE, ConnectorRisk::Deny),
                 (CALENDAR, CALENDAR_LIST, ConnectorRisk::Confirm),
                 (CALENDAR, CALENDAR_GET, ConnectorRisk::Confirm),
-                (CALENDAR, CALENDAR_DELETE, ConnectorRisk::Deny),
+                (CALENDAR, CALENDAR_CREATE, ConnectorRisk::Confirm),
+                (CALENDAR, CALENDAR_UPDATE, ConnectorRisk::Confirm),
+                (CALENDAR, CALENDAR_DELETE, ConnectorRisk::Confirm),
             ]
         );
         assert!(
@@ -371,7 +398,9 @@ mod tests {
                 "Delete a Drive file. Denied.",
                 "List calendar events through the connector. Runs only after confirmation.",
                 "Get one calendar event by id. Runs only after confirmation.",
-                "Delete a calendar event. Denied.",
+                "Create a calendar event on the primary calendar. Runs only after confirmation.",
+                "Update a calendar event by id. Runs only after confirmation.",
+                "Delete a calendar event by id. Runs only after confirmation.",
             ]
         );
         let confirmations = registry
@@ -379,7 +408,7 @@ mod tests {
             .iter()
             .filter(|entry| entry.risk == ConnectorRisk::Confirm)
             .count();
-        assert_eq!(confirmations, 9);
+        assert_eq!(confirmations, 12);
         for entry in registry.entries() {
             match entry.risk {
                 ConnectorRisk::Confirm | ConnectorRisk::Deny => {
@@ -409,8 +438,16 @@ mod tests {
             Some(ConnectorRisk::Confirm)
         );
         assert_eq!(
+            registry.risk(CALENDAR, CALENDAR_CREATE),
+            Some(ConnectorRisk::Confirm)
+        );
+        assert_eq!(
+            registry.risk(CALENDAR, CALENDAR_UPDATE),
+            Some(ConnectorRisk::Confirm)
+        );
+        assert_eq!(
             registry.risk(CALENDAR, CALENDAR_DELETE),
-            Some(ConnectorRisk::Deny)
+            Some(ConnectorRisk::Confirm)
         );
         assert_eq!(registry.risk("Drive", DRIVE_LIST), None);
         assert_eq!(registry.risk(DRIVE, "List"), None);
@@ -432,6 +469,8 @@ mod tests {
             (EMAIL, EMAIL_SEND),
             (DRIVE, DRIVE_LIST),
             (CALENDAR, CALENDAR_LIST),
+            (CALENDAR, CALENDAR_CREATE),
+            (CALENDAR, CALENDAR_DELETE),
         ] {
             let needs_confirm = registry.invoke(connector, action).expect_err("blind");
             assert_eq!(
@@ -446,11 +485,7 @@ mod tests {
                 format!("connector action requires confirmation: {connector}/{action}")
             );
         }
-        for (connector, action) in [
-            (EMAIL, EMAIL_DELETE),
-            (DRIVE, DRIVE_DELETE),
-            (CALENDAR, CALENDAR_DELETE),
-        ] {
+        for (connector, action) in [(EMAIL, EMAIL_DELETE), (DRIVE, DRIVE_DELETE)] {
             let denied = registry.invoke(connector, action).expect_err("deny");
             assert_eq!(
                 denied,
@@ -473,14 +508,13 @@ mod tests {
             (EMAIL, EMAIL_SEND),
             (DRIVE, DRIVE_LIST),
             (CALENDAR, CALENDAR_LIST),
+            (CALENDAR, CALENDAR_CREATE),
+            (CALENDAR, CALENDAR_UPDATE),
+            (CALENDAR, CALENDAR_DELETE),
         ] {
             assert_eq!(registry.authorize_confirmed(connector, action), Ok(()));
         }
-        for (connector, action) in [
-            (EMAIL, EMAIL_DELETE),
-            (DRIVE, DRIVE_DELETE),
-            (CALENDAR, CALENDAR_DELETE),
-        ] {
+        for (connector, action) in [(EMAIL, EMAIL_DELETE), (DRIVE, DRIVE_DELETE)] {
             assert_eq!(
                 registry.authorize_confirmed(connector, action),
                 Err(ConnectorError::Denied {
@@ -500,7 +534,7 @@ mod tests {
             ("email", "Send"),
             ("drive", "send"),
             ("drive", "upload"),
-            ("calendar", "create"),
+            ("calendar", "acl"),
             ("Drive", "list"),
             ("", "list"),
             ("drive", ""),

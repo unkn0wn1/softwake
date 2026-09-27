@@ -50,10 +50,18 @@ vec, so a second sign-in dropped the first account.
 - Gmail `users.messages.send` and Graph `sendMail` are unchanged. Builds
   without `live-http` still use the mock outbox or local draft.
 
+## Amendment — calendar write uses the same account (2026-09-28)
+
+`calendar_create`, `calendar_update`, and `calendar_delete`
+([ADR-0034](ADR-0034-calendar-write.md)) take the same optional `account` and
+the same active / Google-preferred rules as inbox and `email_send`. There is
+still no per-profile account bind.
+
 ## Out of scope
 
-Per-profile account bind, voice account picking, calendar write, wider Drive
-scopes, agent cron, memory writes, and webhook wake.
+Per-profile account bind, voice account picking, wider Drive scopes, agent
+cron, memory writes, and webhook wake. Calendar event write is
+[ADR-0034](ADR-0034-calendar-write.md).
 
 ## Demo
 

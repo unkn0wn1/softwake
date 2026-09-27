@@ -33,11 +33,15 @@ client secrets into the window.
 
    | Provider | Scopes |
    |---|---|
-   | Google | `openid email` + `calendar.readonly` + `drive.file` + `gmail.send` + `gmail.readonly` |
-   | Microsoft | `openid profile email offline_access User.Read Calendars.Read Files.ReadWrite.AppFolder Mail.Send Mail.Read` |
+   | Google | `openid email` + `calendar.readonly` + `calendar.events` + `drive.file` + `gmail.send` + `gmail.readonly` |
+   | Microsoft | `openid profile email offline_access User.Read Calendars.ReadWrite Files.ReadWrite.AppFolder Mail.Send Mail.Read` |
 
-   Mail scopes are intentional for Softwake Email. Calendar and drive match the
-   usual desktop readonly / AppFolder pattern.
+   Mail scopes are intentional for Softwake Email. Google keeps
+   `calendar.readonly` and adds `calendar.events` (event read and write). The
+   full `calendar` ACL scope is not requested. Microsoft uses
+   `Calendars.ReadWrite` instead of `Calendars.Read`. Drive stays `drive.file` /
+   AppFolder. **Calendar write (2026-09-28):**
+   [ADR-0034](ADR-0034-calendar-write.md).
 6. **Live I/O:** This ADR ships connect, disconnect, and token storage. Live
    Gmail / Graph send and list stay later. Confirm-gated `email_send` and
    draft-only mode remain. **Superseded (2026-09-27):** list shipped in
@@ -127,3 +131,17 @@ Reconnect only when the stored `scope` lacks `gmail.send` (Google) or
 send scopes does not Disconnect/Connect for this slice. Token refresh does not
 enlarge the grant. The Gmail API must still be enabled on the publisher GCP
 project (same 403 class as inbox). SMTP Send mode remains `TransportNotWired`.
+
+## Amendment — calendar write scopes (2026-09-28)
+
+Connect now requests Google `https://www.googleapis.com/auth/calendar.events`
+in addition to `calendar.readonly`, and Microsoft `Calendars.ReadWrite` instead
+of `Calendars.Read`. `calendar.readonly` stays so list/get do not depend on the
+write scope, and so older grants can still list events. The full Google
+`calendar` ACL scope is not requested.
+
+Token refresh does not enlarge a grant. For each account whose stored `scope`
+lacks `calendar.events` or `Calendars.ReadWrite`: Settings → Email → Accounts →
+**Remove** that row → **Connect** again. If the stored scope already contains
+the write scope, reconnect is not required. See
+[ADR-0034](ADR-0034-calendar-write.md).

@@ -28,8 +28,8 @@ Connect asks for **mail as well** in one consent:
 
 | Provider | MeetRec (calendar app) | Softwake Email Connect |
 | -------- | ---------------------- | ---------------------- |
-| Google | `openid` `email` `calendar.readonly` (+ `drive.file` when upload) | `openid` `email` `calendar.readonly` `drive.file` **`gmail.readonly` `gmail.send`** |
-| Microsoft | `Calendars.Read` (+ `Files.ReadWrite.AppFolder` when upload) | identity + `Calendars.Read` `Files.ReadWrite.AppFolder` **`Mail.Read` `Mail.Send`** |
+| Google | `openid` `email` `calendar.readonly` (+ `drive.file` when upload) | `openid` `email` `calendar.readonly` **`calendar.events`** `drive.file` **`gmail.readonly` `gmail.send`** |
+| Microsoft | `Calendars.Read` (+ `Files.ReadWrite.AppFolder` when upload) | identity + **`Calendars.ReadWrite`** `Files.ReadWrite.AppFolder` **`Mail.Read` `Mail.Send`** |
 
 Reusing a MeetRec Google Cloud project for Softwake is fine **only if** that
 project also enables the Gmail API and lists the Gmail scopes on the consent
@@ -44,8 +44,12 @@ Gmail API is still disabled on the project (scopes may already be on the token).
    still succeed (calendar/Drive work) and inbox tools return **HTTP 403** with
    Google’s “Gmail API has not been used in project … or it is disabled” body.
 3. OAuth consent screen → External → Testing. Add test users. Scopes must include
-   Softwake’s set: `openid`, `email`, `calendar.readonly`, `drive.file`,
-   `gmail.readonly`, `gmail.send` (full URLs under `https://www.googleapis.com/auth/…`).
+   Softwake’s set: `openid`, `email`, `calendar.readonly`, `calendar.events`,
+   `drive.file`, `gmail.readonly`, `gmail.send` (full URLs under
+   `https://www.googleapis.com/auth/…`). Do not add the full `calendar` ACL
+   scope; `calendar.events` is event read and write. `calendar.readonly` stays
+   so list/get keep working on older grants and do not depend on the write
+   scope alone.
 4. Credentials → OAuth client ID → **Desktop app**.
 5. Put the client id (and secret if present) in `oauth-clients.env` / CI secrets.
    Do not create a Web client. Do not put the secret in git, an issue, or a log.
@@ -102,6 +106,14 @@ reconnect).
 - **Send scope missing** (connected before those send scopes were on the token):
   Settings → Email → Remove that account → Connect. Token refresh does not
   enlarge the grant.
+- **Calendar write scopes:** Google `calendar.events` (kept alongside
+  `calendar.readonly`) and Microsoft `Calendars.ReadWrite` (replaces
+  `Calendars.Read`). `calendar_create`, `calendar_update`, and `calendar_delete`
+  use the primary calendar. If stored `scope` already contains
+  `calendar.events` or `Calendars.ReadWrite`, reconnect is not required. If it
+  does not, Settings → Email → Accounts → **Remove** that account → **Connect**
+  again. Token refresh does not enlarge the grant. See
+  [ADR-0034](ADR-0034-calendar-write.md).
 
 ## Microsoft Entra
 
@@ -112,7 +124,7 @@ reconnect).
    `http://localhost:<port>/callback`).
 4. Allow public client flows: **Yes**. Do not create a client secret.
 5. API permissions → Microsoft Graph delegated: Softwake’s
-   `MICROSOFT_EMAIL_SCOPES` (`Mail.Read`, `Mail.Send`, `Calendars.Read`,
+   `MICROSOFT_EMAIL_SCOPES` (`Mail.Read`, `Mail.Send`, `Calendars.ReadWrite`,
    `Files.ReadWrite.AppFolder`, plus identity / `offline_access`).
 6. Put the Application (client) id in env / `oauth-clients.env`.
 

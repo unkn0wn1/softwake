@@ -222,8 +222,9 @@ fn connector_floor(risk: Option<ConnectorRisk>) -> Option<PolicyDecision> {
 #[cfg(test)]
 mod tests {
     use softwake_connectors::{
-        CALENDAR, CALENDAR_DELETE, CALENDAR_LIST, ConnectorRegistry, ConnectorRisk, DRIVE,
-        DRIVE_DELETE, DRIVE_LIST, EMAIL, EMAIL_DELETE, EMAIL_SEND,
+        CALENDAR, CALENDAR_CREATE, CALENDAR_DELETE, CALENDAR_LIST, CALENDAR_UPDATE,
+        ConnectorRegistry, ConnectorRisk, DRIVE, DRIVE_DELETE, DRIVE_LIST, EMAIL, EMAIL_DELETE,
+        EMAIL_SEND,
     };
     use softwake_tools::{
         ECHO_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL, SHELL_TOOL, SKILL_SAVE_TOOL, ToolRegistry,
@@ -294,8 +295,16 @@ mod tests {
             PolicyDecision::Confirm
         );
         assert_eq!(
+            eval_connector(&engine, CALENDAR, CALENDAR_CREATE),
+            PolicyDecision::Confirm
+        );
+        assert_eq!(
+            eval_connector(&engine, CALENDAR, CALENDAR_UPDATE),
+            PolicyDecision::Confirm
+        );
+        assert_eq!(
             eval_connector(&engine, CALENDAR, CALENDAR_DELETE),
-            PolicyDecision::Deny
+            PolicyDecision::Confirm
         );
         let empty = PolicyEngine::with_overrides(PolicyOverrides::new(Vec::new(), Vec::new()));
         assert_eq!(engine, empty);
@@ -347,7 +356,7 @@ mod tests {
             ("email", ""),
             ("", "send"),
             ("drive", "upload"),
-            ("calendar", "create"),
+            ("calendar", "acl"),
             ("Drive", "list"),
             ("drive", "List"),
         ] {
@@ -499,11 +508,23 @@ mod tests {
                 CALENDAR,
                 CALENDAR_DELETE
             ),
-            PolicyDecision::Deny
+            PolicyDecision::Confirm
         );
         assert_eq!(
             eval_connector(
                 &connector_engine(CALENDAR, CALENDAR_DELETE, PolicyDecision::Safe),
+                CALENDAR,
+                CALENDAR_DELETE
+            ),
+            PolicyDecision::Confirm
+        );
+    }
+
+    #[test]
+    fn calendar_delete_deny_override_stays_deny() {
+        assert_eq!(
+            eval_connector(
+                &connector_engine(CALENDAR, CALENDAR_DELETE, PolicyDecision::Deny),
                 CALENDAR,
                 CALENDAR_DELETE
             ),
@@ -547,9 +568,9 @@ mod tests {
         );
         assert_eq!(
             eval_connector(
-                &connector_engine("calendar", "create", PolicyDecision::Confirm),
+                &connector_engine("calendar", "acl", PolicyDecision::Confirm),
                 "calendar",
-                "create"
+                "acl"
             ),
             PolicyDecision::Deny
         );
