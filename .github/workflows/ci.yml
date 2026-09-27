@@ -54,6 +54,13 @@ jobs:
       - name: Build
         run: cargo build --workspace --all-targets
 
+      # Default workspace builds omit optional live-http. Telegram + providers
+      # HTTPS paths only compile under this feature — prove it on Linux too.
+      - name: Check live-http (Linux)
+        run: |
+          cargo check -p softwake-daemon --features live-http
+          cargo check -p softwake-ui --features live-http
+
   windows-check:
     name: windows target check
     runs-on: windows-latest
