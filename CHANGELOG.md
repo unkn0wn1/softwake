@@ -4,6 +4,8 @@
 
 ### Added
 
+- Settings left-nav **expandable sublists** for Timers and Skills (same chip pattern as Profiles). New **Messengers** pane with Telegram as the first channel. Per-profile `messengers.json` holds Default / Receive all / Voice flags for desktop HUD and Telegram; bot token lives in the secret bag. softwaked long-polls Telegram (`live-http`), shares `hud-chat.json` history with the HUD, fans timer fires to Receive-all + Default, and sends TTS audio when Voice is on. Dual-login TTS rules in [ADR-0029](docs/ADR-0029-messengers-telegram.md). PROTOCOL stays 1.
+
 - Expanded awake slash commands: `/help`, `/status`, `/model` (`ai`/`voice`), `/voice`, `/new`, `/profile`, `/sleep`, `/hibernate`, `/resume` (plus clear-typed aliases where natural). Keeps `/clear` `/halve|/reduce` `/compact`. See [ADR 0028](docs/ADR-0028-slash-hud-self-sleep.md).
 - HUD multi-select + Delete for chat bubbles; rewrites `hud-chat.json`; best-effort `DropChatTurns` trims matching model-session messages (`/clear` still drops all).
 - Free-speech ambient self-sleep latch: three near-identical short free-speech replies within 90s auto-sleep (no TTS on the Nth). NL self-sleep markers (`going to sleep`, `mic off`, …) also sleep after one free-speech reply.

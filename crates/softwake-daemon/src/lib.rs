@@ -23,6 +23,7 @@ mod demo;
 mod dispatch;
 mod email_tool;
 mod free_speech;
+mod hud_chat_write;
 mod hud_seed;
 mod mode_confirm;
 mod mode_intent;
@@ -38,6 +39,7 @@ mod skill_intent;
 mod slash;
 mod soul;
 mod talk;
+mod telegram;
 mod tool_loop;
 mod verbose_log;
 

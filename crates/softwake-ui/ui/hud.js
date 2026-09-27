@@ -1543,5 +1543,27 @@ void bootstrapVault().finally(() => {
   refresh();
   void refreshProfileName(true);
 });
+
+let lastChatReloadMs = 0;
+async function maybeReloadChatFromDisk() {
+  if (!vaultUnlocked || !chatPersistReady) return;
+  const now = Date.now();
+  if (now - lastChatReloadMs < 2500) return;
+  lastChatReloadMs = now;
+  try {
+    const snap = await invoke("hud_chat_snapshot", { profileId: profileId || null });
+    const next = (snap && snap.turns) || [];
+    if (!next.length) return;
+    const localLast = turns.length ? turns[turns.length - 1].ts : 0;
+    const diskLast = next.length ? Number(next[next.length - 1].ts) || 0 : 0;
+    if (diskLast > localLast || next.length > turns.length) {
+      replaceTurns(next);
+    }
+  } catch (_error) {
+    // ignore
+  }
+}
+
 window.setInterval(refresh, 900);
+window.setInterval(() => { void maybeReloadChatFromDisk(); }, 2500);
 raf = requestAnimationFrame(tick);

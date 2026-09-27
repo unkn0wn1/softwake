@@ -10,7 +10,7 @@ const confirmBtn = document.querySelector("#confirm");
 const cancelBtn = document.querySelector("#cancel");
 const navStatus = document.querySelector("#nav-status");
 
-const panes = ["general", "profiles", "providers", "tools", "timers", "skills", "email", "status"];
+const panes = ["general", "profiles", "providers", "tools", "timers", "skills", "messengers", "email", "status"];
 
 const providerSelect = document.querySelector("#provider-select");
 const keyPanel = document.querySelector("#key-panel");
@@ -598,11 +598,18 @@ function applyPackSnapshot(snap, statusText) {
   setPackEditable(true);
 }
 
-function setProfilesSubnavVisible(on) {
-  if (!profilesSubnavEl) return;
-  profilesSubnavEl.classList.toggle("hidden", !on);
-  profilesSubnavEl.hidden = !on;
+
+/** Toggle a left-nav `.nav-sub` block (Profiles / Timers / Skills / Messengers). */
+function setSubnavVisible(el, on) {
+  if (!el) return;
+  el.classList.toggle("hidden", !on);
+  el.hidden = !on;
 }
+
+function setProfilesSubnavVisible(on) {
+  setSubnavVisible(profilesSubnavEl, on);
+}
+
 
 function renderProfilesList(snap) {
   profilesListEl.innerHTML = "";
@@ -1075,6 +1082,28 @@ function renderSkills(snap) {
   if (skillsPitfalls) skillsPitfalls.value = snap.pitfalls || "";
   if (skillsVerify) skillsVerify.value = snap.verify || "";
   if (skillsSource) skillsSource.textContent = "Source: " + (snap.selected_source || "—");
+  renderSkillsSubnav(snap);
+}
+
+function renderSkillsSubnav(snap) {
+  const list = document.querySelector("#skills-sub-list");
+  if (!list) return;
+  list.innerHTML = "";
+  for (const row of snap.skills || []) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "profile-chip";
+    btn.setAttribute("role", "option");
+    btn.setAttribute("aria-selected", row.id === snap.selected_id ? "true" : "false");
+    const title = document.createElement("span");
+    title.className = "profile-chip-label";
+    title.textContent = (row.title || row.id) + " (" + row.source + ")";
+    btn.appendChild(title);
+    btn.addEventListener("click", () => refreshSkills(row.id));
+    li.appendChild(btn);
+    list.appendChild(li);
+  }
 }
 
 async function refreshSkills(selectedId) {
@@ -1190,24 +1219,63 @@ function renderTimers(snap) {
     timersActive.textContent = "Active profile: " + (snap.activeProfileId || "—");
   }
   if (timersShowAll) timersShowAll.checked = !!snap.showAll;
-  if (!timersList) return;
-  const prev = timersSelectedId;
-  timersList.innerHTML = "";
-  for (const row of timersRows) {
-    const opt = document.createElement("option");
-    opt.value = row.profileId + "\t" + row.id;
-    const label = (snap.showAll ? "[" + row.profileName + "] " : "") +
-      row.kind + " " + row.when + " — " + row.title + (row.enabled ? "" : " (off)");
-    opt.textContent = label;
-    timersList.appendChild(opt);
-  }
-  if (prev) {
-    for (const opt of timersList.options) {
-      if (opt.value.endsWith("\t" + prev) || opt.value === timersSelectedProfile + "\t" + prev) {
-        opt.selected = true;
-        break;
+  if (timersList) {
+    const prev = timersSelectedId;
+    timersList.innerHTML = "";
+    for (const row of timersRows) {
+      const opt = document.createElement("option");
+      opt.value = row.profileId + "\t" + row.id;
+      const label = (snap.showAll ? "[" + row.profileName + "] " : "") +
+        row.kind + " " + row.when + " — " + row.title + (row.enabled ? "" : " (off)");
+      opt.textContent = label;
+      timersList.appendChild(opt);
+    }
+    if (prev) {
+      for (const opt of timersList.options) {
+        if (opt.value.endsWith("\t" + prev) || opt.value === timersSelectedProfile + "\t" + prev) {
+          opt.selected = true;
+          break;
+        }
       }
     }
+  }
+  renderTimersSubnav(snap);
+}
+
+function renderTimersSubnav(snap) {
+  const list = document.querySelector("#timers-sub-list");
+  if (!list) return;
+  list.innerHTML = "";
+  for (const row of timersRows) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "profile-chip";
+    btn.setAttribute("role", "option");
+    const selected = row.id === timersSelectedId && row.profileId === (timersSelectedProfile || row.profileId);
+    btn.setAttribute("aria-selected", selected ? "true" : "false");
+    const title = document.createElement("span");
+    title.className = "profile-chip-label";
+    const label = (snap.showAll ? "[" + row.profileName + "] " : "") + (row.title || row.kind);
+    title.textContent = label + (row.enabled ? "" : " (off)");
+    btn.appendChild(title);
+    btn.title = row.kind + " " + row.when;
+    btn.addEventListener("click", () => {
+      timersSelectedId = row.id;
+      timersSelectedProfile = row.profileId;
+      fillTimersForm(row);
+      renderTimersSubnav(snap);
+      if (timersList) {
+        for (const opt of timersList.options) {
+          if (opt.value === row.profileId + "\t" + row.id) {
+            opt.selected = true;
+            break;
+          }
+        }
+      }
+    });
+    li.appendChild(btn);
+    list.appendChild(li);
   }
 }
 
@@ -1695,6 +1763,166 @@ if (ttsPlaybackRange && ttsPlaybackSeconds) {
   refreshTtsPlaybackTimeout();
 }
 
+
+/* ---- Messengers ---- */
+const messengersSubnav = document.querySelector("#messengers-subnav");
+const messengersProfile = document.querySelector("#messengers-profile");
+const messengersStorage = document.querySelector("#messengers-storage");
+const messengersStatus = document.querySelector("#messengers-status");
+const messengersError = document.querySelector("#messengers-error");
+const msgTgEnabled = document.querySelector("#msg-tg-enabled");
+const msgTgDefault = document.querySelector("#msg-tg-default");
+const msgTgReceive = document.querySelector("#msg-tg-receive");
+const msgTgVoice = document.querySelector("#msg-tg-voice");
+const msgTgChatId = document.querySelector("#msg-tg-chat-id");
+const msgTgToken = document.querySelector("#msg-tg-token");
+const msgTgTokenStatus = document.querySelector("#msg-tg-token-status");
+const msgTgSave = document.querySelector("#msg-tg-save");
+const msgTgClear = document.querySelector("#msg-tg-clear-token");
+const msgDeskDefault = document.querySelector("#msg-desk-default");
+const msgDeskReceive = document.querySelector("#msg-desk-receive");
+const msgDeskVoice = document.querySelector("#msg-desk-voice");
+const msgDeskSave = document.querySelector("#msg-desk-save");
+const messengersTelegramDetail = document.querySelector("#messengers-telegram-detail");
+const messengersDesktopDetail = document.querySelector("#messengers-desktop-detail");
+let messengersSnap = null;
+let messengersChannel = "telegram";
+
+function showMessengersError(error) {
+  if (!messengersError) return;
+  messengersError.textContent =
+    typeof error === "string" ? error : error && error.message ? error.message : "request failed";
+}
+
+function applyMessengersSnapshot(snap, statusText) {
+  messengersSnap = snap;
+  if (messengersError) messengersError.textContent = "";
+  if (messengersStatus) messengersStatus.textContent = statusText || "";
+  if (messengersProfile) {
+    messengersProfile.textContent =
+      "Profile: " + (snap.profileName || snap.profileId || "—") + " (" + (snap.profileId || "") + ")";
+  }
+  if (messengersStorage) {
+    messengersStorage.textContent =
+      "Storage: " + (snap.storageBackend || "—") + (snap.storageMessage ? " — " + snap.storageMessage : "");
+  }
+  messengersChannel = snap.selectedChannel || "telegram";
+  const isTg = messengersChannel === "telegram";
+  if (messengersTelegramDetail) {
+    messengersTelegramDetail.classList.toggle("hidden", !isTg);
+    messengersTelegramDetail.hidden = !isTg;
+  }
+  if (messengersDesktopDetail) {
+    messengersDesktopDetail.classList.toggle("hidden", isTg);
+    messengersDesktopDetail.hidden = isTg;
+  }
+  if (msgTgEnabled) msgTgEnabled.checked = !!snap.telegramEnabled;
+  if (msgTgDefault) msgTgDefault.checked = !!snap.telegramDefault;
+  if (msgTgReceive) msgTgReceive.checked = !!snap.telegramReceiveAll;
+  if (msgTgVoice) msgTgVoice.checked = !!snap.telegramVoice;
+  if (msgTgChatId) msgTgChatId.value = snap.telegramChatId || "";
+  if (msgTgTokenStatus) {
+    msgTgTokenStatus.textContent = snap.hasBotToken ? "Token: saved" : "Token: not set";
+  }
+  if (msgTgToken) msgTgToken.value = "";
+  if (msgDeskDefault) msgDeskDefault.checked = !!snap.desktopDefault;
+  if (msgDeskReceive) msgDeskReceive.checked = !!snap.desktopReceiveAll;
+  if (msgDeskVoice) msgDeskVoice.checked = !!snap.desktopVoice;
+  renderMessengersSubnav(snap);
+}
+
+function renderMessengersSubnav(snap) {
+  const list = document.querySelector("#messengers-sub-list");
+  if (!list) return;
+  list.innerHTML = "";
+  for (const row of snap.channels || []) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "profile-chip";
+    btn.setAttribute("role", "option");
+    btn.setAttribute("aria-selected", row.id === (snap.selectedChannel || "") ? "true" : "false");
+    const title = document.createElement("span");
+    title.className = "profile-chip-label";
+    title.textContent = row.label + (row.bound ? "" : " · unbound");
+    btn.appendChild(title);
+    btn.addEventListener("click", () => refreshMessengers(snap.profileId, row.id));
+    li.appendChild(btn);
+    list.appendChild(li);
+  }
+}
+
+async function refreshMessengers(profileId, channel) {
+  try {
+    const args = {};
+    if (profileId) args.profileId = profileId;
+    if (channel) args.selectedChannel = channel;
+    applyMessengersSnapshot(await invoke("messengers_snapshot", args), "");
+  } catch (error) {
+    showMessengersError(error);
+  }
+}
+
+async function saveMessengers(fromDesktop) {
+  if (!messengersSnap) return;
+  try {
+    const args = {
+      profileId: messengersSnap.profileId,
+      telegramEnabled: msgTgEnabled ? !!msgTgEnabled.checked : false,
+      telegramDefault: msgTgDefault ? !!msgTgDefault.checked : false,
+      telegramReceiveAll: msgTgReceive ? !!msgTgReceive.checked : false,
+      telegramVoice: msgTgVoice ? !!msgTgVoice.checked : false,
+      telegramChatId: msgTgChatId ? msgTgChatId.value : "",
+      desktopDefault: msgDeskDefault ? !!msgDeskDefault.checked : true,
+      desktopReceiveAll: msgDeskReceive ? !!msgDeskReceive.checked : true,
+      desktopVoice: msgDeskVoice ? !!msgDeskVoice.checked : true,
+      botToken: msgTgToken && msgTgToken.value ? msgTgToken.value : null,
+      clearBotToken: false,
+    };
+    if (fromDesktop) {
+      // keep telegram fields from snap
+      args.telegramEnabled = !!messengersSnap.telegramEnabled;
+      args.telegramDefault = !!messengersSnap.telegramDefault;
+      args.telegramReceiveAll = !!messengersSnap.telegramReceiveAll;
+      args.telegramVoice = !!messengersSnap.telegramVoice;
+      args.telegramChatId = messengersSnap.telegramChatId || "";
+      args.botToken = null;
+    }
+    applyMessengersSnapshot(await invoke("messengers_save", { args }), "Saved.");
+  } catch (error) {
+    showMessengersError(error);
+  }
+}
+
+if (msgTgSave) msgTgSave.addEventListener("click", () => saveMessengers(false));
+if (msgDeskSave) msgDeskSave.addEventListener("click", () => saveMessengers(true));
+if (msgTgClear) {
+  msgTgClear.addEventListener("click", async () => {
+    try {
+      applyMessengersSnapshot(
+        await invoke("messengers_clear_token", {
+          profileId: messengersSnap ? messengersSnap.profileId : null,
+        }),
+        "Token cleared."
+      );
+    } catch (error) {
+      showMessengersError(error);
+    }
+  });
+}
+
+const timersSubnav = document.querySelector("#timers-subnav");
+const skillsSubnav = document.querySelector("#skills-subnav");
+const timersSubNew = document.querySelector("#timers-sub-new");
+const skillsSubNew = document.querySelector("#skills-sub-new");
+if (timersSubNew && timersNewBtn) {
+  timersSubNew.addEventListener("click", () => timersNewBtn.click());
+}
+if (skillsSubNew && skillsNewBtn) {
+  skillsSubNew.addEventListener("click", () => skillsNewBtn.click());
+}
+
+
 function showPane(name) {
   for (const pane of panes) {
     const section = document.querySelector(`#pane-${pane}`);
@@ -1711,6 +1939,9 @@ function showPane(name) {
     }
   }
   setProfilesSubnavVisible(name === "profiles");
+  setSubnavVisible(timersSubnav, name === "timers");
+  setSubnavVisible(skillsSubnav, name === "skills");
+  setSubnavVisible(messengersSubnav, name === "messengers");
   if (name === "profiles") {
     if (!profilesLoaded) {
       loadProfiles(selectedProfileId);
@@ -1730,6 +1961,9 @@ function showPane(name) {
   if (name === "timers") {
     refreshTimers();
   }
+  if (name === "messengers") {
+    refreshMessengers(null, messengersChannel || "telegram");
+  }
 
 }
 
@@ -1741,6 +1975,15 @@ for (const pane of panes) {
 
 applyTextSize("x-small");
 refreshUiPrefs();
+
+// Expandable left-nav lists replace the in-pane <select> lists for Timers/Skills.
+(function hideLegacyLists() {
+  const timersField = timersList && timersList.closest("label.field");
+  if (timersField) timersField.hidden = true;
+  const skillsField = skillsList && skillsList.closest("label.field");
+  if (skillsField) skillsField.hidden = true;
+})();
+
 showPane("status");
 refresh();
 setInterval(refresh, 1000);

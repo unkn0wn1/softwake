@@ -113,6 +113,22 @@ identifier = "allow-provider-opt-in-plaintext"
 description = "Opt in to a local plaintext secret file. The command writes no key."
 commands.allow = ["provider_opt_in_plaintext"]
 
+
+[[permission]]
+identifier = "allow-messengers-snapshot"
+description = "Read Messengers Settings. The snapshot has no bot token."
+commands.allow = ["messengers_snapshot"]
+
+[[permission]]
+identifier = "allow-messengers-save"
+description = "Save Messengers channel flags and optional Telegram bot token."
+commands.allow = ["messengers_save"]
+
+[[permission]]
+identifier = "allow-messengers-clear-token"
+description = "Clear the saved Telegram bot token."
+commands.allow = ["messengers_clear_token"]
+
 [[permission]]
 identifier = "allow-email-snapshot"
 description = "Read email Settings. The snapshot has no password."

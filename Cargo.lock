@@ -3948,6 +3948,7 @@ dependencies = [
  "softwake-voice",
  "softwake-wake",
  "thiserror 2.0.19",
+ "ureq",
 ]
 
 [[package]]

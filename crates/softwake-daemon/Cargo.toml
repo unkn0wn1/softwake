@@ -31,6 +31,7 @@ softwake-voice.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+ureq = { version = "2.12", optional = true }
 
 [dev-dependencies]
 serde_json.workspace = true
@@ -38,7 +39,7 @@ serde_json.workspace = true
 [features]
 default = []
 # Real chat completion for typed ask/chat. Off in CI and the default binary.
-live-http = ["softwake-providers/live-http"]
+live-http = ["softwake-providers/live-http", "dep:ureq"]
 # Real PipeWire microphone capture for serve. Off in CI. Linux only.
 pipewire-capture = ["softwake-audio/pipewire-native"]
 # Trait-shaped WASAPI stub for Windows builds. Off in CI; does not open a device.

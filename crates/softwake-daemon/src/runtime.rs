@@ -369,6 +369,90 @@ impl Runtime {
         self.ask_disk(text)
     }
 
+    /// Answer a messenger inbound without changing voice state or speaking locally.
+    ///
+    /// Uses the open session when awake; otherwise a oneshot completion with the
+    /// applied (or pack) soul instructions. Does not run shell/schedule heuristics.
+    pub(crate) fn messenger_ask(&mut self, text: &str) -> Result<String, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("ask needs text".into());
+        }
+        if self.session.phase() == softwake_session::SessionPhase::Open {
+            return self.messenger_ask_session(text);
+        }
+        self.messenger_ask_oneshot(text)
+    }
+
+    fn messenger_ask_session(&mut self, text: &str) -> Result<String, String> {
+        let ready = crate::chat::load_disk_chat()?;
+        let crate::chat::DiskChat {
+            prepared,
+            bearer,
+            budget,
+            ..
+        } = ready;
+        crate::chat::gate_live_http(&prepared, &bearer, text)?;
+        let call = prepared.clone();
+        let call_c = prepared.clone();
+        let bearer_c = bearer.clone();
+        let memory =
+            crate::chat::appendix_for_ask(text, Option::<&softwake_memory::MockMemory>::None);
+        let tools_settings = self.hands.tools_settings();
+        let appendix = crate::chat::system_appendix(&memory, &tools_settings);
+        let tools = softwake_tools::advertise_chat_tools(&tools_settings);
+        let trace = self.trace_context();
+        let (system, _context) = crate::chat::prepare_ask_session(
+            &mut self.session,
+            text,
+            &appendix,
+            budget,
+            move |older| crate::chat::finish_prepared_compact(&call_c, &bearer_c, older),
+            trace,
+        )
+        .map_err(|e| e.sentence().to_owned())?;
+        let messages = self.session.messages().to_vec();
+        let loop_ok = {
+            let hands = &mut self.hands;
+            let machine = &self.machine;
+            crate::chat::finish_prepared_chat_tools(
+                &call,
+                &bearer,
+                &system,
+                &messages,
+                &tools,
+                |name, args| {
+                    crate::tool_loop::invoke_from_request(hands.request(machine, name, args))
+                },
+            )
+        };
+        match loop_ok {
+            Ok(crate::tool_loop::ToolLoopOk::Message(reply)) => {
+                let _ = self.session.push_assistant_turn(&reply);
+                Ok(reply)
+            }
+            Ok(crate::tool_loop::ToolLoopOk::Pending { message, .. }) => {
+                let _ = self.session.push_assistant_turn(&message);
+                Ok(message)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn messenger_ask_oneshot(&mut self, text: &str) -> Result<String, String> {
+        let ready = crate::chat::load_disk_chat()?;
+        let system = if let Some(applied) = self.soul.applied_instructions() {
+            applied.to_owned()
+        } else if let Some(pack) = self.soul.pack() {
+            pack.render_instructions_as(&self.soul.agent_name())
+        } else {
+            return Err("soul pack is not ready".into());
+        };
+        crate::chat::gate_live_http(&ready.prepared, &ready.bearer, text)?;
+        let turns = vec![softwake_session::SessionMessage::user(text)];
+        crate::chat::finish_prepared_chat(&ready.prepared, &ready.bearer, &system, &turns)
+    }
+
     /// Sleep / hibernate / fuzzy-wake confirm, before shell intent and the model.
     fn route_mode_ask(&mut self, text: &str) -> Option<Outcome> {
         self.expire_mode_confirm();
@@ -475,9 +559,18 @@ impl Runtime {
     /// Fire a schedule reminder: notify sink + fixed TTS + HUD status line.
     ///
     /// Runs in any voice state while softwaked is up.
-    pub(crate) fn fire_schedule_reminder(&mut self, notify_line: String, speak_line: String) {
+    pub(crate) fn fire_schedule_reminder(
+        &mut self,
+        profile_id: &str,
+        notify_line: String,
+        speak_line: String,
+    ) {
         self.hands.push_notification(notify_line.clone());
-        self.speak_fixed_line(&speak_line);
+        // Desktop TTS at most once; Telegram fan-out is independent (ADR-0029).
+        if crate::telegram::desktop_wants_timer_voice(profile_id) {
+            self.speak_fixed_line(&speak_line);
+        }
+        crate::telegram::fanout_timer(profile_id, &speak_line);
         self.retain_status_text(Some(speak_line), Some(notify_line));
     }
 
@@ -1087,7 +1180,14 @@ impl Runtime {
             return outcome;
         }
 
-        self.speak_if_configured(&reply);
+        let profile_id =
+            crate::hud_chat_write::active_profile_id().unwrap_or_else(|| "default".into());
+        if crate::telegram::desktop_wants_ask_voice(&profile_id) {
+            self.speak_if_configured(&reply);
+        } else {
+            self.last_speech_note = None;
+        }
+        crate::telegram::fanout_ask_reply(&profile_id, &reply);
         let mut detail = self.last_speech_note.clone();
         if context.compacted {
             let compact_note = format!(

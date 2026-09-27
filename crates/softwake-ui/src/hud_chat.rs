@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use softwake_soul::{
     ensure_migrated, list_profiles, load_app_config, profile_pack_dir, resolve_config_dir,
 };
+use softwake_tools::{resolve_hud_chat_inbox, take_hud_inbox};
 
 use crate::ui_vault::{self, DataKey, VaultMode};
 
@@ -312,6 +313,31 @@ pub fn migrate_all_profiles(mode: VaultMode, key: Option<&DataKey>) -> Result<()
     migrate_all_profiles_at(&config, mode, key)
 }
 
+/// Merge softwaked inbox turns (encrypted-vault path) into `turns` and persist.
+fn merge_inbox(profile_id: &str, turns: &mut Vec<HudTurn>, mode: VaultMode, key: Option<&DataKey>) {
+    let Ok(path) = resolve_hud_chat_inbox(profile_id) else {
+        return;
+    };
+    let Ok(pending) = take_hud_inbox(&path) else {
+        return;
+    };
+    if pending.is_empty() {
+        return;
+    }
+    for turn in pending {
+        turns.push(HudTurn {
+            role: turn.role,
+            name: turn.name,
+            text: turn.text,
+            ts: turn.ts,
+            error: turn.error,
+            note: turn.note,
+        });
+    }
+    *turns = truncate_turns(std::mem::take(turns));
+    let _ = save_turns(profile_id, turns.clone(), mode, key);
+}
+
 /// Snapshot for the HUD / Settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HudChatSnapshot {
@@ -337,7 +363,13 @@ pub fn hud_chat_snapshot(
     if meta.mode == VaultMode::Passphrase && key.is_none() {
         return Err("chat vault is locked".to_owned());
     }
-    let turns = load_turns(&id, key)?;
+    let mut turns = load_turns(&id, key)?;
+    let mode = if meta.mode == VaultMode::Unset {
+        VaultMode::Plaintext
+    } else {
+        meta.mode
+    };
+    merge_inbox(&id, &mut turns, mode, key);
     Ok(HudChatSnapshot {
         profile_id: id,
         turns,
