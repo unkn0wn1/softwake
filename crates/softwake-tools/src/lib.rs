@@ -14,11 +14,19 @@
 //! aliases, then may spawn `/bin/sh -c` via [`shell`]. This crate still does not spawn on invoke.
 
 mod chat_schema;
+mod messengers;
 mod schedule;
 mod settings;
 mod shell;
 
 pub use chat_schema::{advertise_chat_tools, tool_args_from_json};
+pub use messengers::{
+    CHANNEL_DESKTOP, CHANNEL_TELEGRAM, ChannelFlags, HUD_CHAT_INBOX_FILE_NAME, HudChatInbox,
+    InboxTurn, MESSENGERS_FILE_NAME, MessengersError, MessengersFile, TelegramChannel,
+    append_hud_inbox, find_profile_for_telegram_chat, load_messengers,
+    resolve_active_messengers_file, resolve_hud_chat_inbox, resolve_messengers_file,
+    save_messengers, take_hud_inbox, wants_ask_fanout, wants_timer_push,
+};
 pub use schedule::{
     CATCH_UP_GRACE_MS, CronExpr, MAX_ENTRIES, SCHEDULES_FILE_NAME, ScheduleAction, ScheduleEntry,
     ScheduleError, ScheduleKind, SchedulesFile, TIMEZONE_LOCAL, advance_after_fire, apply_action,

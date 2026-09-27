@@ -50,7 +50,7 @@ fn tick_profile(runtime: &mut Runtime, profile_id: &str, now: u64) -> usize {
             continue;
         }
         if should_fire(entry, now) {
-            fire_one(runtime, entry);
+            fire_one(runtime, profile_id, entry);
             if advance_after_fire(entry, now).is_ok() {
                 changed = true;
                 fired += 1;
@@ -67,8 +67,8 @@ fn tick_profile(runtime: &mut Runtime, profile_id: &str, now: u64) -> usize {
     fired
 }
 
-fn fire_one(runtime: &mut Runtime, entry: &ScheduleEntry) {
+fn fire_one(runtime: &mut Runtime, profile_id: &str, entry: &ScheduleEntry) {
     let notify = fire_notify_line(entry);
     let speak = fire_speak_line(entry);
-    runtime.fire_schedule_reminder(notify, speak);
+    runtime.fire_schedule_reminder(profile_id, notify, speak);
 }

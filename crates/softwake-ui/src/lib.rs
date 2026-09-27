@@ -13,6 +13,7 @@ mod ensure_daemon;
 mod hud_chat;
 mod hud_pos;
 mod kws_prefs;
+mod messengers;
 mod oauth_open;
 mod pack;
 mod playback_prefs;
@@ -85,6 +86,9 @@ pub fn run() {
             providers::provider_set_context_limit,
             providers::provider_set_compact_at,
             providers::provider_opt_in_plaintext,
+            messengers::messengers_snapshot,
+            messengers::messengers_save,
+            messengers::messengers_clear_token,
             email::email_snapshot,
             email::email_save,
             email::email_clear_password,
@@ -473,6 +477,9 @@ mod tests {
         "provider_set_context_limit",
         "provider_set_compact_at",
         "provider_opt_in_plaintext",
+        "messengers_snapshot",
+        "messengers_save",
+        "messengers_clear_token",
         "email_snapshot",
         "email_save",
         "email_clear_password",

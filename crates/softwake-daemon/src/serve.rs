@@ -100,6 +100,7 @@ pub(crate) fn spawn(
     #[cfg(test)]
     let shared_for_handle = Arc::clone(&shared);
     spawn_schedule_tick(Arc::clone(&shared));
+    spawn_telegram_poll(Arc::clone(&shared));
     let listener = Listener::bind(&path)?;
     if listener.replaced_stale() {
         eprintln!("softwaked: removed stale socket {}", path.display());
@@ -618,6 +619,37 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
+}
+
+fn spawn_telegram_poll(shared: Arc<Shared>) {
+    let _ = thread::Builder::new()
+        .name("softwake-telegram".to_owned())
+        .spawn(move || {
+            loop {
+                // Long-poll blocks up to POLL_TIMEOUT; without a token, sleep briefly.
+                let had_token = crate::telegram::load_bot_token().is_some();
+                if !had_token {
+                    thread::sleep(std::time::Duration::from_secs(5));
+                    continue;
+                }
+                // Hold the runtime lock only while answering; getUpdates blocks outside.
+                let updates = {
+                    // poll_once calls ask synchronously; lock inside ask closure.
+                    let shared_ask = Arc::clone(&shared);
+                    crate::telegram::poll_once(&mut |text| {
+                        let mut runtime = shared_ask
+                            .runtime
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        runtime.messenger_ask(text)
+                    })
+                };
+                if updates == 0 {
+                    // getUpdates already waited; tiny yield when empty/error.
+                    thread::sleep(std::time::Duration::from_millis(200));
+                }
+            }
+        });
 }
 
 fn spawn_schedule_tick(shared: Arc<Shared>) {

@@ -25,6 +25,7 @@ const SECRET_KEYS: &[&str] = &[
     "openrouter_api_key",
     "openai_compatible_api_key",
     "email_smtp_password",
+    "telegram_bot_token",
     "xai_oauth",
     "google_connections",
     "microsoft_connections",
@@ -255,6 +256,7 @@ pub(crate) fn write_plaintext(path: &Path, bag: &SecretBag) -> Result<(), Secret
         openrouter_api_key: bag.openrouter_api_key.clone(),
         openai_compatible_api_key: bag.openai_compatible_api_key.clone(),
         email_smtp_password: bag.email_smtp_password.clone(),
+        telegram_bot_token: bag.telegram_bot_token.clone(),
         xai_oauth: bag.xai_oauth.clone(),
         google_connections: bag.google_connections.clone(),
         microsoft_connections: bag.microsoft_connections.clone(),
@@ -302,6 +304,8 @@ struct PlaintextFile {
     openai_compatible_api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     email_smtp_password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    telegram_bot_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     xai_oauth: Option<OAuthTokenSet>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

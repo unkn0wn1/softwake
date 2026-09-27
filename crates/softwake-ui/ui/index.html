@@ -19,7 +19,19 @@
         <button type="button" class="nav" id="nav-providers" data-pane="providers">Providers</button>
         <button type="button" class="nav" id="nav-tools" data-pane="tools">Tools</button>
         <button type="button" class="nav" id="nav-timers" data-pane="timers">Timers</button>
+        <div id="timers-subnav" class="nav-sub hidden" hidden>
+          <ul id="timers-sub-list" class="nav-sub-list" role="listbox" aria-label="Timers"></ul>
+          <button type="button" class="nav-sub-action btn-compact" id="timers-sub-new" title="New timer">+ New</button>
+        </div>
         <button type="button" class="nav" id="nav-skills" data-pane="skills">Skills</button>
+        <div id="skills-subnav" class="nav-sub hidden" hidden>
+          <ul id="skills-sub-list" class="nav-sub-list" role="listbox" aria-label="Skills"></ul>
+          <button type="button" class="nav-sub-action btn-compact" id="skills-sub-new" title="New skill">+ New</button>
+        </div>
+        <button type="button" class="nav" id="nav-messengers" data-pane="messengers">Messengers</button>
+        <div id="messengers-subnav" class="nav-sub hidden" hidden>
+          <ul id="messengers-sub-list" class="nav-sub-list" role="listbox" aria-label="Channels"></ul>
+        </div>
         <button type="button" class="nav" id="nav-email" data-pane="email">Email</button>
         <button type="button" class="nav" id="nav-status" data-pane="status" aria-current="page">Status</button>
       </nav>
@@ -368,10 +380,11 @@
             Webhook wake is not in this build.
           </p>
           <p id="skills-dir" class="meta">Directory: …</p>
-          <label class="field">
+          <label class="field" hidden>
             <span>Skills</span>
             <select id="skills-list" aria-label="Skill list"></select>
           </label>
+          <p class="meta">Pick a skill in the left sub-list (same pattern as Profiles).</p>
           <label class="field">
             <span>Title</span>
             <input id="skills-title-input" type="text" maxlength="120" autocomplete="off" spellcheck="false" placeholder="Skill title" />
@@ -396,6 +409,73 @@
           </div>
           <p id="skills-status" class="meta" aria-live="polite"></p>
           <p id="skills-error" class="error" role="alert"></p>
+        </section>
+
+
+        <section id="pane-messengers" class="pane glass hidden" hidden aria-labelledby="messengers-title">
+          <h2 id="messengers-title">Messengers</h2>
+          <p class="meta">
+            Link chat channels to Softwake profiles. Telegram shares the same HUD chat history
+            (<code>hud-chat.json</code>). Bot token stays in the secret bag — never paste it into git.
+            Message the bot once to bind <code>chat_id</code>. See ADR-0029.
+          </p>
+          <p id="messengers-profile" class="meta">Profile: …</p>
+          <p id="messengers-storage" class="meta">Storage: …</p>
+
+          <div id="messengers-telegram-detail">
+            <h3 class="subhead">Telegram</h3>
+            <label class="field row-check">
+              <input type="checkbox" id="msg-tg-enabled" />
+              <span>Enabled</span>
+            </label>
+            <label class="field row-check">
+              <input type="checkbox" id="msg-tg-default" />
+              <span>Default (primary channel)</span>
+            </label>
+            <label class="field row-check">
+              <input type="checkbox" id="msg-tg-receive" />
+              <span>Receive all messages (timers / agent pushes)</span>
+            </label>
+            <label class="field row-check">
+              <input type="checkbox" id="msg-tg-voice" />
+              <span>Voice (TTS audio + text on outbound)</span>
+            </label>
+            <label class="field">
+              <span>Chat id</span>
+              <input id="msg-tg-chat-id" type="text" autocomplete="off" spellcheck="false" placeholder="Bound on first message" />
+            </label>
+            <label class="field">
+              <span>Bot token</span>
+              <input id="msg-tg-token" type="password" autocomplete="new-password" placeholder="Leave blank to keep" />
+            </label>
+            <p id="msg-tg-token-status" class="meta">Token: …</p>
+            <div class="row row-compact">
+              <button type="button" class="btn-primary btn-compact" id="msg-tg-save">Save</button>
+              <button type="button" class="btn-compact" id="msg-tg-clear-token">Clear token</button>
+            </div>
+          </div>
+
+          <div id="messengers-desktop-detail" class="hidden" hidden>
+            <h3 class="subhead">Desktop HUD</h3>
+            <label class="field row-check">
+              <input type="checkbox" id="msg-desk-default" />
+              <span>Default (primary channel)</span>
+            </label>
+            <label class="field row-check">
+              <input type="checkbox" id="msg-desk-receive" />
+              <span>Receive all messages</span>
+            </label>
+            <label class="field row-check">
+              <input type="checkbox" id="msg-desk-voice" />
+              <span>Voice (local TTS)</span>
+            </label>
+            <div class="row row-compact">
+              <button type="button" class="btn-primary btn-compact" id="msg-desk-save">Save</button>
+            </div>
+          </div>
+
+          <p id="messengers-status" class="meta" aria-live="polite"></p>
+          <p id="messengers-error" class="error" role="alert"></p>
         </section>
 
         <section id="pane-email" class="pane glass hidden" hidden aria-labelledby="email-title">
