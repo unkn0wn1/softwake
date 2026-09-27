@@ -253,6 +253,46 @@ impl Runtime {
         }
     }
 
+    /// Authenticated webhook wake (ADR-0038): sleep→awake, hibernate→409, optional ask.
+    pub(crate) fn webhook_wake(
+        &mut self,
+        message: Option<&str>,
+    ) -> crate::webhook::WebhookHttpResult {
+        use serde_json::json;
+        use softwake_ipc::ResponseBody;
+        use softwake_state::VoiceState;
+
+        match self.machine.state() {
+            VoiceState::Hibernate => crate::webhook::WebhookHttpResult {
+                status: 409,
+                body: json!({
+                    "ok": false,
+                    "state": "hibernate",
+                    "detail": "hibernate refuses webhook wake; use ctl resume or the UI, then retry",
+                }),
+                events: Vec::new(),
+            },
+            VoiceState::Sleep => {
+                let outcome = self.wake_phrase();
+                match &outcome.body {
+                    ResponseBody::Ok { .. } => {
+                        finish_webhook_message(self, message, outcome.events)
+                    }
+                    ResponseBody::Err { error } => crate::webhook::WebhookHttpResult {
+                        status: 422,
+                        body: json!({
+                            "ok": false,
+                            "state": "sleep",
+                            "detail": error.to_string(),
+                        }),
+                        events: Vec::new(),
+                    },
+                }
+            }
+            VoiceState::Awake => finish_webhook_message(self, message, Vec::new()),
+        }
+    }
+
     /// Enter awake from a wake phrase when the loaded pack is valid.
     ///
     /// An invalid pack does not change the voice state. The pack applied here
@@ -2492,6 +2532,53 @@ fn tool_ipc_error(error: &DispatchError) -> IpcError {
         DispatchError::InvalidArgs { .. }
         | DispatchError::Connector { .. }
         | DispatchError::Shell { .. } => IpcError::protocol(error.to_string()),
+    }
+}
+
+fn finish_webhook_message(
+    runtime: &mut Runtime,
+    message: Option<&str>,
+    events: Vec<WireEvent>,
+) -> crate::webhook::WebhookHttpResult {
+    use serde_json::json;
+    let state = wire_state(runtime.machine.state()).as_str();
+    let Some(text) = message else {
+        return crate::webhook::WebhookHttpResult {
+            status: 200,
+            body: json!({
+                "ok": true,
+                "state": state,
+                "message_handled": false,
+            }),
+            events,
+        };
+    };
+    match runtime.messenger_ask(text) {
+        Ok(reply) => {
+            let preview: String = reply.chars().take(240).collect();
+            crate::webhook::WebhookHttpResult {
+                status: 200,
+                body: json!({
+                    "ok": true,
+                    "state": "awake",
+                    "message_handled": true,
+                    "message_ok": true,
+                    "reply_preview": preview,
+                }),
+                events,
+            }
+        }
+        Err(detail) => crate::webhook::WebhookHttpResult {
+            status: 200,
+            body: json!({
+                "ok": true,
+                "state": "awake",
+                "message_handled": true,
+                "message_ok": false,
+                "detail": detail,
+            }),
+            events,
+        },
     }
 }
 

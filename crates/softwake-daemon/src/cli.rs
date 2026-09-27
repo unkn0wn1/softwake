@@ -16,7 +16,7 @@ use softwake_state::{CooldownConfig, Machine};
 use softwake_wake::PhraseTable;
 
 use crate::capture::{self, CaptureKind};
-use crate::ctl::CtlAction;
+use crate::ctl::{CtlAction, WebhookCtl, WebhookSecretCtl};
 use crate::demo::Demo;
 use crate::{ctl, serve};
 
@@ -205,6 +205,10 @@ Usage:
   softwaked ctl ask TEXT... send one line while the daemon is awake
   softwaked ctl chat TEXT...
                             same socket message as ctl ask
+  softwaked ctl webhook [status|enable|disable|port N]
+                            local webhook wake config (no daemon socket)
+  softwaked ctl webhook-secret set TOKEN | generate | clear
+                            store/rotate webhook bearer secret in the secret bag
   softwaked --help          print this help
 
 The demo reads typed commands only and prints "> " before each line.
@@ -288,7 +292,10 @@ do not run until `ctl confirm-tool ID`. Confirming `email_send` appends one
 in-memory message. `ctl cancel-tool ID` drops the pending call. `shell` is
 denied. The result is printed after the status lines. A refusal names
 the reason. `ctl wake` enters awake when the four-file pack is valid.
-`ctl resume` still lands in sleep. Serve does not wake from the microphone."#
+`ctl resume` still lands in sleep. Serve does not wake from the microphone.
+
+`ctl webhook` / `ctl webhook-secret` configure the authenticated local wake HTTP
+endpoint (ADR-0038) without talking to the daemon socket."#
 }
 
 fn print_help() {
@@ -460,10 +467,14 @@ fn parse_ctl(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
     Ok(Mode::Ctl { socket, command })
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "ctl subcommand table stays one match"
+)]
 fn ctl_command(positional: &[String]) -> Result<CtlAction, String> {
     match positional {
         [] => Err(
-            "ctl needs a command: status, hibernate, resume, wake, sleep, reload-soul, reload-kws, reload-utterance, reload-playback, voice-test, tool, confirm-tool, cancel-tool, ask, chat"
+            "ctl needs a command: status, hibernate, resume, wake, sleep, reload-soul, reload-kws, reload-utterance, reload-playback, voice-test, tool, confirm-tool, cancel-tool, ask, chat, webhook, webhook-secret"
                 .to_owned(),
         ),
         [name] if name == "tool" => Err("ctl tool needs a tool name".to_owned()),
@@ -508,6 +519,67 @@ fn ctl_command(positional: &[String]) -> Result<CtlAction, String> {
                 Ok(CtlAction::Chat { text })
             }
         }
+        [name] if name == "webhook" => Ok(CtlAction::Webhook {
+            action: WebhookCtl::Status,
+        }),
+        [name, sub] if name == "webhook" => match sub.as_str() {
+            "status" => Ok(CtlAction::Webhook {
+                action: WebhookCtl::Status,
+            }),
+            "enable" => Ok(CtlAction::Webhook {
+                action: WebhookCtl::Enable,
+            }),
+            "disable" => Ok(CtlAction::Webhook {
+                action: WebhookCtl::Disable,
+            }),
+            "port" => Err("ctl webhook port needs a port number".to_owned()),
+            other => Err(format!(
+                "ctl webhook expects status, enable, disable, or port (got {other})"
+            )),
+        },
+        [name, sub, port] if name == "webhook" && sub == "port" => {
+            let port: u16 = port
+                .parse()
+                .map_err(|_| format!("ctl webhook port needs 1..=65535 (got {port})"))?;
+            if port == 0 {
+                return Err("ctl webhook port needs 1..=65535 (got 0)".to_owned());
+            }
+            Ok(CtlAction::Webhook {
+                action: WebhookCtl::Port { port },
+            })
+        }
+        [name, _, _, extra, ..] if name == "webhook" => {
+            Err(format!("ctl webhook takes at most two args (got extra {extra})"))
+        }
+        [name] if name == "webhook-secret" => Err(
+            "ctl webhook-secret needs set <token>, generate, or clear".to_owned(),
+        ),
+        [name, sub] if name == "webhook-secret" => match sub.as_str() {
+            "generate" => Ok(CtlAction::WebhookSecret {
+                action: WebhookSecretCtl::Generate,
+            }),
+            "clear" => Ok(CtlAction::WebhookSecret {
+                action: WebhookSecretCtl::Clear,
+            }),
+            "set" => Err("ctl webhook-secret set needs a token".to_owned()),
+            other => Err(format!(
+                "ctl webhook-secret expects set, generate, or clear (got {other})"
+            )),
+        },
+        [name, sub, token, rest @ ..] if name == "webhook-secret" && sub == "set" => {
+            let mut parts = vec![token.clone()];
+            parts.extend(rest.iter().cloned());
+            let token = parts.join(" ");
+            if token.trim().is_empty() {
+                return Err("ctl webhook-secret set needs a token".to_owned());
+            }
+            Ok(CtlAction::WebhookSecret {
+                action: WebhookSecretCtl::Set { token },
+            })
+        }
+        [name, _, _, extra, ..] if name == "webhook-secret" => Err(format!(
+            "ctl webhook-secret generate|clear take no extra args (got {extra})"
+        )),
         [name] => CtlAction::parse(name).ok_or_else(|| format!("unknown ctl argument {name}")),
         [first, second, ..] => {
             if CtlAction::parse(first).is_none() {
@@ -549,7 +621,7 @@ mod tests {
         Mode, debug_log_requested, help_text, merge_serve_verbosity, parse_args, status_line,
         strip_line_ending,
     };
-    use crate::ctl::CtlAction;
+    use crate::ctl::{CtlAction, WebhookCtl, WebhookSecretCtl};
 
     #[test]
     fn no_args_is_the_status_mode() {
@@ -979,6 +1051,71 @@ mod tests {
                 "status".to_owned()
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn webhook_ctl_parses_status_enable_port_and_secret() {
+        assert_eq!(
+            parse_args(["ctl".to_owned(), "webhook".to_owned()]),
+            Ok(Mode::Ctl {
+                socket: None,
+                command: CtlAction::Webhook {
+                    action: WebhookCtl::Status,
+                },
+            })
+        );
+        assert_eq!(
+            parse_args(["ctl".to_owned(), "webhook".to_owned(), "enable".to_owned()]),
+            Ok(Mode::Ctl {
+                socket: None,
+                command: CtlAction::Webhook {
+                    action: WebhookCtl::Enable,
+                },
+            })
+        );
+        assert_eq!(
+            parse_args([
+                "ctl".to_owned(),
+                "webhook".to_owned(),
+                "port".to_owned(),
+                "9090".to_owned()
+            ]),
+            Ok(Mode::Ctl {
+                socket: None,
+                command: CtlAction::Webhook {
+                    action: WebhookCtl::Port { port: 9090 },
+                },
+            })
+        );
+        assert_eq!(
+            parse_args([
+                "ctl".to_owned(),
+                "webhook-secret".to_owned(),
+                "set".to_owned(),
+                "s3cret".to_owned()
+            ]),
+            Ok(Mode::Ctl {
+                socket: None,
+                command: CtlAction::WebhookSecret {
+                    action: WebhookSecretCtl::Set {
+                        token: "s3cret".to_owned(),
+                    },
+                },
+            })
+        );
+        assert_eq!(
+            parse_args([
+                "ctl".to_owned(),
+                "webhook-secret".to_owned(),
+                "generate".to_owned()
+            ]),
+            Ok(Mode::Ctl {
+                socket: None,
+                command: CtlAction::WebhookSecret {
+                    action: WebhookSecretCtl::Generate,
+                },
+            })
         );
     }
 

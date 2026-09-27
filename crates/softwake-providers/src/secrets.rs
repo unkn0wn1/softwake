@@ -90,6 +90,9 @@ pub struct SecretBag {
     /// Telegram Bot API token (Messengers). Never logged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telegram_bot_token: Option<String>,
+    /// Shared secret for authenticated webhook wake (ADR-0038). Never logged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_secret: Option<String>,
     /// Google account connections (Email OAuth). Zero or more.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub google_connections: Vec<AccountConnection>,
@@ -147,6 +150,10 @@ impl std::fmt::Debug for SecretBag {
                 "telegram_bot_token",
                 &redact_secret(self.telegram_bot_token.as_ref()),
             )
+            .field(
+                "webhook_secret",
+                &redact_secret(self.webhook_secret.as_ref()),
+            )
             .field("google_connections", &self.google_connections)
             .field("microsoft_connections", &self.microsoft_connections)
             .field(
@@ -185,6 +192,7 @@ impl SecretBag {
             openai_compatible_api_key: None,
             email_smtp_password: None,
             telegram_bot_token: None,
+            webhook_secret: None,
             google_connections: Vec::new(),
             microsoft_connections: Vec::new(),
             active_google_connection_id: None,
@@ -906,6 +914,7 @@ pub(crate) fn bag_has_secret(bag: &SecretBag) -> bool {
         || filled(bag.openai_compatible_api_key.as_ref())
         || filled(bag.email_smtp_password.as_ref())
         || filled(bag.telegram_bot_token.as_ref())
+        || filled(bag.webhook_secret.as_ref())
         || bag.xai_oauth.as_ref().is_some_and(|tokens| {
             !tokens.access_token.is_empty() || !tokens.refresh_token.is_empty()
         })
@@ -1063,6 +1072,8 @@ pub(crate) struct SecretPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) telegram_bot_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) webhook_secret: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) xai_oauth: Option<OAuthTokenSet>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) google_connections: Vec<AccountConnection>,
@@ -1084,6 +1095,7 @@ pub(crate) fn encode_payload(bag: &SecretBag) -> Result<String, SecretStoreError
         openai_compatible_api_key: bag.openai_compatible_api_key.clone(),
         email_smtp_password: bag.email_smtp_password.clone(),
         telegram_bot_token: bag.telegram_bot_token.clone(),
+        webhook_secret: bag.webhook_secret.clone(),
         xai_oauth: bag.xai_oauth.clone(),
         google_connections: bag.google_connections.clone(),
         microsoft_connections: bag.microsoft_connections.clone(),
@@ -1117,6 +1129,7 @@ pub(crate) fn decode_payload(path: &Path, json: &str) -> Result<SecretBag, Secre
         openai_compatible_api_key: payload.openai_compatible_api_key,
         email_smtp_password: payload.email_smtp_password,
         telegram_bot_token: payload.telegram_bot_token,
+        webhook_secret: payload.webhook_secret,
         google_connections: payload.google_connections,
         microsoft_connections: payload.microsoft_connections,
         active_google_connection_id: payload.active_google_connection_id,

@@ -101,6 +101,7 @@ pub(crate) fn spawn(
     let shared_for_handle = Arc::clone(&shared);
     spawn_schedule_tick(Arc::clone(&shared));
     spawn_telegram_poll(Arc::clone(&shared));
+    crate::webhook::spawn(Arc::clone(&shared));
     let listener = Listener::bind(&path)?;
     if listener.replaced_stale() {
         eprintln!("softwaked: removed stale socket {}", path.display());
@@ -244,8 +245,8 @@ fn accept_loop(
     result
 }
 
-struct Shared {
-    runtime: Mutex<Runtime>,
+pub(crate) struct Shared {
+    pub(crate) runtime: Mutex<Runtime>,
     /// Last successful status snapshot. Served when `GetStatus` cannot take the
     /// runtime lock because `ask` / `talk_stop` is in flight.
     last_status: Mutex<Option<Status>>,
@@ -349,7 +350,7 @@ impl Shared {
         lock(&self.subscribers).retain(|subscriber| subscriber.id != id);
     }
 
-    fn broadcast(&self, event: &WireEvent) {
+    pub(crate) fn broadcast(&self, event: &WireEvent) {
         let mut subscribers = lock(&self.subscribers);
         subscribers.retain(|subscriber| {
             match subscriber.tx.try_send(Outbound::Event(event.clone())) {

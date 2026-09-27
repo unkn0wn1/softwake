@@ -24,7 +24,7 @@ pub use glossary::{
 pub use load::{MAX_FILE_BYTES, SoulPack, SoulStatus, load, try_load};
 pub use paths::{SoulDir, SoulPaths, resolve_soul_dir, resolve_soul_dir_from};
 pub use profile::{
-    APP_CONFIG_FILE_NAME, AppConfig, DEFAULT_AGENT_NAME, DEFAULT_PROFILE_ID,
+    APP_CONFIG_FILE_NAME, AppConfig, DEFAULT_AGENT_NAME, DEFAULT_PROFILE_ID, DEFAULT_WEBHOOK_PORT,
     FREE_SPEECH_END_SILENCE_MS_DEFAULT, FREE_SPEECH_END_SILENCE_MS_MAX,
     FREE_SPEECH_END_SILENCE_MS_MIN, KWS_THRESHOLD_MILLI_MAX, KWS_THRESHOLD_MILLI_MIN,
     LEGACY_SOUL_DIR_NAME, PROFILE_META_FILE_NAME, PROFILES_DIR_NAME, ProfileMeta,
@@ -33,5 +33,6 @@ pub use profile::{
     create_profile, ensure_migrated, legacy_soul_dir, list_profiles, load_app_config,
     load_profile_meta, profile_name_in, profile_pack_dir, rename_profile, resolve_active_pack_dir,
     resolve_config_dir, set_active_profile, set_free_speech_end_silence_ms, set_kws_thresholds,
-    set_tts_playback_timeout_ms, write_app_config, write_profile_meta,
+    set_tts_playback_timeout_ms, set_webhook_enabled, set_webhook_port, write_app_config,
+    write_profile_meta,
 };

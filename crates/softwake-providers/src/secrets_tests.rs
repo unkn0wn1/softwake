@@ -283,6 +283,8 @@ fn debug_redacts_secret_strings_and_omits_lengths() {
         openrouter_api_key: Some(SENTINEL.to_owned()),
         openai_compatible_api_key: Some(SENTINEL.to_owned()),
         email_smtp_password: Some(SENTINEL.to_owned()),
+        webhook_secret: Some(SENTINEL.to_owned()),
+        telegram_bot_token: Some(SENTINEL.to_owned()),
         xai_oauth: Some(OAuthTokenSet {
             access_token: SENTINEL.to_owned(),
             refresh_token: SENTINEL.to_owned(),

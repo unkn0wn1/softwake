@@ -375,6 +375,16 @@ cargo test -p softwake-providers
 Default workspace tests do not call the network. Live HTTPS is the `live-http` feature.
 
 
+### Webhook wake
+
+Authenticated local HTTP wake without the mic ([ADR 0038](docs/ADR-0038-webhook-wake.md)):
+
+1. `softwaked ctl webhook-secret generate` (prints the secret once) or `set <token>`.
+2. `softwaked ctl webhook enable` (optional `ctl webhook port <n>`; default 8787).
+3. With `softwaked serve` running, `POST http://127.0.0.1:8787/v1/wake` with `Authorization: Bearer <secret>`. Optional JSON `{"message":"…"}` (max 2000 chars) runs an inbound ask. Hibernate returns HTTP 409 — resume first.
+
+Bind is loopback-only. Use a reverse proxy with TLS if you must expose it.
+
 ### Messengers (Telegram)
 
 1. Create a bot with [BotFather](https://t.me/BotFather); copy the token (never commit it).
@@ -606,7 +616,8 @@ cargo test -p softwake-daemon --features pipewire-capture
 | [docs/ADR-0011-context-pack.md](docs/ADR-0011-context-pack.md) | Context pack and confirm-echo foundation |
 | [docs/ADR-0012-model-providers.md](docs/ADR-0012-model-providers.md) | Provider Settings: xAI sign-in, API keys, Test, chat and voice/STT pickers |
 | [docs/ADR-0013-session-provider.md](docs/ADR-0013-session-provider.md) | Awake session chat to the selected provider |
-| [docs/ADR-0014-skills-hub.md](docs/ADR-0014-skills-hub.md) | Skills hub (Settings page + skill_save); refine/webhook later |
+| [docs/ADR-0014-skills-hub.md](docs/ADR-0014-skills-hub.md) | Skills hub (Settings page + skill_save); refine later; webhook → ADR-0038 |
+| [docs/ADR-0038-webhook-wake.md](docs/ADR-0038-webhook-wake.md) | Authenticated local webhook wake (`POST /v1/wake`, Bearer secret) |
 | [docs/ADR-0015-tray-hud.md](docs/ADR-0015-tray-hud.md) | System tray and always-on-top HUD |
 | [docs/ADR-0016-capture-level-hud.md](docs/ADR-0016-capture-level-hud.md) | Capture level on Status → HUD particles |
 | [docs/ADR-0023-email-oauth.md](docs/ADR-0023-email-oauth.md) | Email OAuth: Google / Microsoft Connect on Settings → Email; PKCE + secret bag |

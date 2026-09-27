@@ -7,7 +7,7 @@ use std::path::Path;
 
 use std::fmt::Write;
 
-use softwake_ipc::{CallError, Client, Command, Status};
+use softwake_ipc::{CallError, Client, Command, IpcError, Status};
 
 /// Subcommand of `softwaked ctl`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +62,46 @@ pub(crate) enum CtlAction {
         /// `None` reads status. `Some` sets the flag for this daemon process.
         enabled: Option<bool>,
     },
+    /// `ctl webhook status|enable|disable|port`
+    Webhook {
+        /// Subcommand payload.
+        action: WebhookCtl,
+    },
+    /// `ctl webhook-secret set|generate|clear`
+    WebhookSecret {
+        /// Subcommand payload.
+        action: WebhookSecretCtl,
+    },
+}
+
+/// Local-disk webhook config ctl (no IPC).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WebhookCtl {
+    /// Print enabled / secret configured / bind.
+    Status,
+    /// Set `webhook_enabled` true.
+    Enable,
+    /// Set `webhook_enabled` false.
+    Disable,
+    /// Set `webhook_port`.
+    Port {
+        /// 1..=65535
+        port: u16,
+    },
+}
+
+/// Local-disk webhook secret ctl (no IPC).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WebhookSecretCtl {
+    /// Store the provided token.
+    Set {
+        /// Shared secret.
+        token: String,
+    },
+    /// Generate a random secret, store it, print once.
+    Generate,
+    /// Clear the secret.
+    Clear,
 }
 
 impl CtlAction {
@@ -89,26 +129,35 @@ impl CtlAction {
 ///
 /// Returns [`CallError`] when the daemon cannot be reached or rejects the command.
 pub(crate) fn run(path: &Path, action: &CtlAction) -> Result<String, CallError> {
-    let status = match action {
-        CtlAction::Status => call(path, Command::GetStatus)?,
-        CtlAction::Hibernate => call(path, Command::Hibernate)?,
-        CtlAction::Resume => call(path, Command::WakeFromUi)?,
-        CtlAction::Wake => call_wake(path)?,
-        CtlAction::Sleep => call(path, Command::Sleep)?,
-        CtlAction::ReloadSoul => call(path, Command::ReloadSoul)?,
-        CtlAction::ReloadKws => call_reload_kws(path)?,
-        CtlAction::ReloadUtterance => call_reload_utterance(path)?,
-        CtlAction::ReloadPlayback => call_reload_playback(path)?,
-        CtlAction::Tool { name, args } => call_tool(path, name, args)?,
-        CtlAction::ConfirmTool { pending_id } => call_confirm(path, pending_id)?,
-        CtlAction::CancelTool { pending_id } => call_cancel(path, pending_id)?,
-        CtlAction::Ask { text } | CtlAction::Chat { text } => call_ask(path, text)?,
-        CtlAction::VoiceTest { enabled } => match enabled {
-            None => call(path, Command::GetStatus)?,
-            Some(enabled) => call_voice_test(path, *enabled)?,
-        },
-    };
-    Ok(format_status(&status))
+    match action {
+        CtlAction::Webhook { action } => run_webhook_ctl(action)
+            .map_err(|message| CallError::Rejected(IpcError::protocol(message))),
+        CtlAction::WebhookSecret { action } => run_webhook_secret_ctl(action)
+            .map_err(|message| CallError::Rejected(IpcError::protocol(message))),
+        other => {
+            let status = match other {
+                CtlAction::Status => call(path, Command::GetStatus)?,
+                CtlAction::Hibernate => call(path, Command::Hibernate)?,
+                CtlAction::Resume => call(path, Command::WakeFromUi)?,
+                CtlAction::Wake => call_wake(path)?,
+                CtlAction::Sleep => call(path, Command::Sleep)?,
+                CtlAction::ReloadSoul => call(path, Command::ReloadSoul)?,
+                CtlAction::ReloadKws => call_reload_kws(path)?,
+                CtlAction::ReloadUtterance => call_reload_utterance(path)?,
+                CtlAction::ReloadPlayback => call_reload_playback(path)?,
+                CtlAction::Tool { name, args } => call_tool(path, name, args)?,
+                CtlAction::ConfirmTool { pending_id } => call_confirm(path, pending_id)?,
+                CtlAction::CancelTool { pending_id } => call_cancel(path, pending_id)?,
+                CtlAction::Ask { text } | CtlAction::Chat { text } => call_ask(path, text)?,
+                CtlAction::VoiceTest { enabled } => match enabled {
+                    None => call(path, Command::GetStatus)?,
+                    Some(enabled) => call_voice_test(path, *enabled)?,
+                },
+                CtlAction::Webhook { .. } | CtlAction::WebhookSecret { .. } => unreachable!(),
+            };
+            Ok(format_status(&status))
+        }
+    }
 }
 
 /// Connect and apply one protocol command.
@@ -216,7 +265,132 @@ pub(crate) fn call_cancel(path: &Path, pending_id: &str) -> Result<Status, CallE
 }
 
 /// Human-readable status. The string ends with a newline.
-#[must_use]
+pub(crate) fn run_webhook_ctl(action: &WebhookCtl) -> Result<String, String> {
+    let xdg = std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from);
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let config_dir = softwake_soul::resolve_config_dir(xdg.as_deref(), home.as_deref())
+        .map_err(|e| e.to_string())?;
+    match action {
+        WebhookCtl::Status => {
+            let app = softwake_soul::load_app_config(&config_dir).unwrap_or_default();
+            let port = crate::webhook::resolve_webhook_port(app.webhook_port);
+            let secret_configured = webhook_secret_configured();
+            Ok(format!(
+                "webhook enabled: {}\nwebhook secret: {}\nwebhook bind: 127.0.0.1:{port}\nwebhook path: POST /v1/wake\n",
+                if app.webhook_enabled { "yes" } else { "no" },
+                if secret_configured {
+                    "configured"
+                } else {
+                    "missing"
+                },
+            ))
+        }
+        WebhookCtl::Enable => {
+            softwake_soul::set_webhook_enabled(&config_dir, true).map_err(|e| e.to_string())?;
+            Ok("webhook enabled: yes\n".to_owned())
+        }
+        WebhookCtl::Disable => {
+            softwake_soul::set_webhook_enabled(&config_dir, false).map_err(|e| e.to_string())?;
+            Ok("webhook enabled: no\n".to_owned())
+        }
+        WebhookCtl::Port { port } => {
+            softwake_soul::set_webhook_port(&config_dir, *port).map_err(|e| e.to_string())?;
+            Ok(format!("webhook port: {port}\n"))
+        }
+    }
+}
+
+fn run_webhook_secret_ctl(action: &WebhookSecretCtl) -> Result<String, String> {
+    let path = softwake_providers::resolve_secrets_file().map_err(|e| e.to_string())?;
+    let store = softwake_providers::open_store(&path).map_err(|e| e.to_string())?;
+    match action {
+        WebhookSecretCtl::Set { token } => {
+            let token = token.trim();
+            if token.is_empty() {
+                return Err("webhook secret must be non-empty".into());
+            }
+            softwake_providers::update_bag(store.as_ref(), |bag| {
+                bag.webhook_secret = Some(token.to_owned());
+            })
+            .map_err(|e| e.to_string())?;
+            Ok("webhook secret: set\n".to_owned())
+        }
+        WebhookSecretCtl::Generate => {
+            let token = generate_webhook_secret()?;
+            softwake_providers::update_bag(store.as_ref(), |bag| {
+                bag.webhook_secret = Some(token.clone());
+            })
+            .map_err(|e| e.to_string())?;
+            Ok(format!(
+                "webhook secret: generated (store this; it will not be shown again)\n{token}\n"
+            ))
+        }
+        WebhookSecretCtl::Clear => {
+            softwake_providers::update_bag(store.as_ref(), |bag| {
+                bag.webhook_secret = None;
+            })
+            .map_err(|e| e.to_string())?;
+            Ok("webhook secret: cleared\n".to_owned())
+        }
+    }
+}
+
+fn webhook_secret_configured() -> bool {
+    let Ok(path) = softwake_providers::resolve_secrets_file() else {
+        return false;
+    };
+    let Ok(store) = softwake_providers::open_store(&path) else {
+        return false;
+    };
+    let Ok(bag) = store.load() else {
+        return false;
+    };
+    bag.webhook_secret
+        .as_ref()
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn generate_webhook_secret() -> Result<String, String> {
+    let mut bytes = [0_u8; 32];
+    fill_random(&mut bytes)?;
+    Ok(base64url_nopad(&bytes))
+}
+
+fn fill_random(bytes: &mut [u8]) -> Result<(), String> {
+    use std::fs::File;
+    use std::io::Read;
+    File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(bytes))
+        .map_err(|error| format!("urandom: {error}"))
+}
+
+fn base64url_nopad(bytes: &[u8]) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::new();
+    let mut i = 0;
+    while i + 3 <= bytes.len() {
+        let n =
+            (u32::from(bytes[i]) << 16) | (u32::from(bytes[i + 1]) << 8) | u32::from(bytes[i + 2]);
+        out.push(TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(TABLE[((n >> 12) & 63) as usize] as char);
+        out.push(TABLE[((n >> 6) & 63) as usize] as char);
+        out.push(TABLE[(n & 63) as usize] as char);
+        i += 3;
+    }
+    let rem = bytes.len() - i;
+    if rem == 1 {
+        let n = u32::from(bytes[i]) << 16;
+        out.push(TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(TABLE[((n >> 12) & 63) as usize] as char);
+    } else if rem == 2 {
+        let n = (u32::from(bytes[i]) << 16) | (u32::from(bytes[i + 1]) << 8);
+        out.push(TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(TABLE[((n >> 12) & 63) as usize] as char);
+        out.push(TABLE[((n >> 6) & 63) as usize] as char);
+    }
+    out
+}
+
 pub(crate) fn format_status(status: &Status) -> String {
     let capture = if status.capture_running {
         "running"

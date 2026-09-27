@@ -37,14 +37,9 @@ Soul **rules beat skills**. A skill cannot loosen `softwake-policy`, cannot turn
 
 An inbound webhook may wake Softwake and run against skills and tool policy. Example tone: Softwake notices an important email and offers to forward a draft — it does not silently send.
 
-Ingress is either:
+**Implemented** in [ADR 0038](ADR-0038-webhook-wake.md): local `127.0.0.1` listener, Bearer shared secret in the secret bag, optional bounded message → agent turn. Hibernate returns **HTTP 409** (no auto-resume). There is **no open-internet default**.
 
-- a **local listener** (default posture), or
-- an authenticated HTTP endpoint protected by a **shared secret**
-
-There is **no open-internet default**. An unauthenticated public bind is out of scope for the first implementation.
-
-While asleep, a valid webhook may transition sleep→awake (same soul gate as other awake entry) or **queue** work until awake. Hibernate still means the mic is down; webhook handling while hibernated is a later detail and must not imply ambient listening. Invocations still pass policy before any confirm-gated tool runs.
+While asleep, a valid webhook transitions sleep→awake (same soul gate as other awake entry). Invocations still pass policy before any confirm-gated tool runs.
 
 ### Non-goals
 
@@ -92,4 +87,11 @@ No new binary behavior. `cargo test --workspace` stays green because no Rust cha
 - Crate `softwake-skills` stores one Markdown file per skill under `$XDG_DATA_HOME/softwake/skills/` (else `~/.local/share/softwake/skills/`). Front matter: `version`, `title`, `source` (`user`|`agent`), `updated`. Body headings: Procedure, Pitfalls, Verify.
 - Settings → Skills lists both sources and supports add/edit/remove (Tauri only; protocol generation stays 1).
 - Registry tool `skill_save` is confirm-gated. Default Tools permission is Ask. After confirm the daemon writes `source: agent`. Ask heuristics (`make a skill …`, `make a skill from this`) stage the tool like shell intent.
-- Webhook wake, auto-refine spam, and marketplace remain later. Soul rules still beat skills.
+- Authenticated webhook wake shipped (ADR-0038). Auto-refine spam and marketplace remain later. Soul rules still beat skills.
+
+
+## Amendment (2026-09-28) — Authenticated webhook wake
+
+- Inbound `POST /v1/wake` on `127.0.0.1` with Bearer / `X-Softwake-Webhook-Token` shared secret ([ADR 0038](ADR-0038-webhook-wake.md)).
+- `softwaked ctl webhook` / `webhook-secret` configure enable, port, and secret.
+- Hibernate → HTTP 409 (no auto-resume). Opt-in refine loop and marketplace remain later.
