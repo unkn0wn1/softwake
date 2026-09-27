@@ -3,7 +3,7 @@
 //! Layout under the Softwake config root:
 //!
 //! ```text
-//! softwake.json                 # { "version": 1, "active_profile": "<id>", optional kws_*_milli, free_speech_end_silence_ms, tts_playback_timeout_ms }
+//! softwake.json                 # { "version": 1, "active_profile": "<id>", optional kws_*_milli, free_speech_end_silence_ms, tts_playback_timeout_ms, webhook_enabled, webhook_port }
 //! profiles/<id>/profile.json    # { "id": "<id>", "name": "<agent name>" }
 //! profiles/<id>/{soul,user,rules,glossary}.md
 //! soul/                         # legacy pack; migration source only
@@ -79,6 +79,16 @@ pub struct AppConfig {
     /// Chat HTTP timeout, free-speech silence, and mute grace ignore it.
     #[serde(default = "default_tts_playback_timeout_ms")]
     pub tts_playback_timeout_ms: u32,
+    /// When true and a webhook secret is set, softwaked binds the local wake listener.
+    ///
+    /// Missing key → false. `softwaked ctl webhook enable|disable` writes this key.
+    #[serde(default)]
+    pub webhook_enabled: bool,
+    /// Loopback TCP port for `POST /v1/wake` (default 8787).
+    ///
+    /// Missing key → 8787. Env `SOFTWAKE_WEBHOOK_PORT` wins when the daemon resolves the bind.
+    #[serde(default = "default_webhook_port")]
+    pub webhook_port: u16,
 }
 
 fn app_config_version() -> u32 {
@@ -101,6 +111,13 @@ fn default_tts_playback_timeout_ms() -> u32 {
     TTS_PLAYBACK_TIMEOUT_MS_DEFAULT
 }
 
+fn default_webhook_port() -> u16 {
+    DEFAULT_WEBHOOK_PORT
+}
+
+/// Default loopback port for the authenticated webhook wake listener.
+pub const DEFAULT_WEBHOOK_PORT: u16 = 8787;
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -110,6 +127,8 @@ impl Default for AppConfig {
             kws_short_threshold_milli: default_kws_short_threshold_milli(),
             free_speech_end_silence_ms: default_free_speech_end_silence_ms(),
             tts_playback_timeout_ms: default_tts_playback_timeout_ms(),
+            webhook_enabled: false,
+            webhook_port: default_webhook_port(),
         }
     }
 }
@@ -416,6 +435,46 @@ pub fn set_tts_playback_timeout_ms(config_dir: &Path, ms: u32) -> Result<AppConf
     let mut config = load_app_config(config_dir).unwrap_or_default();
     config.version = APP_CONFIG_VERSION;
     config.tts_playback_timeout_ms = clamp_tts_playback_timeout_ms(ms);
+    write_app_config(config_dir, &config)?;
+    Ok(config)
+}
+
+/// Enable or disable the local webhook wake listener flag in `softwake.json`.
+///
+/// The running daemon re-reads this on its webhook accept loop. Binding still
+/// requires a non-empty `webhook_secret` in the secret bag.
+///
+/// # Errors
+///
+/// Config path or write failure.
+pub fn set_webhook_enabled(config_dir: &Path, enabled: bool) -> Result<AppConfig, SoulError> {
+    ensure_migrated(config_dir)?;
+    let mut config = load_app_config(config_dir).unwrap_or_default();
+    config.version = APP_CONFIG_VERSION;
+    config.webhook_enabled = enabled;
+    write_app_config(config_dir, &config)?;
+    Ok(config)
+}
+
+/// Write the webhook loopback port into `softwake.json` (1..=65535).
+///
+/// Port `0` is rejected. Env `SOFTWAKE_WEBHOOK_PORT` still wins at bind time.
+/// Changing the port while softwaked is running may require a restart to rebind.
+///
+/// # Errors
+///
+/// Rejected port, config path, or write failure.
+pub fn set_webhook_port(config_dir: &Path, port: u16) -> Result<AppConfig, SoulError> {
+    if port == 0 {
+        return Err(SoulError::InvalidConfig {
+            path: config_dir.join(APP_CONFIG_FILE_NAME),
+            detail: "webhook port must be 1..=65535".to_owned(),
+        });
+    }
+    ensure_migrated(config_dir)?;
+    let mut config = load_app_config(config_dir).unwrap_or_default();
+    config.version = APP_CONFIG_VERSION;
+    config.webhook_port = port;
     write_app_config(config_dir, &config)?;
     Ok(config)
 }
@@ -901,6 +960,23 @@ mod tests {
         );
         assert_eq!(high.active_profile, DEFAULT_PROFILE_ID);
         assert_eq!(high.kws_threshold_milli, 150);
+    }
+
+    #[test]
+    fn webhook_config_defaults_and_round_trips() {
+        let root = TempDir::new("webhook-cfg");
+        ensure_migrated(&root.path).expect("migrate");
+        let app = load_app_config(&root.path).expect("load");
+        assert!(!app.webhook_enabled);
+        assert_eq!(app.webhook_port, DEFAULT_WEBHOOK_PORT);
+        let on = set_webhook_enabled(&root.path, true).expect("enable");
+        assert!(on.webhook_enabled);
+        let port = set_webhook_port(&root.path, 9090).expect("port");
+        assert_eq!(port.webhook_port, 9090);
+        let loaded = load_app_config(&root.path).expect("reload");
+        assert!(loaded.webhook_enabled);
+        assert_eq!(loaded.webhook_port, 9090);
+        assert!(set_webhook_port(&root.path, 0).is_err());
     }
 
     #[test]

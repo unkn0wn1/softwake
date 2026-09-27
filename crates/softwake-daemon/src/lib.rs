@@ -50,6 +50,7 @@ mod talk;
 mod telegram;
 mod tool_loop;
 mod verbose_log;
+mod webhook;
 
 #[cfg(test)]
 mod e2e;

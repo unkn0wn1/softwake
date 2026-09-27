@@ -76,7 +76,7 @@
 
 ## Deferred ideas (do not pull into phase 1)
 
-- Skills hub ([ADR 0014](ADR-0014-skills-hub.md)): Settings Skills page + on-disk Markdown + confirm-gated `skill_save` shipped. Opt-in refine loop and authenticated webhook wake remain later.
+- Skills hub ([ADR 0014](ADR-0014-skills-hub.md)): Settings Skills page + on-disk Markdown + confirm-gated `skill_save` shipped. Authenticated webhook wake shipped ([ADR 0038](ADR-0038-webhook-wake.md)). Opt-in refine loop remains later.
 - Meeting memory / transcript integration (separate product track; may feed Softwake later)
 - Boring coding-agent harness (separate repo)
 - Multi-conductor / named worker routing (out of scope for Softwake)
