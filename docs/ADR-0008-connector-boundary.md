@@ -128,4 +128,4 @@ Add an opt-in live email **scaffold** without turning Softwake into a Gmail prod
 
 After confirm, if a usable Email OAuth account exists on a `live-http` daemon, Hands posts via the Gmail and Graph builders in `softwake-connectors` instead of `EmailBackend::send`. Which account is [ADR-0033](ADR-0033-multi-account-oauth.md). Mock and draft-only are unchanged. Live SMTP send is still not wired. The registry pair stays `email` / `send`.
 
-This supersedes the earlier note that Gmail OAuth send is a later transport. A real SMTP client, calendar writes, and Drive upload/trash stay out of scope. A missing usable account, or a daemon built without `live-http`, still uses `EmailBackend` (mock, draft, or `TransportNotWired`).
+This supersedes the earlier note that Gmail OAuth send is a later transport. A real SMTP client and Drive upload/trash stay out of scope. Calendar event create, update, and delete are [ADR-0034](ADR-0034-calendar-write.md). A missing usable account, or a daemon built without `live-http`, still uses `EmailBackend` (mock, draft, or `TransportNotWired`).

@@ -37,15 +37,17 @@ use softwake_skills::{
 use softwake_soul::Glossary;
 use softwake_state::{Machine, StateError, VoiceState};
 use softwake_tools::{
-    CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL,
-    EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, FileToolsSettings,
-    NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL,
-    ScheduleAction, SoftwakeCtlEffect, ToolError, ToolPermission, ToolRegistry, ToolResult,
-    ToolRisk, ToolsSettings, apply_action, format_shell_output, is_softwake_ctl, load_schedules,
-    now_ms, parse_calendar_get_args, parse_calendar_list_args, parse_drive_get_args,
-    parse_drive_list_args, parse_drive_search_args, parse_email_get_args, parse_email_list_args,
-    parse_email_search_args, parse_email_send_args, parse_schedule_args, parse_skill_get_args,
-    parse_skill_list_args, parse_skill_save_args, parse_softwake_ctl,
+    CALENDAR_CREATE_TOOL, CALENDAR_DELETE_TOOL, CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL,
+    CALENDAR_UPDATE_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL, EMAIL_GET_TOOL,
+    EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, FileToolsSettings, NOTIFY_TOOL,
+    SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL, ScheduleAction,
+    SoftwakeCtlEffect, ToolError, ToolPermission, ToolRegistry, ToolResult, ToolRisk,
+    ToolsSettings, apply_action, format_shell_output, invalid_args_message, is_softwake_ctl,
+    load_schedules, now_ms, parse_calendar_create_args, parse_calendar_delete_args,
+    parse_calendar_get_args, parse_calendar_list_args, parse_calendar_update_args,
+    parse_drive_get_args, parse_drive_list_args, parse_drive_search_args, parse_email_get_args,
+    parse_email_list_args, parse_email_search_args, parse_email_send_args, parse_schedule_args,
+    parse_skill_get_args, parse_skill_list_args, parse_skill_save_args, parse_softwake_ctl,
     resolve_active_schedules_file, resolve_tools_file, run_shell, save_schedules,
 };
 
@@ -123,14 +125,18 @@ pub(crate) enum DispatchError {
         state: VoiceState,
     },
 
-    /// `email_send` did not include to, subject, and body.
+    /// Arguments did not match the tool.
     ///
     /// No pending record is stored when this happens on a request. On confirm,
     /// the existing record stays and the outbox is unchanged.
-    #[error("{name} needs to, subject, and body")]
+    /// `detail` is the operator sentence.
+    /// `email_send` stays `email_send needs to, subject, and body`.
+    #[error("{detail}")]
     InvalidArgs {
         /// Tool the caller named.
         name: String,
+        /// Operator sentence from [`softwake_tools::invalid_args_message`].
+        detail: String,
     },
 
     /// The connector refused the send after the tool confirmation was accepted.
@@ -723,6 +729,7 @@ impl Hands {
         if original.trim().is_empty() {
             return Err(DispatchError::InvalidArgs {
                 name: SHELL_TOOL.to_owned(),
+                detail: invalid_args_message(SHELL_TOOL),
             });
         }
         let echo = self.glossary.confirm_echo(&original);
@@ -936,7 +943,9 @@ impl Hands {
         Ok(commit_detail(&self.email, receipt))
     }
 
-    /// Confirm-gated inbox / calendar / Drive read via Email OAuth.
+    /// Confirm-gated inbox / calendar / Drive tools via Email OAuth.
+    ///
+    /// Calendar create, update, and delete use the same confirm path as list/get.
     fn execute_cloud_read(&mut self, name: &str, args: &[String]) -> Result<String, DispatchError> {
         if let Err(error) = self.registry.invoke_confirmed(name, args) {
             return Err(self.fail_tool(error));
@@ -987,9 +996,7 @@ impl Hands {
         let action = match parse_schedule_args(args) {
             Ok(action) => action,
             Err(_error) => {
-                return Err(self.fail_tool(ToolError::InvalidArgs {
-                    name: SCHEDULE_TOOL.to_owned(),
-                }));
+                return Err(self.fail_tool(ToolError::invalid_args(SCHEDULE_TOOL)));
             }
         };
         if let Err(error) = self.registry.invoke_confirmed(SCHEDULE_TOOL, args) {
@@ -1213,12 +1220,12 @@ impl Hands {
                 None,
                 DispatchError::Denied { name },
             ),
-            ToolError::InvalidArgs { name } => (
+            ToolError::InvalidArgs { name, detail } => (
                 name.clone(),
                 Some(ToolRisk::Confirm),
                 ToolOutcome::Unknown,
-                Some("needs to, subject, and body".to_owned()),
-                DispatchError::InvalidArgs { name },
+                Some(detail.clone()),
+                DispatchError::InvalidArgs { name, detail },
             ),
             ToolError::Unknown { name }
             | ToolError::NeedsConfirm { name }
@@ -1357,6 +1364,9 @@ fn validate_cloud_tool_args(name: &str, args: &[String]) -> Result<(), ToolError
         EMAIL_GET_TOOL => parse_email_get_args(args).map(|_| ()),
         CALENDAR_LIST_TOOL => parse_calendar_list_args(args).map(|_| ()),
         CALENDAR_GET_TOOL => parse_calendar_get_args(args).map(|_| ()),
+        CALENDAR_CREATE_TOOL => parse_calendar_create_args(args).map(|_| ()),
+        CALENDAR_UPDATE_TOOL => parse_calendar_update_args(args).map(|_| ()),
+        CALENDAR_DELETE_TOOL => parse_calendar_delete_args(args).map(|_| ()),
         DRIVE_LIST_TOOL => parse_drive_list_args(args).map(|_| ()),
         DRIVE_SEARCH_TOOL => parse_drive_search_args(args).map(|_| ()),
         DRIVE_GET_TOOL => parse_drive_get_args(args).map(|_| ()),
@@ -1386,6 +1396,18 @@ fn run_cloud_tool(name: &str, args: &[String]) -> Result<String, String> {
             let parsed = parse_calendar_get_args(args).map_err(|e| e.to_string())?;
             run_calendar_get(&parsed)
         }
+        CALENDAR_CREATE_TOOL => {
+            let parsed = parse_calendar_create_args(args).map_err(|e| e.to_string())?;
+            crate::calendar_write::run_calendar_create(&parsed)
+        }
+        CALENDAR_UPDATE_TOOL => {
+            let parsed = parse_calendar_update_args(args).map_err(|e| e.to_string())?;
+            crate::calendar_write::run_calendar_update(&parsed)
+        }
+        CALENDAR_DELETE_TOOL => {
+            let parsed = parse_calendar_delete_args(args).map_err(|e| e.to_string())?;
+            crate::calendar_write::run_calendar_delete(&parsed)
+        }
         DRIVE_LIST_TOOL => {
             let parsed = parse_drive_list_args(args).map_err(|e| e.to_string())?;
             run_drive_list(&parsed)
@@ -1398,7 +1420,7 @@ fn run_cloud_tool(name: &str, args: &[String]) -> Result<String, String> {
             let parsed = parse_drive_get_args(args).map_err(|e| e.to_string())?;
             run_drive_get(&parsed)
         }
-        other => Err(format!("not a cloud read tool: {other}")),
+        other => Err(format!("not a cloud tool: {other}")),
     }
 }
 
@@ -1829,7 +1851,8 @@ mod tests {
         assert_eq!(
             refused,
             DispatchError::InvalidArgs {
-                name: "email_send".to_owned()
+                name: "email_send".to_owned(),
+                detail: "email_send needs to, subject, and body".to_owned(),
             }
         );
         assert_eq!(

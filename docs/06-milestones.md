@@ -37,7 +37,8 @@
    - [x] Drive backend stub ([ADR 0008](ADR-0008-connector-boundary.md)): `DriveConnector`, `MockDrive`, `drive` / `list` confirm. No live client. The daemon does not call it.
    - [ ] Live Drive backend (opt-in, not in CI)
    - [x] Calendar backend stub ([ADR 0008](ADR-0008-connector-boundary.md)): `CalendarConnector`, `MockCalendar`, `calendar` / `list` confirm. No live client. The daemon does not call it.
-   - [ ] Live Calendar backend (opt-in, not in CI)
+   - [x] Calendar event create/update/delete on the primary calendar when the daemon is built with `live-http` ([ADR 0034](ADR-0034-calendar-write.md)): confirm-gated `calendar_create`, `calendar_update`, `calendar_delete`. Google `calendar.events` plus `calendar.readonly`; Microsoft `Calendars.ReadWrite`. Reconnect when the stored grant lacks write. No attendees or calendar picker.
+   - [ ] Live Calendar backend beyond primary-calendar event write (opt-in, not in CI)
 2. [ ] Long-term memory
    - [x] Decision ([ADR 0009](ADR-0009-long-term-memory.md)): thin local store behind a `Memory` trait in `softwake-memory`. `MockMemory` is in-process and off until enabled. Honcho is not the default and is not a dependency.
    - [x] Productized durable store ([ADR 0009](ADR-0009-long-term-memory.md)): `FileMemory` writes `memory.json` under `$XDG_STATE_HOME/softwake` when that variable is set and non-blank, otherwise under `~/.local/state/softwake`. The handle stays off until `open_enabled`. `MockMemory` stays the default. Awake ask/chat open it only when `memory.json` exists (budgeted recall).

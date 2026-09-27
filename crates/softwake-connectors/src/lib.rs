@@ -14,6 +14,7 @@
 
 mod calendar;
 mod calendar_api;
+mod calendar_write_api;
 mod drive;
 mod drive_api;
 mod email;
@@ -30,6 +31,12 @@ pub use calendar_api::{
     clamp_calendar_days, clamp_calendar_max, format_calendar_event, format_calendar_list,
     google_event_get_url, google_events_url, graph_calendar_view_url, graph_event_get_url,
     parse_google_event, parse_google_events, parse_graph_event, parse_graph_events,
+};
+pub use calendar_write_api::{
+    CalendarEventWrite, format_calendar_created, format_calendar_deleted, format_calendar_updated,
+    google_event_create_url, google_event_delete_url, google_event_patch_url,
+    google_event_write_body, graph_event_create_url, graph_event_delete_url, graph_event_patch_url,
+    graph_event_write_body, parse_written_event_id,
 };
 pub use drive::{DriveConnector, DriveFile};
 pub use drive_api::{
@@ -61,17 +68,19 @@ pub use live_email::{
 };
 pub use mock::{MockCalendar, MockDrive, MockEmail};
 pub use registry::{
-    CALENDAR, CALENDAR_DELETE, CALENDAR_GET, CALENDAR_LIST, ConnectorError, ConnectorMeta,
-    ConnectorRegistry, ConnectorRisk, DRIVE, DRIVE_DELETE, DRIVE_GET, DRIVE_LIST, DRIVE_SEARCH,
-    EMAIL, EMAIL_DELETE, EMAIL_GET, EMAIL_LIST, EMAIL_SEARCH, EMAIL_SEND,
+    CALENDAR, CALENDAR_CREATE, CALENDAR_DELETE, CALENDAR_GET, CALENDAR_LIST, CALENDAR_UPDATE,
+    ConnectorError, ConnectorMeta, ConnectorRegistry, ConnectorRisk, DRIVE, DRIVE_DELETE,
+    DRIVE_GET, DRIVE_LIST, DRIVE_SEARCH, EMAIL, EMAIL_DELETE, EMAIL_GET, EMAIL_LIST, EMAIL_SEARCH,
+    EMAIL_SEND,
 };
 
 #[cfg(test)]
 mod tests {
     use super::{
-        CALENDAR, CALENDAR_DELETE, CALENDAR_LIST, CalendarConnector, ConnectorError,
-        ConnectorRegistry, DRIVE, DRIVE_DELETE, DRIVE_LIST, DriveConnector, EMAIL, EMAIL_DELETE,
-        EMAIL_SEND, EmailConnector, MockCalendar, MockDrive, MockEmail, OutboundEmail, SendReceipt,
+        CALENDAR, CALENDAR_CREATE, CALENDAR_DELETE, CALENDAR_LIST, CALENDAR_UPDATE,
+        CalendarConnector, ConnectorError, ConnectorRegistry, DRIVE, DRIVE_DELETE, DRIVE_LIST,
+        DriveConnector, EMAIL, EMAIL_DELETE, EMAIL_SEND, EmailConnector, MockCalendar, MockDrive,
+        MockEmail, OutboundEmail, SendReceipt,
     };
 
     fn message(to: &str, subject: &str, body: &str) -> OutboundEmail {
@@ -117,11 +126,7 @@ mod tests {
     fn denied_and_unknown_do_not_authorize() {
         let registry = ConnectorRegistry::phase3();
         let email = MockEmail::default();
-        for (connector, action) in [
-            (EMAIL, EMAIL_DELETE),
-            (DRIVE, DRIVE_DELETE),
-            (CALENDAR, CALENDAR_DELETE),
-        ] {
+        for (connector, action) in [(EMAIL, EMAIL_DELETE), (DRIVE, DRIVE_DELETE)] {
             assert_eq!(
                 registry.authorize_confirmed(connector, action),
                 Err(ConnectorError::Denied {
@@ -177,12 +182,20 @@ mod tests {
                 .is_ok()
         );
         assert_eq!(calendar.list(), vec![event.clone()]);
-        assert_eq!(
-            registry.authorize_confirmed(CALENDAR, CALENDAR_DELETE),
-            Err(ConnectorError::Denied {
-                connector: CALENDAR.to_owned(),
-                action: CALENDAR_DELETE.to_owned(),
-            })
+        assert!(
+            registry
+                .authorize_confirmed(CALENDAR, CALENDAR_CREATE)
+                .is_ok()
+        );
+        assert!(
+            registry
+                .authorize_confirmed(CALENDAR, CALENDAR_UPDATE)
+                .is_ok()
+        );
+        assert!(
+            registry
+                .authorize_confirmed(CALENDAR, CALENDAR_DELETE)
+                .is_ok()
         );
         assert_eq!(calendar.list(), vec![event]);
     }

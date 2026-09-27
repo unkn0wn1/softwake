@@ -275,7 +275,7 @@ fn encode_q(value: &str) -> String {
     out
 }
 
-fn encode_path(value: &str) -> String {
+pub(crate) fn encode_path(value: &str) -> String {
     encode_q(value)
 }
 

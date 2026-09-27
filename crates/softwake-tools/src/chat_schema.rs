@@ -7,8 +7,9 @@ use serde_json::{Value, json};
 
 use crate::settings::{ToolPermission, ToolsSettings};
 use crate::{
-    CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL,
-    ECHO_TOOL, EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL,
+    CALENDAR_CREATE_TOOL, CALENDAR_DELETE_TOOL, CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL,
+    CALENDAR_UPDATE_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL, ECHO_TOOL,
+    EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL,
     SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL,
     SOFTWAKE_HIBERNATE_TOOL, SOFTWAKE_LIST_MODELS_TOOL, SOFTWAKE_LIST_PROFILES_TOOL,
     SOFTWAKE_LIST_REASONING_TOOL, SOFTWAKE_LIST_VOICES_TOOL, SOFTWAKE_NEW_SESSION_TOOL,
@@ -150,6 +151,48 @@ fn parameters_for(name: &str) -> Value {
             "type": "object",
             "properties": {
                 "id": { "type": "string", "description": "Event id from calendar_list." },
+                "account": {
+                    "type": "string",
+                    "description": "Optional connected account: connection id or email substring. Omit to use the only account, or the active Google account when several are connected."
+                }
+            },
+            "required": ["id"]
+        }),
+        CALENDAR_CREATE_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "title": { "type": "string", "description": "Event title." },
+                "start": { "type": "string", "description": "Start time, RFC3339 (for example 2026-09-28T09:00:00Z)." },
+                "end": { "type": "string", "description": "End time, RFC3339." },
+                "location": { "type": "string", "description": "Optional location." },
+                "description": { "type": "string", "description": "Optional description." },
+                "account": {
+                    "type": "string",
+                    "description": "Optional connected account: connection id or email substring. Omit to use the only account, or the active Google account when several are connected."
+                }
+            },
+            "required": ["title", "start", "end"]
+        }),
+        CALENDAR_UPDATE_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "Event id from calendar_list or calendar_get." },
+                "title": { "type": "string", "description": "Replacement title. Omit to leave unchanged." },
+                "start": { "type": "string", "description": "Replacement start, RFC3339. Omit to leave unchanged." },
+                "end": { "type": "string", "description": "Replacement end, RFC3339. Omit to leave unchanged." },
+                "location": { "type": "string", "description": "Replacement location. Empty string clears it." },
+                "description": { "type": "string", "description": "Replacement description. Empty string clears it." },
+                "account": {
+                    "type": "string",
+                    "description": "Optional connected account: connection id or email substring. Omit to use the only account, or the active Google account when several are connected."
+                }
+            },
+            "required": ["id"]
+        }),
+        CALENDAR_DELETE_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "Event id to delete." },
                 "account": {
                     "type": "string",
                     "description": "Optional connected account: connection id or email substring. Omit to use the only account, or the active Google account when several are connected."
@@ -393,6 +436,68 @@ pub fn tool_args_from_json(name: &str, arguments: &str) -> Result<Vec<String>, S
             push_account(&mut args, obj);
             Ok(args)
         }
+        CALENDAR_CREATE_TOOL => {
+            let title = string_field(obj, "title")
+                .ok_or_else(|| "calendar_create needs title".to_owned())?;
+            let start = string_field(obj, "start")
+                .ok_or_else(|| "calendar_create needs start".to_owned())?;
+            let end =
+                string_field(obj, "end").ok_or_else(|| "calendar_create needs end".to_owned())?;
+            if title.trim().is_empty() || start.trim().is_empty() || end.trim().is_empty() {
+                return Err("calendar_create needs title, start, and end".to_owned());
+            }
+            let mut args = vec![title, start, end];
+            if let Some(location) = string_field(obj, "location") {
+                args.push(format!("location={location}"));
+            }
+            if let Some(description) = string_field(obj, "description") {
+                args.push(format!("description={description}"));
+            }
+            push_account(&mut args, obj);
+            Ok(args)
+        }
+        CALENDAR_UPDATE_TOOL => {
+            let id =
+                string_field(obj, "id").ok_or_else(|| "calendar_update needs id".to_owned())?;
+            if id.trim().is_empty() {
+                return Err("calendar_update needs id".to_owned());
+            }
+            let mut args = vec![id];
+            let mut any = false;
+            for (key, label) in [
+                ("title", "title"),
+                ("start", "start"),
+                ("end", "end"),
+                ("location", "location"),
+                ("description", "description"),
+            ] {
+                if obj.contains_key(key) {
+                    let Some(value) = string_field(obj, key) else {
+                        return Err(format!("calendar_update {label} must be a string"));
+                    };
+                    args.push(format!("{label}={value}"));
+                    any = true;
+                }
+            }
+            if !any {
+                return Err(
+                    "calendar_update needs at least one of title, start, end, location, or description"
+                        .to_owned(),
+                );
+            }
+            push_account(&mut args, obj);
+            Ok(args)
+        }
+        CALENDAR_DELETE_TOOL => {
+            let id =
+                string_field(obj, "id").ok_or_else(|| "calendar_delete needs id".to_owned())?;
+            if id.trim().is_empty() {
+                return Err("calendar_delete needs id".to_owned());
+            }
+            let mut args = vec![id];
+            push_account(&mut args, obj);
+            Ok(args)
+        }
         DRIVE_SEARCH_TOOL => {
             let query =
                 string_field(obj, "query").ok_or_else(|| "drive_search needs query".to_owned())?;
@@ -578,8 +683,9 @@ mod tests {
     use super::{advertise_chat_tools, tool_args_from_json};
     use crate::settings::{ToolPermission, ToolsSettings};
     use crate::{
-        CALENDAR_LIST_TOOL, DRIVE_GET_TOOL, ECHO_TOOL, EMAIL_LIST_TOOL, EMAIL_SEND_TOOL,
-        NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_SAVE_TOOL, ToolRegistry,
+        CALENDAR_CREATE_TOOL, CALENDAR_DELETE_TOOL, CALENDAR_LIST_TOOL, CALENDAR_UPDATE_TOOL,
+        DRIVE_GET_TOOL, ECHO_TOOL, EMAIL_LIST_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL, SCHEDULE_TOOL,
+        SHELL_TOOL, SKILL_SAVE_TOOL, ToolRegistry,
     };
 
     #[test]
@@ -733,5 +839,45 @@ mod tests {
         );
         assert!(tool_args_from_json(SHELL_TOOL, r#"{"command":""}"#).is_err());
         assert!(tool_args_from_json(SHELL_TOOL, "not-json").is_err());
+    }
+
+    #[test]
+    fn calendar_write_tool_args_include_account() {
+        assert_eq!(
+            tool_args_from_json(
+                CALENDAR_CREATE_TOOL,
+                r#"{"title":"Stand-up","start":"2026-09-28T09:00:00Z","end":"2026-09-28T09:15:00Z","location":"Zoom","description":"daily","account":"ada@example.com"}"#
+            )
+            .expect("create"),
+            vec![
+                "Stand-up".to_owned(),
+                "2026-09-28T09:00:00Z".to_owned(),
+                "2026-09-28T09:15:00Z".to_owned(),
+                "location=Zoom".to_owned(),
+                "description=daily".to_owned(),
+                "account=ada@example.com".to_owned(),
+            ]
+        );
+        assert_eq!(
+            tool_args_from_json(
+                CALENDAR_UPDATE_TOOL,
+                r#"{"id":"evt-1","title":"Moved","account":"id-9"}"#
+            )
+            .expect("update"),
+            vec![
+                "evt-1".to_owned(),
+                "title=Moved".to_owned(),
+                "account=id-9".to_owned(),
+            ]
+        );
+        assert_eq!(
+            tool_args_from_json(
+                CALENDAR_DELETE_TOOL,
+                r#"{"id":"evt-1","account":"ada@example.com"}"#
+            )
+            .expect("delete"),
+            vec!["evt-1".to_owned(), "account=ada@example.com".to_owned()]
+        );
+        assert!(tool_args_from_json(CALENDAR_UPDATE_TOOL, r#"{"id":"evt-1"}"#).is_err());
     }
 }

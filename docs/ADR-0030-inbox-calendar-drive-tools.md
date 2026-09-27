@@ -41,20 +41,25 @@ accounts, advertised like other non-deny tools ([ADR-0025](ADR-0025-api-tool-cal
 
 3. **Connector registry:** Add confirm actions `email`/`list`, `email`/`search`,
    `email`/`get`, `calendar`/`get`, `drive`/`search`, `drive`/`get`. Existing
-   `drive`/`list` and `calendar`/`list` stay confirm. Deletes stay deny.
+   `drive`/`list` and `calendar`/`list` stay confirm. Email and Drive deletes
+   stay deny. Calendar event delete is confirm in
+   [ADR-0034](ADR-0034-calendar-write.md) (event delete only, not a connector
+   deregister).
 
-4. **Scope honesty:** Google Connect still uses `gmail.readonly`,
-   `calendar.readonly`, and `drive.file`. Drive list/search therefore only sees
-   files the Softwake client created or the user opened with it — not the whole
-   Drive. Microsoft uses `Mail.Read`, `Calendars.Read`, and
-   `Files.ReadWrite.AppFolder` (App Folder children only). Document this in the
-   appendix; do not claim full-mailbox/Drive access beyond those scopes.
+4. **Scope honesty:** Google Connect uses `gmail.readonly`,
+   `calendar.readonly`, `calendar.events`, and `drive.file`. Drive list/search
+   therefore only sees files the Softwake client created or the user opened with
+   it — not the whole Drive. Microsoft uses `Mail.Read`, `Calendars.ReadWrite`,
+   and `Files.ReadWrite.AppFolder` (App Folder children only). Document this in
+   the appendix; do not claim full-mailbox/Drive access beyond those scopes.
+   Calendar write scopes and reconnect are [ADR-0034](ADR-0034-calendar-write.md).
 
 5. **PROTOCOL_VERSION** stays 1. No new socket messages; tools ride the existing
    Hands / API tool-calling path.
 
-6. **Out of scope:** SMTP client (`LiveEmailMode::Send` stays unwired), calendar
-   writes, Drive upload/trash, CSAM/content scanning. Confirmed `email_send`
+6. **Out of scope:** SMTP client (`LiveEmailMode::Send` stays unwired), Drive
+   upload/trash, CSAM/content scanning. Calendar event create, update, and
+   delete are in scope via [ADR-0034](ADR-0034-calendar-write.md). Confirmed `email_send`
    over Gmail `users.messages.send` and Graph `sendMail` is in scope on a
    `live-http` daemon when a usable Email OAuth account is connected (amendment
    below).
@@ -128,4 +133,15 @@ active Microsoft account. `account` (connection id or email substring) selects
 a different row, including Microsoft when Google is also connected. Refresh
 updates that row in place.
 
-The SMTP client, calendar writes, and Drive upload/trash stay out of scope.
+The SMTP client and Drive upload/trash stay out of scope. Calendar event
+create, update, and delete are [ADR-0034](ADR-0034-calendar-write.md).
+
+## Amendment — calendar write scopes and tools (2026-09-28)
+
+`calendar_create`, `calendar_update`, and `calendar_delete` are confirm-gated
+(Ask by default) on the primary calendar. Google Connect keeps
+`calendar.readonly` and adds `calendar.events`. Microsoft Connect uses
+`Calendars.ReadWrite` instead of `Calendars.Read`. Token refresh does not
+enlarge an existing grant: Settings → Email → Accounts → Remove that account →
+Connect again, unless stored `scope` already lists the write scope. See
+[ADR-0034](ADR-0034-calendar-write.md). Drive upload/trash stay out of scope.

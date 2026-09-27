@@ -34,11 +34,18 @@ pub const MICROSOFT_TOKEN_URL: &str = "https://login.microsoftonline.com/common/
 pub const MICROSOFT_PROFILE_URL: &str =
     "https://graph.microsoft.com/v1.0/me?$select=id,mail,userPrincipalName";
 
-/// Combined Google scopes: openid/email + calendar + drive + gmail send/read.
-pub const GOOGLE_EMAIL_SCOPES: &str = "openid email https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly";
+/// Combined Google scopes: openid/email + calendar read + calendar events + drive + gmail send/read.
+///
+/// `calendar.readonly` stays so list/get keep working for grants that predate event write.
+/// `calendar.events` is event create/update/delete (and event read). The full `calendar` ACL
+/// scope is not requested.
+pub const GOOGLE_EMAIL_SCOPES: &str = "openid email https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly";
 
-/// Combined Microsoft Graph scopes: identity + calendar + `AppFolder` + mail.
-pub const MICROSOFT_EMAIL_SCOPES: &str = "openid profile email offline_access User.Read Calendars.Read Files.ReadWrite.AppFolder Mail.Send Mail.Read";
+/// Combined Microsoft Graph scopes: identity + calendar read-write + `AppFolder` + mail.
+///
+/// `Calendars.ReadWrite` replaces `Calendars.Read`. It includes read. Token refresh does
+/// not add it to an older grant.
+pub const MICROSOFT_EMAIL_SCOPES: &str = "openid profile email offline_access User.Read Calendars.ReadWrite Files.ReadWrite.AppFolder Mail.Send Mail.Read";
 
 const CLIENT_ID_MAX: usize = 200;
 const SECRET_MAX: usize = 500;
@@ -670,10 +677,26 @@ mod tests {
         assert!(GOOGLE_EMAIL_SCOPES.contains("gmail.readonly"));
         assert!(GOOGLE_EMAIL_SCOPES.contains("gmail.send"));
         assert!(GOOGLE_EMAIL_SCOPES.contains("calendar.readonly"));
+        assert!(GOOGLE_EMAIL_SCOPES.contains("https://www.googleapis.com/auth/calendar.events"));
         assert!(GOOGLE_EMAIL_SCOPES.contains("drive.file"));
+        assert!(
+            !GOOGLE_EMAIL_SCOPES
+                .split_whitespace()
+                .any(|token| token == "https://www.googleapis.com/auth/calendar")
+        );
         // Softwake mail delta vs MeetRec calendar/Drive-only Connect.
         assert!(GOOGLE_EMAIL_SCOPES.contains("https://www.googleapis.com/auth/gmail.readonly"));
         assert!(GOOGLE_EMAIL_SCOPES.contains("https://www.googleapis.com/auth/gmail.send"));
+        assert!(
+            MICROSOFT_EMAIL_SCOPES
+                .split_whitespace()
+                .any(|token| token == "Calendars.ReadWrite")
+        );
+        assert!(
+            !MICROSOFT_EMAIL_SCOPES
+                .split_whitespace()
+                .any(|token| token == "Calendars.Read")
+        );
     }
 
     #[test]

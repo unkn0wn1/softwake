@@ -15,7 +15,7 @@ use softwake_providers::AccountConnection;
 use softwake_providers::AccountProvider;
 
 #[cfg(feature = "live-http")]
-use crate::cloud_tools::{cloud_http_error, with_account};
+use crate::cloud_tools::with_account;
 
 /// Where a confirmed `email_send` goes after the policy gates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,37 +127,8 @@ fn post_for_send(
     url: &str,
     payload: &str,
 ) -> Result<String, String> {
-    post_json(url, &connection.access_token, payload)
+    crate::cloud_tools::post_json(url, &connection.access_token, payload)
         .map_err(|error| scope_failure_hint(provider, &connection.scope, error))
-}
-
-/// POST JSON with the same timeouts and error dialect as cloud GET.
-///
-/// Accepts HTTP 200..299, including Graph 202 with an empty body.
-#[cfg(feature = "live-http")]
-fn post_json(url: &str, bearer: &str, payload: &str) -> Result<String, String> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(10))
-        .timeout_read(std::time::Duration::from_secs(30))
-        .timeout(std::time::Duration::from_secs(30))
-        .build();
-    let response = match agent
-        .post(url)
-        .set("Authorization", &format!("Bearer {bearer}"))
-        .set("Content-Type", "application/json")
-        .send_string(payload)
-    {
-        Ok(response) | Err(ureq::Error::Status(_, response)) => response,
-        Err(_) => return Err("cloud API network transport failed".to_owned()),
-    };
-    let status = response.status();
-    let body = response
-        .into_string()
-        .map_err(|_| "cloud API body read failed".to_owned())?;
-    if !(200..300).contains(&status) {
-        return Err(cloud_http_error(status, &body));
-    }
-    Ok(body)
 }
 
 #[cfg(test)]

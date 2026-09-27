@@ -145,6 +145,9 @@ pub fn default_permission(name: &str) -> Option<ToolPermission> {
         | crate::EMAIL_SEARCH_TOOL
         | crate::EMAIL_GET_TOOL
         | crate::CALENDAR_GET_TOOL
+        | crate::CALENDAR_CREATE_TOOL
+        | crate::CALENDAR_UPDATE_TOOL
+        | crate::CALENDAR_DELETE_TOOL
         | crate::DRIVE_SEARCH_TOOL
         | crate::DRIVE_GET_TOOL
         | crate::SKILL_SAVE_TOOL
@@ -240,6 +243,9 @@ impl ToolsSettings {
             crate::EMAIL_GET_TOOL,
             crate::CALENDAR_LIST_TOOL,
             crate::CALENDAR_GET_TOOL,
+            crate::CALENDAR_CREATE_TOOL,
+            crate::CALENDAR_UPDATE_TOOL,
+            crate::CALENDAR_DELETE_TOOL,
             crate::DRIVE_LIST_TOOL,
             crate::DRIVE_SEARCH_TOOL,
             crate::DRIVE_GET_TOOL,
@@ -579,7 +585,7 @@ pub fn tools_permissions_appendix(settings: &ToolsSettings, email: &EmailOauthSt
     out.push_str(&email_oauth_line(email));
     out.push('\n');
     out.push_str(
-        "Do not claim a tool is denied when this list says otherwise. When a tool is listed as always_allow or ask, Softwake advertises it as a chat function tool — call it when you need real results (email_list/email_search/email_get, calendar_list/calendar_get, drive_list/drive_search/drive_get, email_send, skill_list/skill_get/skill_save, schedule/timers, softwake_status/list_*/set_*/sleep/hibernate/resume/new_session/refresh, mcp_<server>_<tool>, notify, echo, shell). Ask-mode tools wait for HUD Approve before they run; the turn may pause with a pending confirmation. Saying `run <command>` or `shell <command>` still works as a fast path. Never invent command output; only report stdout/stderr Softwake returns from a tool result. When Email OAuth is connected and inbox/calendar/drive tools are always_allow or ask, call those tools for real mailbox/calendar/Drive data — do not claim you lack them. Drive is limited to Google drive.file / Microsoft AppFolder scopes. Use email_send for outbound only. Use softwake_refresh after Settings or profile/soul edits to reload the active profile pack, clear the model session, and reseed from HUD. MCP tools appear as mcp_<server>_<tool> when the server is enabled and not Deny.",
+        "Do not claim a tool is denied when this list says otherwise. When a tool is listed as always_allow or ask, Softwake advertises it as a chat function tool — call it when you need real results (email_list/email_search/email_get, calendar_list/calendar_get/calendar_create/calendar_update/calendar_delete, drive_list/drive_search/drive_get, email_send, skill_list/skill_get/skill_save, schedule/timers, softwake_status/list_*/set_*/sleep/hibernate/resume/new_session/refresh, mcp_<server>_<tool>, notify, echo, shell). Ask-mode tools wait for HUD Approve before they run; the turn may pause with a pending confirmation. Saying `run <command>` or `shell <command>` still works as a fast path. Never invent command output; only report stdout/stderr Softwake returns from a tool result. When Email OAuth is connected and inbox/calendar/drive tools are always_allow or ask, call those tools for real mailbox/calendar/Drive data — do not claim you lack them. Drive is limited to Google drive.file / Microsoft AppFolder scopes. calendar_create, calendar_update, and calendar_delete change the primary calendar (Ask by default). If a connected account's stored scope lacks calendar.events or Calendars.ReadWrite, Remove that account under Settings → Email → Accounts and Connect again; token refresh does not enlarge the grant. Use email_send for outbound only. Use softwake_refresh after Settings or profile/soul edits to reload the active profile pack, clear the model session, and reseed from HUD. MCP tools appear as mcp_<server>_<tool> when the server is enabled and not Deny.",
     );
     out
 }
@@ -623,7 +629,7 @@ fn email_oauth_line(email: &EmailOauthStatus) -> String {
         &email.microsoft_accounts,
     );
     format!(
-        "Email OAuth: {google}; {microsoft}. Tokens stay in the secret bag. {EMAIL_OAUTH_ROUTING} Inbox/calendar/Drive tools follow their permissions above. Confirmed email_send uses that same choice when this daemon is built with live-http."
+        "Email OAuth: {google}; {microsoft}. Tokens stay in the secret bag. {EMAIL_OAUTH_ROUTING} Inbox/calendar/Drive tools follow their permissions above. Confirmed email_send, calendar_create, calendar_update, and calendar_delete use that same account choice when this daemon is built with live-http."
     )
 }
 
@@ -722,6 +728,18 @@ mod tests {
         );
         assert_eq!(
             settings.permission(crate::CALENDAR_GET_TOOL),
+            ToolPermission::Ask
+        );
+        assert_eq!(
+            settings.permission(crate::CALENDAR_CREATE_TOOL),
+            ToolPermission::Ask
+        );
+        assert_eq!(
+            settings.permission(crate::CALENDAR_UPDATE_TOOL),
+            ToolPermission::Ask
+        );
+        assert_eq!(
+            settings.permission(crate::CALENDAR_DELETE_TOOL),
             ToolPermission::Ask
         );
         assert_eq!(
