@@ -1,4 +1,4 @@
-//! Google Drive and Microsoft Graph `AppFolder` URL builders + parsers.
+//! Google Drive and Microsoft Graph `OneDrive` (user drive) URL builders + parsers.
 
 use serde_json::Value;
 
@@ -9,7 +9,7 @@ pub const MAX_DRIVE_MAX: u32 = 50;
 /// Max bytes when reading a cheap text body.
 pub const MAX_DRIVE_TEXT_BYTES: usize = 32 * 1024;
 
-/// One Drive / `AppFolder` file row.
+/// One Drive / `OneDrive` file row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveDriveFile {
     /// Provider file id.
@@ -37,7 +37,7 @@ pub fn clamp_drive_max(requested: Option<u32>) -> u32 {
     }
 }
 
-/// Google Drive files.list (scope-limited to `drive.file`).
+/// Google Drive files.list (requires `drive.readonly` for full user Drive visibility).
 #[must_use]
 pub fn google_drive_list_url(max: u32, query: Option<&str>) -> String {
     let fields = "files(id,name,mimeType,modifiedTime,size,webViewLink)";
@@ -85,19 +85,19 @@ pub fn google_drive_media_url(id: &str) -> String {
     )
 }
 
-/// Microsoft Graph App Folder children list.
+/// Microsoft Graph user drive root children list.
 #[must_use]
-pub fn graph_approot_children_url(max: u32) -> String {
+pub fn graph_drive_root_children_url(max: u32) -> String {
     format!(
-        "https://graph.microsoft.com/v1.0/me/drive/special/approot/children?$top={max}&$select=id,name,file,size,lastModifiedDateTime,webUrl"
+        "https://graph.microsoft.com/v1.0/me/drive/root/children?$top={max}&$select=id,name,file,size,lastModifiedDateTime,webUrl"
     )
 }
 
-/// Microsoft Graph drive search under App Folder.
+/// Microsoft Graph drive search under user drive root.
 #[must_use]
-pub fn graph_approot_search_url(query: &str, max: u32) -> String {
+pub fn graph_drive_root_search_url(query: &str, max: u32) -> String {
     format!(
-        "https://graph.microsoft.com/v1.0/me/drive/special/approot/search(q='{}')?$top={max}&$select=id,name,file,size,lastModifiedDateTime,webUrl",
+        "https://graph.microsoft.com/v1.0/me/drive/root/search(q='{}')?$top={max}&$select=id,name,file,size,lastModifiedDateTime,webUrl",
         encode_q_single_quoted(query)
     )
 }
@@ -242,9 +242,7 @@ fn parse_graph_drive_value(value: &Value) -> Result<LiveDriveFile, String> {
 #[must_use]
 pub fn format_drive_list(provider: &str, files: &[LiveDriveFile]) -> String {
     if files.is_empty() {
-        return format!(
-            "{provider}: (no files; Google drive.file / Microsoft AppFolder scope only)"
-        );
+        return format!("{provider}: (no files; Google drive.readonly / Microsoft Files.Read)");
     }
     let mut lines = vec![format!("{provider}: {} file(s)", files.len())];
     for (i, file) in files.iter().enumerate() {
@@ -350,7 +348,17 @@ mod tests {
     }
 
     #[test]
-    fn graph_approot_parse() {
+    fn graph_drive_root_urls() {
+        let children = graph_drive_root_children_url(10);
+        assert!(children.contains("/me/drive/root/children"));
+        assert!(!children.contains("approot"));
+        let search = graph_drive_root_search_url("notes", 5);
+        assert!(search.contains("/me/drive/root/search(q='notes')"));
+        assert!(!search.contains("approot"));
+    }
+
+    #[test]
+    fn graph_drive_root_parse() {
         let body = r#"{
           "value":[{
             "id":"i1",

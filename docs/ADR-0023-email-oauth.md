@@ -33,14 +33,14 @@ client secrets into the window.
 
    | Provider | Scopes |
    |---|---|
-   | Google | `openid email` + `calendar.readonly` + `calendar.events` + `drive.file` + `gmail.send` + `gmail.readonly` |
-   | Microsoft | `openid profile email offline_access User.Read Calendars.ReadWrite Files.ReadWrite.AppFolder Mail.Send Mail.Read` |
+   | Google | `openid email` + `calendar.readonly` + `calendar.events` + `drive.readonly` + `gmail.send` + `gmail.readonly` |
+   | Microsoft | `openid profile email offline_access User.Read Calendars.ReadWrite Files.Read Mail.Send Mail.Read` |
 
    Mail scopes are intentional for Softwake Email. Google keeps
    `calendar.readonly` and adds `calendar.events` (event read and write). The
    full `calendar` ACL scope is not requested. Microsoft uses
-   `Calendars.ReadWrite` instead of `Calendars.Read`. Drive stays `drive.file` /
-   AppFolder. **Calendar write (2026-09-28):**
+   `Calendars.ReadWrite` instead of `Calendars.Read`. Drive uses `drive.readonly` /
+   `Files.Read` ([ADR-0035](ADR-0035-drive-read-scope.md)). **Calendar write (2026-09-28):**
    [ADR-0034](ADR-0034-calendar-write.md).
 6. **Live I/O:** This ADR ships connect, disconnect, and token storage. Live
    Gmail / Graph send and list stay later. Confirm-gated `email_send` and
@@ -145,3 +145,10 @@ lacks `calendar.events` or `Calendars.ReadWrite`: Settings → Email → Account
 **Remove** that row → **Connect** again. If the stored scope already contains
 the write scope, reconnect is not required. See
 [ADR-0034](ADR-0034-calendar-write.md).
+
+## Amendment — Drive read scope widen (2026-09-28)
+
+Google `drive.file` → `drive.readonly`. Microsoft `Files.ReadWrite.AppFolder` →
+`Files.Read`. Graph list/search use user drive root. See
+[ADR-0035](ADR-0035-drive-read-scope.md). Existing accounts need Remove → Connect
+unless stored `scope` already includes the new Drive scopes.

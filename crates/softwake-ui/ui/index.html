@@ -557,12 +557,13 @@
           <p class="meta">
             Connect Google or Microsoft for mail, calendar, and drive. Softwake requests Gmail
             read/send, Google calendar.readonly and calendar.events (create, update, and delete
-            events), and drive.file — more than MeetRec’s calendar/Drive Connect. Microsoft uses
-            Calendars.ReadWrite instead of Calendars.Read. Tokens stay in the secret bag (OS keyring
+            events), and drive.readonly (full user Drive read) — more than MeetRec’s calendar/Drive
+            Connect. Microsoft uses Calendars.ReadWrite and Files.Read (user OneDrive, not App
+            Folder only). Tokens stay in the secret bag (OS keyring
             when available). Token refresh does not enlarge grants. After a scope change, Remove
             that account and Connect again so consent re-runs. If the stored scope already includes
-            calendar.events (Google) or Calendars.ReadWrite (Microsoft), reconnect is not required
-            for calendar write. Publisher Google Cloud must enable the <strong>Gmail API</strong>
+            calendar.events and drive.readonly (Google) or Calendars.ReadWrite and Files.Read
+            (Microsoft), reconnect is not required. Publisher Google Cloud must enable the <strong>Gmail API</strong>
             and <strong>Google Calendar API</strong> (and Drive); otherwise inbox or calendar tools
             return HTTP 403. Confirmed email_send, calendar_create, calendar_update, and
             calendar_delete use the active account when the daemon is built with live-http.
@@ -575,8 +576,8 @@
             added. Set active chooses which account of that provider tools use. When both
             Google and Microsoft are connected, tools use the active Google account unless
             the tool passes account (an email or connection id). An account connected before
-            calendar write scopes were requested must be Removed and Connected again.
-            Refresh does not add calendar.events or Calendars.ReadWrite.
+            calendar write or Drive read-widen scopes were requested must be Removed and Connected again.
+            Refresh does not add calendar.events, drive.readonly, Calendars.ReadWrite, or Files.Read.
           </p>
           <div class="stack" id="email-oauth-accounts">
             <div class="stack" id="email-google-accounts"></div>

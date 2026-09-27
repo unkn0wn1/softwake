@@ -28,8 +28,8 @@ Connect asks for **mail as well** in one consent:
 
 | Provider | MeetRec (calendar app) | Softwake Email Connect |
 | -------- | ---------------------- | ---------------------- |
-| Google | `openid` `email` `calendar.readonly` (+ `drive.file` when upload) | `openid` `email` `calendar.readonly` **`calendar.events`** `drive.file` **`gmail.readonly` `gmail.send`** |
-| Microsoft | `Calendars.Read` (+ `Files.ReadWrite.AppFolder` when upload) | identity + **`Calendars.ReadWrite`** `Files.ReadWrite.AppFolder` **`Mail.Read` `Mail.Send`** |
+| Google | `openid` `email` `calendar.readonly` (+ `drive.file` when upload) | `openid` `email` `calendar.readonly` **`calendar.events`** **`drive.readonly`** **`gmail.readonly` `gmail.send`** |
+| Microsoft | `Calendars.Read` (+ `Files.ReadWrite.AppFolder` when upload) | identity + **`Calendars.ReadWrite`** **`Files.Read`** **`Mail.Read` `Mail.Send`** |
 
 Reusing a MeetRec Google Cloud project for Softwake is fine **only if** that
 project also enables the Gmail API and lists the Gmail scopes on the consent
@@ -45,7 +45,7 @@ Gmail API is still disabled on the project (scopes may already be on the token).
    Google’s “Gmail API has not been used in project … or it is disabled” body.
 3. OAuth consent screen → External → Testing. Add test users. Scopes must include
    Softwake’s set: `openid`, `email`, `calendar.readonly`, `calendar.events`,
-   `drive.file`, `gmail.readonly`, `gmail.send` (full URLs under
+   `drive.readonly`, `gmail.readonly`, `gmail.send` (full URLs under
    `https://www.googleapis.com/auth/…`). Do not add the full `calendar` ACL
    scope; `calendar.events` is event read and write. `calendar.readonly` stays
    so list/get keep working on older grants and do not depend on the write
@@ -125,7 +125,7 @@ reconnect).
 4. Allow public client flows: **Yes**. Do not create a client secret.
 5. API permissions → Microsoft Graph delegated: Softwake’s
    `MICROSOFT_EMAIL_SCOPES` (`Mail.Read`, `Mail.Send`, `Calendars.ReadWrite`,
-   `Files.ReadWrite.AppFolder`, plus identity / `offline_access`).
+   `Files.Read`, plus identity / `offline_access`). Softwake no longer requests App Folder-only Files.ReadWrite.AppFolder; see ADR-0035.
 6. Put the Application (client) id in env / `oauth-clients.env`.
 
 ## What Softwake stores
@@ -138,3 +138,14 @@ reconnect).
 
 Constants: `GOOGLE_EMAIL_SCOPES` / `MICROSOFT_EMAIL_SCOPES` in
 `crates/softwake-providers/src/account_oauth.rs`.
+
+## Reconnect after Drive read widen (ADR-0035)
+
+Token refresh does **not** enlarge grants. For each account whose stored `scope`
+lacks `drive.readonly` (Google) or `Files.Read` (Microsoft):
+
+1. Settings → Email → Accounts
+2. **Remove** that account
+3. **Connect** / Add account again and finish consent
+
+Reconnect is not required when those scopes are already present on the token.

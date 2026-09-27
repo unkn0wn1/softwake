@@ -42,8 +42,8 @@ pub use drive::{DriveConnector, DriveFile};
 pub use drive_api::{
     DEFAULT_DRIVE_MAX, LiveDriveFile, MAX_DRIVE_MAX, MAX_DRIVE_TEXT_BYTES, clamp_drive_max,
     format_drive_file, format_drive_list, google_drive_export_text_url, google_drive_get_url,
-    google_drive_list_url, google_drive_media_url, graph_approot_children_url,
-    graph_approot_search_url, graph_drive_content_url, graph_drive_item_url, is_cheap_text_mime,
+    google_drive_list_url, google_drive_media_url, graph_drive_content_url, graph_drive_item_url,
+    graph_drive_root_children_url, graph_drive_root_search_url, is_cheap_text_mime,
     parse_google_drive_file, parse_google_drive_list, parse_graph_drive_file,
     parse_graph_drive_list, truncate_drive_text,
 };

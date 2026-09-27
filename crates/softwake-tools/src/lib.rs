@@ -101,7 +101,7 @@ pub const CALENDAR_UPDATE_TOOL: &str = "calendar_update";
 /// Delete a calendar event by id. Default Ask.
 pub const CALENDAR_DELETE_TOOL: &str = "calendar_delete";
 
-/// Drive / `AppFolder` list. Default Always allow.
+/// Drive / `OneDrive` list. Default Always allow.
 pub const DRIVE_LIST_TOOL: &str = "drive_list";
 
 /// Drive search. Default Ask.
@@ -253,12 +253,12 @@ const PHASE2: &[ToolMeta] = &[
     ToolMeta {
         name: DRIVE_LIST_TOOL,
         risk: ToolRisk::Confirm,
-        description: "List Drive/AppFolder files visible under Email OAuth scopes. Optional account selects a connected mailbox (connection id or email substring).",
+        description: "List Drive/OneDrive files visible under Email OAuth scopes (drive.readonly / Files.Read). Optional account selects a connected mailbox (connection id or email substring).",
     },
     ToolMeta {
         name: DRIVE_SEARCH_TOOL,
         risk: ToolRisk::Confirm,
-        description: "Search Drive/AppFolder files via Email OAuth. Optional account selects a connected mailbox (connection id or email substring).",
+        description: "Search Drive/OneDrive files via Email OAuth (drive.readonly / Files.Read). Optional account selects a connected mailbox (connection id or email substring).",
     },
     ToolMeta {
         name: DRIVE_GET_TOOL,
