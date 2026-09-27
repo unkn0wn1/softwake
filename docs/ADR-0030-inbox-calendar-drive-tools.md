@@ -47,13 +47,12 @@ accounts, advertised like other non-deny tools ([ADR-0025](ADR-0025-api-tool-cal
    deregister).
 
 4. **Scope honesty:** Google Connect uses `gmail.readonly`,
-   `calendar.readonly`, `calendar.events`, and `drive.file`. Drive list/search
-   therefore only sees files the Softwake client created or the user opened with
-   it — not the whole Drive. Microsoft uses `Mail.Read`, `Calendars.ReadWrite`,
-   and `Files.ReadWrite.AppFolder` (App Folder children only). Document this in
-   the appendix; do not claim full-mailbox/Drive access beyond those scopes.
-   Calendar write scopes and reconnect are [ADR-0034](ADR-0034-calendar-write.md).
-
+   `calendar.readonly`, `calendar.events`, and `drive.readonly`. Microsoft uses
+   `Mail.Read`, `Calendars.ReadWrite`, and `Files.Read`. Drive list/search/get
+   therefore see the user’s Drive / OneDrive (not only Softwake-touched files or
+   App Folder children). See [ADR-0035](ADR-0035-drive-read-scope.md). Earlier
+   builds used `drive.file` / `Files.ReadWrite.AppFolder`; document the widen and
+   the Remove → Connect requirement when stored `scope` lacks the new grants.
 5. **PROTOCOL_VERSION** stays 1. No new socket messages; tools ride the existing
    Hands / API tool-calling path.
 
@@ -145,3 +144,10 @@ create, update, and delete are [ADR-0034](ADR-0034-calendar-write.md).
 enlarge an existing grant: Settings → Email → Accounts → Remove that account →
 Connect again, unless stored `scope` already lists the write scope. See
 [ADR-0034](ADR-0034-calendar-write.md). Drive upload/trash stay out of scope.
+
+## Amendment — Drive read scope widen (2026-09-28)
+
+Connect now requests Google `drive.readonly` and Microsoft `Files.Read`. Graph
+list/search use `/me/drive/root/…` instead of App Folder. See
+[ADR-0035](ADR-0035-drive-read-scope.md). Token refresh does not enlarge an
+older grant: Settings → Email → Accounts → Remove → Connect.

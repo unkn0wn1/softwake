@@ -34,18 +34,17 @@ pub const MICROSOFT_TOKEN_URL: &str = "https://login.microsoftonline.com/common/
 pub const MICROSOFT_PROFILE_URL: &str =
     "https://graph.microsoft.com/v1.0/me?$select=id,mail,userPrincipalName";
 
-/// Combined Google scopes: openid/email + calendar read + calendar events + drive + gmail send/read.
+/// Combined Google scopes: openid/email + calendar read + calendar events + drive.readonly + gmail send/read.
 ///
-/// `calendar.readonly` stays so list/get keep working for grants that predate event write.
-/// `calendar.events` is event create/update/delete (and event read). The full `calendar` ACL
-/// scope is not requested.
-pub const GOOGLE_EMAIL_SCOPES: &str = "openid email https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly";
+/// `drive.readonly` replaces `drive.file` so list/search/get see the user's Drive, not only
+/// Softwake-created or Softwake-opened files. The full `drive` write/ACL scope is not requested.
+pub const GOOGLE_EMAIL_SCOPES: &str = "openid email https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly";
 
-/// Combined Microsoft Graph scopes: identity + calendar read-write + `AppFolder` + mail.
+/// Combined Microsoft Graph scopes: identity + calendar read-write + `OneDrive` Files.Read + mail.
 ///
-/// `Calendars.ReadWrite` replaces `Calendars.Read`. It includes read. Token refresh does
-/// not add it to an older grant.
-pub const MICROSOFT_EMAIL_SCOPES: &str = "openid profile email offline_access User.Read Calendars.ReadWrite Files.ReadWrite.AppFolder Mail.Send Mail.Read";
+/// `Files.Read` replaces `Files.ReadWrite.AppFolder` so list/search/get see the user's `OneDrive`
+/// (drive root), not only the app folder. Token refresh does not add it to an older grant.
+pub const MICROSOFT_EMAIL_SCOPES: &str = "openid profile email offline_access User.Read Calendars.ReadWrite Files.Read Mail.Send Mail.Read";
 
 const CLIENT_ID_MAX: usize = 200;
 const SECRET_MAX: usize = 500;
@@ -56,7 +55,7 @@ const SECRET_MAX: usize = 500;
 pub enum AccountProvider {
     /// Google (Gmail / Calendar / Drive).
     Google,
-    /// Microsoft (Outlook / Calendar / `OneDrive` `AppFolder`).
+    /// Microsoft (Outlook / Calendar / `OneDrive`).
     Microsoft,
 }
 
@@ -678,7 +677,12 @@ mod tests {
         assert!(GOOGLE_EMAIL_SCOPES.contains("gmail.send"));
         assert!(GOOGLE_EMAIL_SCOPES.contains("calendar.readonly"));
         assert!(GOOGLE_EMAIL_SCOPES.contains("https://www.googleapis.com/auth/calendar.events"));
-        assert!(GOOGLE_EMAIL_SCOPES.contains("drive.file"));
+        assert!(GOOGLE_EMAIL_SCOPES.contains("https://www.googleapis.com/auth/drive.readonly"));
+        assert!(
+            !GOOGLE_EMAIL_SCOPES
+                .split_whitespace()
+                .any(|token| token == "https://www.googleapis.com/auth/drive.file")
+        );
         assert!(
             !GOOGLE_EMAIL_SCOPES
                 .split_whitespace()
@@ -697,6 +701,17 @@ mod tests {
                 .split_whitespace()
                 .any(|token| token == "Calendars.Read")
         );
+        assert!(
+            MICROSOFT_EMAIL_SCOPES
+                .split_whitespace()
+                .any(|token| token == "Files.Read")
+        );
+        assert!(
+            !MICROSOFT_EMAIL_SCOPES
+                .split_whitespace()
+                .any(|token| token == "Files.ReadWrite.AppFolder")
+        );
+        assert!(!MICROSOFT_EMAIL_SCOPES.contains("AppFolder"));
     }
 
     #[test]

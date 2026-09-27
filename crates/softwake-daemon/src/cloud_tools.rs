@@ -15,13 +15,13 @@ use softwake_connectors::{
     format_calendar_event, format_calendar_list, format_drive_file, format_drive_list,
     format_inbox_list, format_inbox_message, gmail_get_url, gmail_list_url,
     google_drive_export_text_url, google_drive_get_url, google_drive_list_url,
-    google_drive_media_url, google_event_get_url, google_events_url, graph_approot_children_url,
-    graph_approot_search_url, graph_calendar_view_url, graph_drive_content_url,
-    graph_drive_item_url, graph_event_get_url, graph_get_url, graph_list_url, is_cheap_text_mime,
-    parse_gmail_list, parse_gmail_message, parse_google_drive_file, parse_google_drive_list,
-    parse_google_event, parse_google_events, parse_graph_drive_file, parse_graph_drive_list,
-    parse_graph_event, parse_graph_events, parse_graph_list, parse_graph_message,
-    truncate_drive_text,
+    google_drive_media_url, google_event_get_url, google_events_url, graph_calendar_view_url,
+    graph_drive_content_url, graph_drive_item_url, graph_drive_root_children_url,
+    graph_drive_root_search_url, graph_event_get_url, graph_get_url, graph_list_url,
+    is_cheap_text_mime, parse_gmail_list, parse_gmail_message, parse_google_drive_file,
+    parse_google_drive_list, parse_google_event, parse_google_events, parse_graph_drive_file,
+    parse_graph_drive_list, parse_graph_event, parse_graph_events, parse_graph_list,
+    parse_graph_message, truncate_drive_text,
 };
 #[cfg(feature = "live-http")]
 use softwake_providers::ensure_fresh_account;
@@ -207,7 +207,7 @@ pub(crate) fn run_drive_list(args: &DriveListArgs) -> Result<String, String> {
                 Ok(format_drive_list("google", &files))
             }
             AccountProvider::Microsoft => {
-                let url = graph_approot_children_url(max);
+                let url = graph_drive_root_children_url(max);
                 let body = get_json(&url, connection.access_token.as_str(), None)?;
                 let files = parse_graph_drive_list(&body)?;
                 Ok(format_drive_list("graph", &files))
@@ -233,7 +233,7 @@ pub(crate) fn run_drive_search(args: &DriveSearchArgs) -> Result<String, String>
                 Ok(format_drive_list("google", &files))
             }
             AccountProvider::Microsoft => {
-                let url = graph_approot_search_url(query, max);
+                let url = graph_drive_root_search_url(query, max);
                 let body = get_json(&url, connection.access_token.as_str(), None)?;
                 let files = parse_graph_drive_list(&body)?;
                 Ok(format_drive_list("graph", &files))

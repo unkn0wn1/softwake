@@ -205,7 +205,7 @@ fn parameters_for(name: &str) -> Value {
             "properties": {
                 "max_results": {
                     "type": "integer",
-                    "description": "Max files (default 20, max 50). Scope-limited to drive.file / AppFolder."
+                    "description": "Max files (default 20, max 50). Visible under drive.readonly / Files.Read."
                 },
                 "account": {
                     "type": "string",
