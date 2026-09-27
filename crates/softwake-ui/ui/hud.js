@@ -745,7 +745,16 @@ function applyPinned(next) {
   if (pinBtn) {
     pinBtn.setAttribute("aria-pressed", hudPinned ? "true" : "false");
     pinBtn.setAttribute("aria-label", hudPinned ? "Unpin chat" : "Pin chat open");
-    pinBtn.title = hudPinned ? "Unpin chat" : "Pin chat open";
+    pinBtn.title = hudPinned ? "Pinned — click to unpin" : "Pin chat open";
+    pinBtn.classList.toggle("is-on", hudPinned);
+    const off = pinBtn.querySelector(".pin-icon-off");
+    const on = pinBtn.querySelector(".pin-icon-on");
+    if (off) {
+      off.hidden = hudPinned;
+    }
+    if (on) {
+      on.hidden = !hudPinned;
+    }
   }
   if (hudPinned) {
     if (idleTimer) {
@@ -770,7 +779,11 @@ async function refreshHudPrefs() {
       applyPinned(snap.hud_pinned);
     }
   } catch (_error) {
-    
+    // Prefs are best-effort; keep defaults when the snapshot fails.
+  }
+  capsule.dataset.idleMs = String(configuredIdleMs);
+}
+
 if (pinBtn) {
   pinBtn.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -811,10 +824,6 @@ window.addEventListener("pointerup", () => {
     // Persist is best-effort.
   });
 });
-
-capsule.dataset.idleMs = String(configuredIdleMs);
-  }
-}
 
 async function refreshProfileName(force) {
   const now = Date.now();

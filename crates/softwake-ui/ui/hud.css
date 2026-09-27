@@ -487,10 +487,31 @@ body {
   display: grid;
 }
 
-.pin[aria-pressed="true"] {
+.pin:hover {
+  color: var(--ink);
+  background: oklch(1 0 0 / 0.14);
+}
+
+.pin:active {
+  transform: scale(0.94);
+}
+
+.pin[aria-pressed="true"],
+.pin.is-on {
   color: var(--cyan-ink);
   background: var(--cyan);
   border-color: transparent;
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--cyan) 55%, transparent);
+}
+
+.pin[aria-pressed="true"] .pin-icon-on,
+.pin.is-on .pin-icon-on {
+  transform: rotate(35deg);
+}
+
+.pin .pin-icon {
+  display: block;
+  transition: transform 120ms ease;
 }
 
 .resize-grip {
