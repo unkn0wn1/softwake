@@ -328,6 +328,37 @@ impl FileMemory {
         self.records = records;
         Ok(())
     }
+
+    /// Drop every snippet. The id counter does not move.
+    ///
+    /// An empty store is a no-op write: returns `0` and does not rewrite the
+    /// file when there is nothing to remove. After a successful clear, an
+    /// empty `snippets` list with a non-zero `next_id` remains valid.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FileMemoryError::Disabled`] when this value is off.
+    /// Returns [`FileMemoryError::Io`] when the replacement cannot be written.
+    /// Returns [`FileMemoryError::TooLarge`] when the replacement would exceed
+    /// [`MAX_FILE_BYTES`] (should not happen for an empty list).
+    pub fn forget_all(&mut self) -> Result<usize, FileMemoryError> {
+        if !self.enabled {
+            return Err(FileMemoryError::Disabled);
+        }
+        let count = self.records.len();
+        if count == 0 {
+            return Ok(0);
+        }
+        store(&self.path, self.next_id, &[])?;
+        self.records.clear();
+        Ok(count)
+    }
+
+    /// Stored snippets, oldest first. Empty while disabled.
+    #[must_use]
+    pub fn records(&self) -> &[Snippet] {
+        if self.enabled { &self.records } else { &[] }
+    }
 }
 
 impl Memory for FileMemory {

@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Memory write tools:** confirm-gated `remember` (default Always allow) and `forget` (default Ask, including `forget all`) so the agent can persist and remove long-term memory facts from voice/Telegram/HUD. First successful `remember` creates `memory.json` under the Softwake state directory; ask/chat budgeted recall then sees new facts. No Honcho / vector DB; store stays the simple disk file ([ADR 0009](docs/ADR-0009-long-term-memory.md)). See [ADR-0037](docs/ADR-0037-memory-write-tools.md).
+
 - **Agent-task cron:** schedule rows may set `action: agent_task` so a fire runs a bounded agent turn (prompt in `message`, tools under live Ask/Deny) and delivers the summary via HUD + Telegram timer fan-out / TTS. Fixed `notify` schedules unchanged. Create via Settings → Timers (Action = Agent task) or `schedule create agent_task daily 07:30 …`. See [ADR-0036](docs/ADR-0036-agent-task-cron.md).
 
 

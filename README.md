@@ -7,7 +7,7 @@ Rust end-to-end (daemon + Tauri UI).
 - **Phase 1** — reliable **wake / sleep / hibernate** and a single safe tool loop.
 - **Phase 2** — confirmation gate for one risky tool.
 - **Soul pack** — personality and rules in `soul.md`, `user.md`, `rules.md`, `glossary.md`, with multi-profile support under Settings → Profiles ([ADR 0017](docs/ADR-0017-profiles.md)).
-- **Long-term memory** — separate local trait ([ADR 0009](docs/ADR-0009-long-term-memory.md)), off by default, not required to run the daemon.
+- **Long-term memory** — separate local trait ([ADR 0009](docs/ADR-0009-long-term-memory.md)), off by default, not required to run the daemon. Agents persist and remove facts with `remember` (Always allow) and `forget` (Ask) ([ADR 0037](docs/ADR-0037-memory-write-tools.md)).
 
 ## Status
 
@@ -41,7 +41,7 @@ Cargo workspace on stable Rust (edition 2024). Default builds stay offline and m
   - In the connector registry, `drive` / `list` and `calendar` / `list` are confirm; delete actions are denied.
   - Those list mocks are not tools on the bus. The default build has no live cloud client.
 - `softwake-memory` — `Memory` trait, in-memory `MockMemory`, and opt-in `FileMemory` that writes `memory.json` only after `open_enabled`. Both stay off until enabled.
-- When `memory.json` exists under the Softwake state directory, awake `ask` / `chat` attach a budgeted recall appendix after the rendered pack ([ADR 0009](docs/ADR-0009-long-term-memory.md), [ADR 0013](docs/ADR-0013-session-provider.md)). Missing or disabled memory is fail-open (no snippets).
+- Confirm-gated `remember` / `forget` tools create and edit that file ([ADR 0037](docs/ADR-0037-memory-write-tools.md)). When `memory.json` exists under the Softwake state directory, awake `ask` / `chat` attach a budgeted recall appendix after the rendered pack ([ADR 0009](docs/ADR-0009-long-term-memory.md), [ADR 0013](docs/ADR-0013-session-provider.md)). Missing or disabled memory is fail-open (no snippets).
 - `softwake-policy` classifies tool and connector allowlists. Unknown names are denied. The daemon uses that classification; its override map is empty ([ADR 0010](docs/ADR-0010-policy-engine.md)).
 
 ### Providers and session
@@ -614,5 +614,6 @@ cargo test -p softwake-daemon --features pipewire-capture
 | [docs/ADR-0034-calendar-write.md](docs/ADR-0034-calendar-write.md) | Confirm-gated calendar create, update, and delete; write scopes; reconnect |
 | [docs/ADR-0035-drive-read-scope.md](docs/ADR-0035-drive-read-scope.md) | Drive read scope widen (`drive.readonly` / `Files.Read`); Graph root list/search |
 | [docs/ADR-0036-agent-task-cron.md](docs/ADR-0036-agent-task-cron.md) | Agent-task cron: scheduled prompt → bounded agent turn → deliver |
+| [docs/ADR-0037-memory-write-tools.md](docs/ADR-0037-memory-write-tools.md) | Agent `remember` / `forget` tools for `memory.json` |
 | [docs/ADR-0024-timers-cron.md](docs/ADR-0024-timers-cron.md) | Per-profile timers / cron; confirm-gated `schedule`; Settings → Timers (see also ADR-0036 agent tasks) |
 | [docs/ADR-0029-messengers-telegram.md](docs/ADR-0029-messengers-telegram.md) | Expandable Settings nav; Messengers + Telegram; shared HUD history; dual-login TTS |

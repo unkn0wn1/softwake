@@ -512,3 +512,39 @@ fn failed_write_does_not_consume_an_id() {
     let mut memory = FileMemory::open_enabled(dir.join(MEMORY_FILE_NAME)).expect("good");
     assert_eq!(memory.remember("hi").expect("first"), MemoryId::from_raw(1));
 }
+
+#[test]
+fn forget_all_clears_snippets_keeps_next_id() {
+    let dir = TempDir::new();
+    let path = dir.join(MEMORY_FILE_NAME);
+    let mut memory = FileMemory::open_enabled(&path).expect("open");
+    assert_eq!(memory.forget_all().expect("empty"), 0);
+    let a = memory.remember("alpha").expect("a");
+    let b = memory.remember("beta").expect("b");
+    assert_eq!(a.get(), 1);
+    assert_eq!(b.get(), 2);
+    assert_eq!(memory.records().len(), 2);
+    assert_eq!(memory.forget_all().expect("clear"), 2);
+    assert!(memory.records().is_empty());
+    assert_eq!(
+        memory.recall("alpha").expect("recall"),
+        Vec::<Snippet>::new()
+    );
+    let c = memory.remember("gamma").expect("c");
+    assert_eq!(c.get(), 3);
+    let raw = fs::read_to_string(&path).expect("read");
+    assert!(raw.contains("\"next_id\": 3"), "{raw}");
+    assert!(raw.contains("gamma"));
+    assert!(!raw.contains("alpha"));
+}
+
+#[test]
+fn forget_all_disabled_errors() {
+    let dir = TempDir::new();
+    let path = dir.join(MEMORY_FILE_NAME);
+    let mut memory = FileMemory::new(&path);
+    assert!(matches!(
+        memory.forget_all(),
+        Err(FileMemoryError::Disabled)
+    ));
+}

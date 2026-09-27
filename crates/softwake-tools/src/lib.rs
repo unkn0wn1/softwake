@@ -127,6 +127,12 @@ pub const SKILL_GET_TOOL: &str = "skill_get";
 /// Confirm-gated schedule mutate (create/edit/delete). `list` is included and confirm-gated.
 pub const SCHEDULE_TOOL: &str = "schedule";
 
+/// Persist a long-term memory snippet. Default Always allow. Creates `memory.json` on first success.
+pub const REMEMBER_TOOL: &str = "remember";
+
+/// Remove a memory snippet by id, or all snippets. Default Ask.
+pub const FORGET_TOOL: &str = "forget";
+
 /// Softwake ctl: `/status` mirror. Default Always allow.
 pub const SOFTWAKE_STATUS_TOOL: &str = softwake_ctl::SOFTWAKE_STATUS_TOOL;
 /// Softwake ctl: list chat/voice models. Default Always allow.
@@ -293,6 +299,16 @@ const PHASE2: &[ToolMeta] = &[
         description: "Timers/schedule tool: create, edit, delete, or list a per-profile timer/reminder/cron or agent_task (prompt on fire) after confirm.",
     },
     ToolMeta {
+        name: REMEMBER_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Remember a long-term memory fact (creates memory.json if missing). Default Always allow.",
+    },
+    ToolMeta {
+        name: FORGET_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Forget a memory snippet by id, or forget all. Default Ask.",
+    },
+    ToolMeta {
         name: SOFTWAKE_STATUS_TOOL,
         risk: ToolRisk::Confirm,
         description: "Softwake status: voice state, profile, model, context meter (mirrors /status).",
@@ -437,6 +453,8 @@ pub fn invalid_args_message(name: &str) -> String {
         ),
         CALENDAR_DELETE_TOOL | CALENDAR_GET_TOOL | EMAIL_GET_TOOL | DRIVE_GET_TOOL
         | SKILL_GET_TOOL => format!("{name} needs id"),
+        REMEMBER_TOOL => format!("{name} needs text"),
+        FORGET_TOOL => format!("{name} needs id or all"),
         SHELL_TOOL => format!("{name} needs a command"),
         _ => format!("{name} needs valid arguments"),
     }
@@ -544,6 +562,12 @@ impl ToolRegistry {
                     parse_schedule_args(args)
                         .map_err(|_| ToolError::invalid_args(SCHEDULE_TOOL))?;
                 }
+                if name == REMEMBER_TOOL {
+                    parse_remember_args(args)?;
+                }
+                if name == FORGET_TOOL {
+                    parse_forget_args(args)?;
+                }
                 if name == EMAIL_LIST_TOOL {
                     parse_email_list_args(args)?;
                 }
@@ -613,6 +637,15 @@ fn render(name: &str, args: &[String]) -> String {
         },
         SKILL_SAVE_TOOL => match parse_skill_save_args(args) {
             Ok(parsed) => format!("skill_save: {}", parsed.title),
+            Err(_) => args.join(" "),
+        },
+        REMEMBER_TOOL => match parse_remember_args(args) {
+            Ok(text) => format!("remember: {text}"),
+            Err(_) => args.join(" "),
+        },
+        FORGET_TOOL => match parse_forget_args(args) {
+            Ok(ForgetArgs::All) => "forget all".to_owned(),
+            Ok(ForgetArgs::Id(id)) => format!("forget id={id}"),
             Err(_) => args.join(" "),
         },
         _ => String::new(),
@@ -698,6 +731,50 @@ pub fn parse_skill_save_args(args: &[String]) -> Result<SkillSaveArgs, ToolError
     })
 }
 
+/// Parsed [`FORGET_TOOL`] arguments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForgetArgs {
+    /// Drop one snippet by numeric id.
+    Id(u64),
+    /// Drop every snippet (id counter unchanged).
+    All,
+}
+
+/// Join remember argv into snippet text.
+///
+/// # Errors
+///
+/// [`ToolError::InvalidArgs`] when args are empty or whitespace-only after join.
+pub fn parse_remember_args(args: &[String]) -> Result<String, ToolError> {
+    let text = args.join(" ");
+    if text.trim().is_empty() {
+        return Err(ToolError::invalid_args(REMEMBER_TOOL));
+    }
+    Ok(text)
+}
+
+/// Parse `forget <id>` or `forget all`.
+///
+/// # Errors
+///
+/// [`ToolError::InvalidArgs`] when args are missing, `id` is not a positive decimal, or extra tokens follow `all`.
+pub fn parse_forget_args(args: &[String]) -> Result<ForgetArgs, ToolError> {
+    if args.len() != 1 {
+        return Err(ToolError::invalid_args(FORGET_TOOL));
+    }
+    let token = args[0].trim();
+    if token.eq_ignore_ascii_case("all") {
+        return Ok(ForgetArgs::All);
+    }
+    let Ok(id) = token.parse::<u64>() else {
+        return Err(ToolError::invalid_args(FORGET_TOOL));
+    };
+    if id == 0 {
+        return Err(ToolError::invalid_args(FORGET_TOOL));
+    }
+    Ok(ForgetArgs::Id(id))
+}
+
 /// `skill_list` takes no arguments.
 ///
 /// # Errors
@@ -753,13 +830,14 @@ mod tests {
         CALENDAR_CREATE_TOOL, CALENDAR_DELETE_TOOL, CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL,
         CALENDAR_UPDATE_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL, ECHO_TOOL,
         EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, EmailSendArgs,
-        NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL,
-        SOFTWAKE_HIBERNATE_TOOL, SOFTWAKE_LIST_MODELS_TOOL, SOFTWAKE_LIST_PROFILES_TOOL,
-        SOFTWAKE_LIST_REASONING_TOOL, SOFTWAKE_LIST_VOICES_TOOL, SOFTWAKE_NEW_SESSION_TOOL,
-        SOFTWAKE_REFRESH_TOOL, SOFTWAKE_RESUME_TOOL, SOFTWAKE_SET_MODEL_TOOL,
-        SOFTWAKE_SET_PROFILE_TOOL, SOFTWAKE_SET_REASONING_TOOL, SOFTWAKE_SET_VOICE_TOOL,
-        SOFTWAKE_SLEEP_TOOL, SOFTWAKE_STATUS_TOOL, ToolError, ToolRegistry, ToolResult, ToolRisk,
-        parse_email_send_args,
+        FORGET_TOOL, ForgetArgs, NOTIFY_TOOL, REMEMBER_TOOL, SCHEDULE_TOOL, SHELL_TOOL,
+        SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL, SOFTWAKE_HIBERNATE_TOOL,
+        SOFTWAKE_LIST_MODELS_TOOL, SOFTWAKE_LIST_PROFILES_TOOL, SOFTWAKE_LIST_REASONING_TOOL,
+        SOFTWAKE_LIST_VOICES_TOOL, SOFTWAKE_NEW_SESSION_TOOL, SOFTWAKE_REFRESH_TOOL,
+        SOFTWAKE_RESUME_TOOL, SOFTWAKE_SET_MODEL_TOOL, SOFTWAKE_SET_PROFILE_TOOL,
+        SOFTWAKE_SET_REASONING_TOOL, SOFTWAKE_SET_VOICE_TOOL, SOFTWAKE_SLEEP_TOOL,
+        SOFTWAKE_STATUS_TOOL, ToolError, ToolRegistry, ToolResult, ToolRisk, parse_email_send_args,
+        parse_forget_args, parse_remember_args,
     };
 
     fn registry() -> ToolRegistry {
@@ -795,6 +873,8 @@ mod tests {
                 (SKILL_LIST_TOOL, ToolRisk::Confirm),
                 (SKILL_GET_TOOL, ToolRisk::Confirm),
                 (SCHEDULE_TOOL, ToolRisk::Confirm),
+                (REMEMBER_TOOL, ToolRisk::Confirm),
+                (FORGET_TOOL, ToolRisk::Confirm),
                 (SOFTWAKE_STATUS_TOOL, ToolRisk::Confirm),
                 (SOFTWAKE_LIST_MODELS_TOOL, ToolRisk::Confirm),
                 (SOFTWAKE_LIST_VOICES_TOOL, ToolRisk::Confirm),
@@ -1042,5 +1122,44 @@ mod tests {
         let owned: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
         let ToolResult { detail } = registry.invoke(name, &owned).expect(name);
         detail
+    }
+    #[test]
+    fn remember_and_forget_parse_args() {
+        assert_eq!(
+            parse_remember_args(&[String::from("garage"), String::from("code")]).expect("ok"),
+            "garage code"
+        );
+        assert!(parse_remember_args(&[]).is_err());
+        assert!(parse_remember_args(&[String::from("   ")]).is_err());
+        assert_eq!(
+            parse_forget_args(&[String::from("3")]).expect("id"),
+            ForgetArgs::Id(3)
+        );
+        assert_eq!(
+            parse_forget_args(&[String::from("all")]).expect("all"),
+            ForgetArgs::All
+        );
+        assert_eq!(
+            parse_forget_args(&[String::from("ALL")]).expect("ALL"),
+            ForgetArgs::All
+        );
+        assert!(parse_forget_args(&[]).is_err());
+        assert!(parse_forget_args(&[String::from("0")]).is_err());
+        assert!(parse_forget_args(&[String::from("3"), String::from("x")]).is_err());
+        assert!(parse_forget_args(&[String::from("nope")]).is_err());
+        let registry = ToolRegistry::phase2();
+        assert_eq!(registry.risk(REMEMBER_TOOL), Some(ToolRisk::Confirm));
+        assert_eq!(registry.risk(FORGET_TOOL), Some(ToolRisk::Confirm));
+        assert!(
+            registry
+                .invoke_confirmed(REMEMBER_TOOL, &[String::from("fact")])
+                .is_ok()
+        );
+        assert!(
+            registry
+                .invoke_confirmed(FORGET_TOOL, &[String::from("1")])
+                .is_ok()
+        );
+        assert!(registry.invoke_confirmed(FORGET_TOOL, &[]).is_err());
     }
 }
