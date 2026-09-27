@@ -2,6 +2,8 @@
 //!
 //! [`commit_email_send`] is the only place this daemon calls
 //! [`EmailBackend::send`](softwake_connectors::EmailBackend::send).
+//! OAuth send is the dispatch branch when a usable Email OAuth account exists
+//! on a `live-http` build; this function remains mock/SMTP.
 //! The registry is asked first. A denied or unknown pair leaves messages empty.
 
 use softwake_connectors::{

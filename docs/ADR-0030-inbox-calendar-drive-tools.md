@@ -53,8 +53,11 @@ accounts, advertised like other non-deny tools ([ADR-0025](ADR-0025-api-tool-cal
 5. **PROTOCOL_VERSION** stays 1. No new socket messages; tools ride the existing
    Hands / API tool-calling path.
 
-6. **Out of scope:** Live SMTP/`email_send` transport, calendar writes, Drive
-   upload/trash, CSAM/content scanning.
+6. **Out of scope:** SMTP client (`LiveEmailMode::Send` stays unwired), calendar
+   writes, Drive upload/trash, CSAM/content scanning. Confirmed `email_send`
+   over Gmail `users.messages.send` and Graph `sendMail` is in scope on a
+   `live-http` daemon when a usable Email OAuth account is connected (amendment
+   below).
 
 ## Consequences
 
@@ -93,3 +96,25 @@ bearer. Two different failures look similar in the HUD:
 Daemon live-http errors now surface a short, token-free hint from the provider
 error body (and a Softwake reconnect / Gmail API note on HTTP 403) instead of
 only `cloud API HTTP 403`.
+
+## Amendment — OAuth `email_send` (2026-09-27)
+
+Confirmed `email_send` delivers through the connected Email OAuth account when
+the daemon is built with `live-http`: Gmail `POST users.messages.send` or
+Microsoft Graph `POST /me/sendMail` (HTTP 202, empty body, no message id).
+Google is preferred when both providers are connected. The usable-account probe
+is local (secret bag). The POST is the only network step.
+
+A build without `live-http` does not take the OAuth send path, even if a secret
+bag exists on disk — the same rule as inbox tools. “OAuth connected” for send
+implies that live daemon feature.
+
+No usable account falls through to the mock outbox, live draft, or SMTP
+`TransportNotWired`. An error after an account is selected (refresh, HTTP 403,
+network) is returned and does not fall through to SMTP.
+
+Reconnect is required only when the stored `scope` lacks `gmail.send` (Google)
+or `Mail.Send` (Microsoft). Enabling the Gmail API stays required, same 403
+class as inbox. Token refresh does not enlarge the grant.
+
+The SMTP client, calendar writes, and Drive upload/trash stay out of scope.

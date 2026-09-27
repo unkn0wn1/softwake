@@ -560,8 +560,10 @@
             Connect. Tokens stay in the secret bag (OS keyring when available). After publisher
             scope changes, Disconnect and Connect again so consent re-runs. Publisher Google Cloud
             must enable the <strong>Gmail API</strong> (and Calendar/Drive); otherwise inbox tools
-            return HTTP 403 while calendar/Drive still work. Live send stays draft-gated; this pane
-            never sends mail. SMTP below is optional for non-OAuth setups.
+            return HTTP 403 while calendar/Drive still work. Confirmed email_send delivers
+            through the connected account (Google preferred) when the daemon is built with
+            live-http; SMTP send stays a local draft. This pane never sends mail. SMTP below
+            is optional for non-OAuth setups.
           </p>
           <h3 class="section-title">Accounts</h3>
           <div class="stack" id="email-oauth-accounts">

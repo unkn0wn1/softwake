@@ -595,10 +595,10 @@ fn email_oauth_line(email: &EmailOauthStatus) -> String {
         "Microsoft",
     );
     if !email.google_connected && !email.microsoft_connected {
-        return "Email OAuth: no Google or Microsoft account connected (Settings → Email). Inbox/calendar/Drive tools need a connected account; email_send still follows its permission (draft/mock until live send is wired).".to_owned();
+        return "Email OAuth: no Google or Microsoft account connected (Settings → Email). Inbox/calendar/Drive tools need a connected account. email_send still follows its permission and uses the in-memory outbox or SMTP draft until an account is connected.".to_owned();
     }
     format!(
-        "Email OAuth: {google}; {microsoft}. Tokens stay in the secret bag. Inbox/calendar/Drive tools and email_send follow their permissions above (Google preferred when both connected)."
+        "Email OAuth: {google}; {microsoft}. Tokens stay in the secret bag. Inbox/calendar/Drive tools follow their permissions above. Confirmed email_send delivers through the connected account (Google preferred when both are connected) when this daemon is built with live-http."
     )
 }
 
@@ -897,8 +897,10 @@ mod tests {
     fn tools_permissions_appendix_reports_email_oauth_connected() {
         let settings = ToolsSettings::default();
         let disconnected = tools_permissions_appendix(&settings, &EmailOauthStatus::default());
-        assert!(disconnected.contains("Email OAuth: no Google or Microsoft account connected"));
-        assert!(disconnected.contains("Inbox/calendar/Drive tools need a connected account"));
+        assert!(disconnected.contains(
+            "Email OAuth: no Google or Microsoft account connected (Settings → Email). Inbox/calendar/Drive tools need a connected account. email_send still follows its permission and uses the in-memory outbox or SMTP draft until an account is connected."
+        ));
+        assert!(!disconnected.contains("until live send is wired"));
         let email = EmailOauthStatus {
             google_connected: true,
             google_email: Some("ada@example.com".to_owned()),
@@ -907,7 +909,7 @@ mod tests {
         };
         let appendix = tools_permissions_appendix(&settings, &email);
         assert!(appendix.contains(
-            "Email OAuth: Google connected as ada@example.com; Microsoft not connected."
+            "Email OAuth: Google connected as ada@example.com; Microsoft not connected. Tokens stay in the secret bag. Inbox/calendar/Drive tools follow their permissions above. Confirmed email_send delivers through the connected account (Google preferred when both are connected) when this daemon is built with live-http."
         ));
         assert!(appendix.contains("- email_send: ask"));
         assert!(appendix.contains("- email_list: always_allow"));

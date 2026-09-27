@@ -10,9 +10,9 @@
 //! reported as unknown and does not read the permission map. The confirm-gated
 //! tool does not run, and the notification sink does not change, until
 //! [`Hands::confirm`]. `email_send` uses that same confirmation. The outbox
-//! changes only after the engine allows `email` / `send` and
-//! [`crate::email_tool::commit_email_send`] accepts the message. Always allow
-//! uses that same commit path with no pending record.
+//! changes on mock or draft only after the engine allows `email` / `send` and
+//! [`crate::email_tool::commit_email_send`] accepts the message. OAuth send
+//! does not append. Always allow uses that same path with no pending record.
 //!
 //! One pending confirmation at a time. A second confirm-gated request is
 //! rejected and leaves the first in place. [`Hands::cancel`] clears it in any
@@ -50,9 +50,10 @@ use softwake_tools::{
 };
 
 use crate::cloud_tools::{
-    connector_action_for, run_calendar_get, run_calendar_list, run_drive_get, run_drive_list,
-    run_drive_search, run_email_get, run_email_list, run_email_search,
+    connector_action_for, oauth_send_available, run_calendar_get, run_calendar_list, run_drive_get,
+    run_drive_list, run_drive_search, run_email_get, run_email_list, run_email_search,
 };
+use crate::email_send::{EmailTransport, choose_email_transport, run_email_send};
 use crate::email_tool::{commit_detail, commit_email_send};
 use crate::mcp_bridge;
 
@@ -804,52 +805,7 @@ impl Hands {
             };
         }
         if name == EMAIL_SEND_TOOL {
-            let parsed = match parse_email_send_args(args) {
-                Ok(parsed) => parsed,
-                Err(error) => return Err(self.fail_tool(error)),
-            };
-            if let Err(error) = self.registry.invoke_confirmed(name, args) {
-                return Err(self.fail_tool(error));
-            }
-            let message = OutboundEmail {
-                to: parsed.to,
-                subject: parsed.subject,
-                body: parsed.body,
-            };
-            let decision = self.policy.evaluate(&Subject::Connector {
-                connector: EMAIL,
-                action: EMAIL_SEND,
-            });
-            if !permits_confirmed_connector(decision) {
-                let denied = format!("connector action denied: {EMAIL}/{EMAIL_SEND}");
-                self.record(
-                    name,
-                    Some(ToolRisk::Confirm),
-                    ToolOutcome::Unknown,
-                    Some(denied.clone()),
-                );
-                return Err(DispatchError::Connector { message: denied });
-            }
-            let receipt = match commit_email_send(
-                &self.connectors,
-                &mut self.email,
-                EMAIL,
-                EMAIL_SEND,
-                &message,
-            ) {
-                Ok(receipt) => receipt,
-                Err(error) => {
-                    let message = error.to_string();
-                    self.record(
-                        name,
-                        Some(ToolRisk::Confirm),
-                        ToolOutcome::Unknown,
-                        Some(message.clone()),
-                    );
-                    return Err(DispatchError::Connector { message });
-                }
-            };
-            return Ok(commit_detail(&self.email, receipt));
+            return self.execute_email_send(name, args);
         }
         if name == SHELL_TOOL {
             return self.spawn_shell(&args.join(" "));
@@ -877,6 +833,84 @@ impl Hands {
             self.push_notification(detail.clone());
         }
         Ok(detail)
+    }
+
+    /// Confirmed `email_send`: OAuth when a usable account exists, otherwise mock/SMTP.
+    fn execute_email_send(&mut self, name: &str, args: &[String]) -> Result<String, DispatchError> {
+        let parsed = match parse_email_send_args(args) {
+            Ok(parsed) => parsed,
+            Err(error) => return Err(self.fail_tool(error)),
+        };
+        if let Err(error) = self.registry.invoke_confirmed(name, args) {
+            return Err(self.fail_tool(error));
+        }
+        let message = OutboundEmail {
+            to: parsed.to,
+            subject: parsed.subject,
+            body: parsed.body,
+        };
+        let decision = self.policy.evaluate(&Subject::Connector {
+            connector: EMAIL,
+            action: EMAIL_SEND,
+        });
+        if !permits_confirmed_connector(decision) {
+            let denied = format!("connector action denied: {EMAIL}/{EMAIL_SEND}");
+            self.record(
+                name,
+                Some(ToolRisk::Confirm),
+                ToolOutcome::Unknown,
+                Some(denied.clone()),
+            );
+            return Err(DispatchError::Connector { message: denied });
+        }
+        if let Err(error) = self.connectors.authorize_confirmed(EMAIL, EMAIL_SEND) {
+            let error_message = error.to_string();
+            self.record(
+                name,
+                Some(ToolRisk::Confirm),
+                ToolOutcome::Unknown,
+                Some(error_message.clone()),
+            );
+            return Err(DispatchError::Connector {
+                message: error_message,
+            });
+        }
+        if choose_email_transport(oauth_send_available()) == EmailTransport::OAuth {
+            return match run_email_send(&message) {
+                Ok(detail) => Ok(detail),
+                Err(error_message) => {
+                    self.record(
+                        name,
+                        Some(ToolRisk::Confirm),
+                        ToolOutcome::Unknown,
+                        Some(error_message.clone()),
+                    );
+                    Err(DispatchError::Connector {
+                        message: error_message,
+                    })
+                }
+            };
+        }
+        let receipt = match commit_email_send(
+            &self.connectors,
+            &mut self.email,
+            EMAIL,
+            EMAIL_SEND,
+            &message,
+        ) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                let message = error.to_string();
+                self.record(
+                    name,
+                    Some(ToolRisk::Confirm),
+                    ToolOutcome::Unknown,
+                    Some(message.clone()),
+                );
+                return Err(DispatchError::Connector { message });
+            }
+        };
+        Ok(commit_detail(&self.email, receipt))
     }
 
     /// Confirm-gated inbox / calendar / Drive read via Email OAuth.

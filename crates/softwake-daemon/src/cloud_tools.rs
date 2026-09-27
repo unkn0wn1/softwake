@@ -1,7 +1,8 @@
 //! Live inbox / calendar / Drive tools (Gmail, Google Calendar, Drive, MS Graph).
 //!
 //! Requires daemon `live-http` and a connected Email OAuth account. Prefer Google
-//! when both are connected. See ADR-0030.
+//! when both are connected. Confirmed `email_send` posts from `email_send`
+//! through [`with_account`]. See ADR-0030.
 
 #![cfg_attr(not(feature = "live-http"), allow(dead_code))]
 
@@ -32,21 +33,22 @@ use softwake_tools::{
 
 const NO_ACCOUNT: &str = "no Google or Microsoft account connected (Settings → Email → Connect)";
 #[allow(dead_code)]
-const LIVE_REQUIRED: &str = "live-http is required for inbox/calendar/Drive tools in this build";
+pub(crate) const LIVE_REQUIRED: &str =
+    "live-http is required for inbox/calendar/Drive tools in this build";
 
 /// Run `email_list` against the connected account.
 pub(crate) fn run_email_list(args: &EmailListArgs) -> Result<String, String> {
     let max = clamp_inbox_max(args.max_results);
-    with_account(|provider, bearer| match provider {
+    with_account(|provider, connection| match provider {
         AccountProvider::Google => {
             let url = gmail_list_url(max, None);
-            let body = get_json(&url, bearer, None)?;
+            let body = get_json(&url, connection.access_token.as_str(), None)?;
             let stubs = parse_gmail_list(&body)?;
             // Enrich up to max with metadata gets (cheap for small pages).
             let mut messages = Vec::new();
             for stub in stubs.into_iter().take(max as usize) {
                 let get_url = gmail_get_url(&stub.id);
-                if let Ok(raw) = get_json(&get_url, bearer, None) {
+                if let Ok(raw) = get_json(&get_url, connection.access_token.as_str(), None) {
                     if let Ok(msg) = parse_gmail_message(&raw) {
                         messages.push(msg);
                         continue;
@@ -58,7 +60,7 @@ pub(crate) fn run_email_list(args: &EmailListArgs) -> Result<String, String> {
         }
         AccountProvider::Microsoft => {
             let url = graph_list_url(max, None);
-            let body = get_json(&url, bearer, None)?;
+            let body = get_json(&url, connection.access_token.as_str(), None)?;
             let messages = parse_graph_list(&body)?;
             Ok(format_inbox_list("graph", &messages))
         }
@@ -72,15 +74,15 @@ pub(crate) fn run_email_search(args: &EmailSearchArgs) -> Result<String, String>
     if query.is_empty() {
         return Err("email_search needs query".to_owned());
     }
-    with_account(|provider, bearer| match provider {
+    with_account(|provider, connection| match provider {
         AccountProvider::Google => {
             let url = gmail_list_url(max, Some(query));
-            let body = get_json(&url, bearer, None)?;
+            let body = get_json(&url, connection.access_token.as_str(), None)?;
             let stubs = parse_gmail_list(&body)?;
             let mut messages = Vec::new();
             for stub in stubs.into_iter().take(max as usize) {
                 let get_url = gmail_get_url(&stub.id);
-                if let Ok(raw) = get_json(&get_url, bearer, None) {
+                if let Ok(raw) = get_json(&get_url, connection.access_token.as_str(), None) {
                     if let Ok(msg) = parse_gmail_message(&raw) {
                         messages.push(msg);
                         continue;
@@ -92,7 +94,11 @@ pub(crate) fn run_email_search(args: &EmailSearchArgs) -> Result<String, String>
         }
         AccountProvider::Microsoft => {
             let url = graph_list_url(max, Some(query));
-            let body = get_json(&url, bearer, Some(&[("ConsistencyLevel", "eventual")]))?;
+            let body = get_json(
+                &url,
+                connection.access_token.as_str(),
+                Some(&[("ConsistencyLevel", "eventual")]),
+            )?;
             let messages = parse_graph_list(&body)?;
             Ok(format_inbox_list("graph", &messages))
         }
@@ -105,16 +111,16 @@ pub(crate) fn run_email_get(args: &EmailGetArgs) -> Result<String, String> {
     if id.is_empty() {
         return Err("email_get needs id".to_owned());
     }
-    with_account(|provider, bearer| match provider {
+    with_account(|provider, connection| match provider {
         AccountProvider::Google => {
             let url = gmail_get_url(id);
-            let body = get_json(&url, bearer, None)?;
+            let body = get_json(&url, connection.access_token.as_str(), None)?;
             let msg = parse_gmail_message(&body)?;
             Ok(format_inbox_message("gmail", &msg))
         }
         AccountProvider::Microsoft => {
             let url = graph_get_url(id);
-            let body = get_json(&url, bearer, None)?;
+            let body = get_json(&url, connection.access_token.as_str(), None)?;
             let msg = parse_graph_message(&body)?;
             Ok(format_inbox_message("graph", &msg))
         }
@@ -129,10 +135,10 @@ pub(crate) fn run_calendar_list(args: &CalendarListArgs) -> Result<String, Strin
     let end = now + i64::from(days) * 86_400;
     let time_min = format_rfc3339(now);
     let time_max = format_rfc3339(end);
-    with_account(|provider, bearer| match provider {
+    with_account(|provider, connection| match provider {
         AccountProvider::Google => {
             let url = google_events_url(&time_min, &time_max, max);
-            let body = get_json(&url, bearer, None)?;
+            let body = get_json(&url, connection.access_token.as_str(), None)?;
             let events = parse_google_events(&body)?;
             Ok(format_calendar_list("google", &events))
         }
@@ -140,7 +146,7 @@ pub(crate) fn run_calendar_list(args: &CalendarListArgs) -> Result<String, Strin
             let url = graph_calendar_view_url(&time_min, &time_max, max);
             let body = get_json(
                 &url,
-                bearer,
+                connection.access_token.as_str(),
                 Some(&[("Prefer", "outlook.timezone=\"UTC\"")]),
             )?;
             let events = parse_graph_events(&body)?;
@@ -155,16 +161,16 @@ pub(crate) fn run_calendar_get(args: &CalendarGetArgs) -> Result<String, String>
     if id.is_empty() {
         return Err("calendar_get needs id".to_owned());
     }
-    with_account(|provider, bearer| match provider {
+    with_account(|provider, connection| match provider {
         AccountProvider::Google => {
             let url = google_event_get_url(id);
-            let body = get_json(&url, bearer, None)?;
+            let body = get_json(&url, connection.access_token.as_str(), None)?;
             let event = parse_google_event(&body)?;
             Ok(format_calendar_event("google", &event))
         }
         AccountProvider::Microsoft => {
             let url = graph_event_get_url(id);
-            let body = get_json(&url, bearer, None)?;
+            let body = get_json(&url, connection.access_token.as_str(), None)?;
             let event = parse_graph_event(&body)?;
             Ok(format_calendar_event("graph", &event))
         }
@@ -174,16 +180,16 @@ pub(crate) fn run_calendar_get(args: &CalendarGetArgs) -> Result<String, String>
 /// Run `drive_list`.
 pub(crate) fn run_drive_list(args: &DriveListArgs) -> Result<String, String> {
     let max = clamp_drive_max(args.max_results);
-    with_account(|provider, bearer| match provider {
+    with_account(|provider, connection| match provider {
         AccountProvider::Google => {
             let url = google_drive_list_url(max, None);
-            let body = get_json(&url, bearer, None)?;
+            let body = get_json(&url, connection.access_token.as_str(), None)?;
             let files = parse_google_drive_list(&body)?;
             Ok(format_drive_list("google", &files))
         }
         AccountProvider::Microsoft => {
             let url = graph_approot_children_url(max);
-            let body = get_json(&url, bearer, None)?;
+            let body = get_json(&url, connection.access_token.as_str(), None)?;
             let files = parse_graph_drive_list(&body)?;
             Ok(format_drive_list("graph", &files))
         }
@@ -197,16 +203,16 @@ pub(crate) fn run_drive_search(args: &DriveSearchArgs) -> Result<String, String>
     if query.is_empty() {
         return Err("drive_search needs query".to_owned());
     }
-    with_account(|provider, bearer| match provider {
+    with_account(|provider, connection| match provider {
         AccountProvider::Google => {
             let url = google_drive_list_url(max, Some(query));
-            let body = get_json(&url, bearer, None)?;
+            let body = get_json(&url, connection.access_token.as_str(), None)?;
             let files = parse_google_drive_list(&body)?;
             Ok(format_drive_list("google", &files))
         }
         AccountProvider::Microsoft => {
             let url = graph_approot_search_url(query, max);
-            let body = get_json(&url, bearer, None)?;
+            let body = get_json(&url, connection.access_token.as_str(), None)?;
             let files = parse_graph_drive_list(&body)?;
             Ok(format_drive_list("graph", &files))
         }
@@ -219,10 +225,10 @@ pub(crate) fn run_drive_get(args: &DriveGetArgs) -> Result<String, String> {
     if id.is_empty() {
         return Err("drive_get needs id".to_owned());
     }
-    with_account(|provider, bearer| match provider {
+    with_account(|provider, connection| match provider {
         AccountProvider::Google => {
             let url = google_drive_get_url(id);
-            let body = get_json(&url, bearer, None)?;
+            let body = get_json(&url, connection.access_token.as_str(), None)?;
             let mut file = parse_google_drive_file(&body)?;
             if args.read_text && is_cheap_text_mime(&file.mime_type) {
                 let text_url = if file.mime_type == "application/vnd.google-apps.document" {
@@ -230,7 +236,7 @@ pub(crate) fn run_drive_get(args: &DriveGetArgs) -> Result<String, String> {
                 } else {
                     google_drive_media_url(id)
                 };
-                if let Ok(raw) = get_text(&text_url, bearer) {
+                if let Ok(raw) = get_text(&text_url, connection.access_token.as_str()) {
                     file.text = truncate_drive_text(&raw);
                 }
             }
@@ -238,11 +244,11 @@ pub(crate) fn run_drive_get(args: &DriveGetArgs) -> Result<String, String> {
         }
         AccountProvider::Microsoft => {
             let url = graph_drive_item_url(id);
-            let body = get_json(&url, bearer, None)?;
+            let body = get_json(&url, connection.access_token.as_str(), None)?;
             let mut file = parse_graph_drive_file(&body)?;
             if args.read_text && is_cheap_text_mime(&file.mime_type) {
                 let content_url = graph_drive_content_url(id);
-                if let Ok(raw) = get_text(&content_url, bearer) {
+                if let Ok(raw) = get_text(&content_url, connection.access_token.as_str()) {
                     file.text = truncate_drive_text(&raw);
                 }
             }
@@ -267,9 +273,13 @@ pub(crate) fn connector_action_for(tool: &str) -> Option<(&'static str, &'static
     }
 }
 
-fn with_account<F>(f: F) -> Result<String, String>
+/// Refresh the preferred account and pass that connection to `f`.
+///
+/// Google wins when both providers are connected. Without `live-http` this
+/// returns [`LIVE_REQUIRED`] and does not call `f`.
+pub(crate) fn with_account<F>(f: F) -> Result<String, String>
 where
-    F: FnOnce(AccountProvider, &str) -> Result<String, String>,
+    F: FnOnce(AccountProvider, &AccountConnection) -> Result<String, String>,
 {
     #[cfg(not(feature = "live-http"))]
     {
@@ -287,7 +297,7 @@ where
         {
             persist_account(provider, fresh.clone())?;
         }
-        f(provider, &fresh.access_token)
+        f(provider, &fresh)
     }
 }
 
@@ -306,6 +316,21 @@ fn load_preferred_account() -> Result<(AccountProvider, AccountConnection), Stri
         }
     }
     Err(NO_ACCOUNT.to_owned())
+}
+
+/// Whether confirmed `email_send` should post via Gmail or Graph.
+///
+/// Without `live-http` this is false and does not read the secret bag.
+#[must_use]
+pub(crate) fn oauth_send_available() -> bool {
+    #[cfg(not(feature = "live-http"))]
+    {
+        false
+    }
+    #[cfg(feature = "live-http")]
+    {
+        load_preferred_account().is_ok()
+    }
 }
 
 fn persist_account(provider: AccountProvider, connection: AccountConnection) -> Result<(), String> {
@@ -378,7 +403,7 @@ fn get_text(_url: &str, _bearer: &str) -> Result<String, String> {
 }
 
 /// Build a token-free cloud HTTP error. Prefer Google/Graph `error.message` when present.
-fn cloud_http_error(status: u16, body: &str) -> String {
+pub(crate) fn cloud_http_error(status: u16, body: &str) -> String {
     let mut message = format!("cloud API HTTP {status}");
     if let Some(detail) = cloud_error_detail(body) {
         message.push_str(": ");
@@ -386,7 +411,7 @@ fn cloud_http_error(status: u16, body: &str) -> String {
     }
     if status == 403 {
         message.push_str(
-            " — If inbox fails while calendar/Drive work: enable Gmail API on the publisher GCP project (docs/oauth-clients.md). If the token lacks gmail.readonly, Disconnect and Connect Google in Settings → Email. No /refresh needed; Softwake reads the live secret bag.",
+            " — If inbox or send fails while calendar/Drive work: enable Gmail API on the publisher GCP project (docs/oauth-clients.md). If the token lacks gmail.readonly or gmail.send, or Mail.Send, Disconnect and Connect Google or Microsoft in Settings → Email. No /refresh needed; Softwake reads the live secret bag.",
         );
     }
     message
@@ -503,6 +528,7 @@ mod tests {
             connector_action_for(softwake_tools::CALENDAR_LIST_TOOL),
             Some((CALENDAR, CALENDAR_LIST))
         );
+        assert_eq!(connector_action_for(softwake_tools::EMAIL_SEND_TOOL), None);
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert!(format_rfc3339(0).starts_with("1970-01-01T00:00:00Z"));
     }
@@ -514,9 +540,18 @@ mod tests {
         assert!(err.contains("cloud API HTTP 403"));
         assert!(err.contains("Gmail API has not been used"));
         assert!(err.contains("enable Gmail API"));
+        assert!(err.contains("gmail.readonly"));
+        assert!(err.contains("gmail.send"));
+        assert!(err.contains("Mail.Send"));
         assert!(err.contains("Disconnect and Connect Google"));
         assert!(err.contains("No /refresh needed"));
         assert!(!err.contains("ya29."));
+    }
+
+    #[cfg(not(feature = "live-http"))]
+    #[test]
+    fn email_send_oauth_available_is_false_without_live_http() {
+        assert!(!super::oauth_send_available());
     }
 
     #[test]
