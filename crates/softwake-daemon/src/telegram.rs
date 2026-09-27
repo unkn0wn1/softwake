@@ -105,7 +105,10 @@ fn get_updates(token: &str, offset: i64) -> Result<Vec<TgUpdate>, String> {
         .timeout_connect(std::time::Duration::from_secs(15))
         .build();
     let response = agent.get(&url).call().map_err(|e| e.to_string())?;
-    let body: TgUpdates = response.into_json().map_err(|e| e.to_string())?;
+    // ureq 2.12 `into_json` needs the optional `json` feature; Softwake keeps
+    // ureq lean (same as softwake-providers/live.rs) and parses with serde_json.
+    let raw = response.into_string().map_err(|e| e.to_string())?;
+    let body: TgUpdates = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
     if !body.ok {
         return Err("telegram getUpdates not ok".into());
     }
