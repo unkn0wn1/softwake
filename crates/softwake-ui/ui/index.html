@@ -481,9 +481,13 @@
         <section id="pane-email" class="pane glass hidden" hidden aria-labelledby="email-title">
           <h2 id="email-title">Email</h2>
           <p class="meta">
-            Connect Google or Microsoft for mail, calendar, and drive. Tokens stay in the secret
-            bag (OS keyring when available). Live send/list stay draft-gated; this pane never
-            sends mail. SMTP below is optional for non-OAuth setups.
+            Connect Google or Microsoft for mail, calendar, and drive. Softwake requests Gmail
+            read/send (plus calendar.readonly and drive.file) — more than MeetRec’s calendar/Drive
+            Connect. Tokens stay in the secret bag (OS keyring when available). After publisher
+            scope changes, Disconnect and Connect again so consent re-runs. Publisher Google Cloud
+            must enable the <strong>Gmail API</strong> (and Calendar/Drive); otherwise inbox tools
+            return HTTP 403 while calendar/Drive still work. Live send stays draft-gated; this pane
+            never sends mail. SMTP below is optional for non-OAuth setups.
           </p>
           <h3 class="section-title">Accounts</h3>
           <div class="stack" id="email-oauth-accounts">
