@@ -11,9 +11,10 @@ use crate::{
     ECHO_TOOL, EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL,
     SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL,
     SOFTWAKE_HIBERNATE_TOOL, SOFTWAKE_LIST_MODELS_TOOL, SOFTWAKE_LIST_PROFILES_TOOL,
-    SOFTWAKE_LIST_VOICES_TOOL, SOFTWAKE_NEW_SESSION_TOOL, SOFTWAKE_REFRESH_TOOL,
-    SOFTWAKE_RESUME_TOOL, SOFTWAKE_SET_MODEL_TOOL, SOFTWAKE_SET_PROFILE_TOOL,
-    SOFTWAKE_SET_VOICE_TOOL, SOFTWAKE_SLEEP_TOOL, SOFTWAKE_STATUS_TOOL, ToolRegistry,
+    SOFTWAKE_LIST_REASONING_TOOL, SOFTWAKE_LIST_VOICES_TOOL, SOFTWAKE_NEW_SESSION_TOOL,
+    SOFTWAKE_REFRESH_TOOL, SOFTWAKE_RESUME_TOOL, SOFTWAKE_SET_MODEL_TOOL,
+    SOFTWAKE_SET_PROFILE_TOOL, SOFTWAKE_SET_REASONING_TOOL, SOFTWAKE_SET_VOICE_TOOL,
+    SOFTWAKE_SLEEP_TOOL, SOFTWAKE_STATUS_TOOL, ToolRegistry,
 };
 
 /// Build the `tools` array for one chat/completions request.
@@ -244,6 +245,16 @@ fn parameters_for(name: &str) -> Value {
             },
             "required": ["name"]
         }),
+        SOFTWAKE_SET_REASONING_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "description": "Reasoning effort: low, medium, high, xhigh, or default (omit / provider default)."
+                }
+            },
+            "required": ["mode"]
+        }),
         _ => json!({"type": "object", "properties": {}}),
     }
 }
@@ -359,6 +370,7 @@ pub fn tool_args_from_json(name: &str, arguments: &str) -> Result<Vec<String>, S
         | SOFTWAKE_LIST_MODELS_TOOL
         | SOFTWAKE_LIST_VOICES_TOOL
         | SOFTWAKE_LIST_PROFILES_TOOL
+        | SOFTWAKE_LIST_REASONING_TOOL
         | SOFTWAKE_SLEEP_TOOL
         | SOFTWAKE_HIBERNATE_TOOL
         | SOFTWAKE_RESUME_TOOL
@@ -409,6 +421,14 @@ pub fn tool_args_from_json(name: &str, arguments: &str) -> Result<Vec<String>, S
                 return Err("softwake_set_profile needs name".to_owned());
             }
             Ok(vec![name])
+        }
+        SOFTWAKE_SET_REASONING_TOOL => {
+            let mode = string_field(obj, "mode")
+                .ok_or_else(|| "softwake_set_reasoning needs mode".to_owned())?;
+            if mode.trim().is_empty() {
+                return Err("softwake_set_reasoning needs mode".to_owned());
+            }
+            Ok(vec![mode])
         }
         other => Err(format!("unknown tool for API args: {other}")),
     }

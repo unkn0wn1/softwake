@@ -10,12 +10,16 @@ pub const SOFTWAKE_LIST_MODELS_TOOL: &str = "softwake_list_models";
 pub const SOFTWAKE_LIST_VOICES_TOOL: &str = "softwake_list_voices";
 /// Mirror `/profile` list.
 pub const SOFTWAKE_LIST_PROFILES_TOOL: &str = "softwake_list_profiles";
+/// Mirror `/reasoning` list.
+pub const SOFTWAKE_LIST_REASONING_TOOL: &str = "softwake_list_reasoning";
 /// Mirror `/model ai|voice <id>`.
 pub const SOFTWAKE_SET_MODEL_TOOL: &str = "softwake_set_model";
 /// Mirror `/voice <id>`.
 pub const SOFTWAKE_SET_VOICE_TOOL: &str = "softwake_set_voice";
 /// Mirror `/profile <name>`.
 pub const SOFTWAKE_SET_PROFILE_TOOL: &str = "softwake_set_profile";
+/// Mirror `/reasoning <mode>`.
+pub const SOFTWAKE_SET_REASONING_TOOL: &str = "softwake_set_reasoning";
 /// Mirror `/sleep`.
 pub const SOFTWAKE_SLEEP_TOOL: &str = "softwake_sleep";
 /// Mirror `/hibernate`.
@@ -33,9 +37,11 @@ pub const SOFTWAKE_CTL_TOOLS: &[&str] = &[
     SOFTWAKE_LIST_MODELS_TOOL,
     SOFTWAKE_LIST_VOICES_TOOL,
     SOFTWAKE_LIST_PROFILES_TOOL,
+    SOFTWAKE_LIST_REASONING_TOOL,
     SOFTWAKE_SET_MODEL_TOOL,
     SOFTWAKE_SET_VOICE_TOOL,
     SOFTWAKE_SET_PROFILE_TOOL,
+    SOFTWAKE_SET_REASONING_TOOL,
     SOFTWAKE_SLEEP_TOOL,
     SOFTWAKE_HIBERNATE_TOOL,
     SOFTWAKE_RESUME_TOOL,
@@ -58,6 +64,7 @@ pub fn softwake_ctl_is_list(name: &str) -> bool {
             | SOFTWAKE_LIST_MODELS_TOOL
             | SOFTWAKE_LIST_VOICES_TOOL
             | SOFTWAKE_LIST_PROFILES_TOOL
+            | SOFTWAKE_LIST_REASONING_TOOL
     )
 }
 
@@ -72,6 +79,8 @@ pub enum SoftwakeCtlEffect {
     ListVoices,
     /// List profiles.
     ListProfiles,
+    /// List reasoning effort modes.
+    ListReasoning,
     /// Set chat or voice/STT model: ("ai"|"voice", id).
     SetModel {
         /// `ai` or `voice`.
@@ -88,6 +97,11 @@ pub enum SoftwakeCtlEffect {
     SetProfile {
         /// Name or id.
         name: String,
+    },
+    /// Set reasoning effort mode (`low`/`medium`/`high`/`xhigh`/`default`).
+    SetReasoning {
+        /// Mode id or `default` to clear.
+        mode: String,
     },
     /// Enter sleep.
     Sleep,
@@ -106,6 +120,10 @@ pub enum SoftwakeCtlEffect {
 /// # Errors
 ///
 /// Unknown name or invalid args.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one match arm per Softwake ctl tool keeps the table readable"
+)]
 pub fn parse_softwake_ctl(name: &str, args: &[String]) -> Result<SoftwakeCtlEffect, ToolError> {
     let invalid = || ToolError::InvalidArgs {
         name: name.to_owned(),
@@ -139,6 +157,13 @@ pub fn parse_softwake_ctl(name: &str, args: &[String]) -> Result<SoftwakeCtlEffe
                 Err(invalid())
             }
         }
+        SOFTWAKE_LIST_REASONING_TOOL => {
+            if args.is_empty() {
+                Ok(SoftwakeCtlEffect::ListReasoning)
+            } else {
+                Err(invalid())
+            }
+        }
         SOFTWAKE_SET_MODEL_TOOL => match args {
             [which, id] if matches!(which.as_str(), "ai" | "voice") && !id.trim().is_empty() => {
                 Ok(SoftwakeCtlEffect::SetModel {
@@ -155,6 +180,12 @@ pub fn parse_softwake_ctl(name: &str, args: &[String]) -> Result<SoftwakeCtlEffe
         SOFTWAKE_SET_PROFILE_TOOL => match args {
             [name] if !name.trim().is_empty() => {
                 Ok(SoftwakeCtlEffect::SetProfile { name: name.clone() })
+            }
+            _ => Err(invalid()),
+        },
+        SOFTWAKE_SET_REASONING_TOOL => match args {
+            [mode] if !mode.trim().is_empty() => {
+                Ok(SoftwakeCtlEffect::SetReasoning { mode: mode.clone() })
             }
             _ => Err(invalid()),
         },
@@ -218,6 +249,13 @@ mod tests {
         );
         assert!(is_softwake_ctl(SOFTWAKE_SLEEP_TOOL));
         assert!(softwake_ctl_is_list(SOFTWAKE_STATUS_TOOL));
+        assert!(softwake_ctl_is_list(SOFTWAKE_LIST_REASONING_TOOL));
         assert!(!softwake_ctl_is_list(SOFTWAKE_SLEEP_TOOL));
+        assert_eq!(
+            parse_softwake_ctl(SOFTWAKE_SET_REASONING_TOOL, &["xhigh".into()]).unwrap(),
+            SoftwakeCtlEffect::SetReasoning {
+                mode: "xhigh".into()
+            }
+        );
     }
 }

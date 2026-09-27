@@ -77,6 +77,8 @@ pub struct PreparedChat {
     pub api_base: String,
     /// Settings model id. Not a registry seed substitute.
     pub model: String,
+    /// `reasoning_effort` to send. Empty means omit the field (provider default).
+    pub reasoning_effort: String,
 }
 
 /// First failed readiness check. No I/O and no HTTP.
@@ -192,6 +194,7 @@ pub fn prepare_chat(
             family: provider_definition(provider).family,
             api_base,
             model: model.to_owned(),
+            reasoning_effort: handle.selected_reasoning_effort().unwrap_or("").to_owned(),
         },
         bearer,
     ))
@@ -223,13 +226,13 @@ pub fn complete_chat<T: Transport>(
             "content": message.content,
         }));
     }
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": prepared.model,
         "max_tokens": CHAT_MAX_TOKENS,
         "messages": wire,
-    })
-    .to_string();
-    parse_chat_response(transport.post_json_bearer(&url, bearer, &body))
+    });
+    crate::reasoning::insert_reasoning_effort(&mut body, &prepared.reasoning_effort);
+    parse_chat_response(transport.post_json_bearer(&url, bearer, &body.to_string()))
 }
 
 /// One short compaction completion over older turns.
@@ -599,6 +602,7 @@ mod tests {
             family,
             api_base,
             model: model.to_owned(),
+            reasoning_effort: String::new(),
         }
     }
 
@@ -651,7 +655,27 @@ mod tests {
             assert!(body.get("temperature").is_none());
             assert!(body.get("stream").is_none());
             assert!(body.get("tools").is_none());
+            assert!(body.get("reasoning_effort").is_none());
         }
+    }
+
+    #[test]
+    fn complete_chat_includes_reasoning_effort_when_set() {
+        let transport = RecordingTransport::new(content_response(200, &json!("pong")));
+        let mut prepared = prepared(ProviderFamily::Xai, "grok-custom");
+        prepared.reasoning_effort = "xhigh".to_owned();
+        let reply = complete_chat(
+            &transport,
+            &prepared,
+            "sk-test-secret",
+            "be brief",
+            &[ChatMessage::user("hello")],
+        )
+        .expect("pong");
+        assert_eq!(reply, "pong");
+        let posts = transport.posts.borrow();
+        let body: Value = serde_json::from_str(&posts[0].2).expect("json");
+        assert_eq!(body["reasoning_effort"], "xhigh");
     }
 
     #[test]

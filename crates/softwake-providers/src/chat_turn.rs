@@ -143,6 +143,7 @@ pub fn complete_chat_turn<T: Transport>(
         "max_tokens": CHAT_MAX_TOKENS,
         "messages": wire,
     });
+    crate::reasoning::insert_reasoning_effort(&mut body, &prepared.reasoning_effort);
     if !tools.is_empty() {
         body["tools"] = Value::Array(tools.to_vec());
     }
@@ -358,6 +359,7 @@ mod tests {
             family: ProviderFamily::Xai,
             api_base: "https://api.x.ai/v1".to_owned(),
             model: "grok-4.5".to_owned(),
+            reasoning_effort: String::new(),
         }
     }
 

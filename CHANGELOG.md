@@ -4,6 +4,7 @@
 
 ### Added
 
+- **Reasoning effort:** `/reasoning` / `/reasoning list` and `/reasoning <mode>` (`low`|`medium`|`high`|`xhigh`, or `default` to omit). Softwake ctl `softwake_list_reasoning` (Always allow) + `softwake_set_reasoning` (Ask). Stored in `providers.json` as `reasoning_effort`; forwarded on chat completions when set. See [ADR-0032](docs/ADR-0032-reasoning-effort.md).
 - **MCP Settings** (Messengers-like pane): add stdio/url servers, enable/disable, group Always/Ask/Deny, auth secret in the bag (`mcp_secrets`). Discovered tools advertise as `mcp_<server>_<tool>` when not Deny. Rediscover on serve start and `/refresh`. See [ADR-0031](docs/ADR-0031-mcp-settings-ctl-tools.md).
 - **Softwake ctl tools** (agent-callable slash mirrors): `softwake_status`, `softwake_list_models`, `softwake_list_voices`, `softwake_list_profiles` (Always allow); `softwake_set_model`, `softwake_set_voice`, `softwake_set_profile`, `softwake_sleep`, `softwake_hibernate`, `softwake_resume`, `softwake_new_session`, `softwake_refresh` (Ask). OpenAI tools + live appendix.
 - **`/refresh`** and `softwake_refresh`: reload active profile soul pack, **clear the model session**, reseed from plaintext HUD history, rediscover MCP. Pair with `/profile` / `softwake_set_profile` when switching agents. Does not restart softwaked.

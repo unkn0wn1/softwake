@@ -1125,6 +1125,7 @@ mod tests {
             family: ProviderFamily::Xai,
             api_base: softwake_providers::XAI_API_BASE.to_owned(),
             model: "grok-4.5".to_owned(),
+            reasoning_effort: String::new(),
         };
         let error = finish_prepared_chat(
             &prepared,

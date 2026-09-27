@@ -86,9 +86,11 @@ Static Hands tools, OpenAI-advertised when not Deny:
 | `softwake_list_models` | Always allow | `/model` |
 | `softwake_list_voices` | Always allow | `/voice` / list |
 | `softwake_list_profiles` | Always allow | `/profile` |
+| `softwake_list_reasoning` | Always allow | `/reasoning` list (ADR-0032) |
 | `softwake_set_model` | Ask | `/model ai\|voice <id>` |
 | `softwake_set_voice` | Ask | `/voice <id>` |
 | `softwake_set_profile` | Ask | `/profile <name>` |
+| `softwake_set_reasoning` | Ask | `/reasoning <mode>` (ADR-0032) |
 | `softwake_sleep` | Ask | `/sleep` |
 | `softwake_hibernate` | Ask | `/hibernate` |
 | `softwake_resume` | Ask | `/resume` (only from hibernate; while awake the tool explains that) |
