@@ -29,6 +29,8 @@ pub(crate) enum SlashCommand {
     Sleep,
     Hibernate,
     Resume,
+    /// Full live-config refresh (profile soul + chat + MCP). ADR-0031.
+    Refresh,
     /// Leading `/` with an unknown verb — show a short hint, do not chat.
     Unknown(String),
 }
@@ -86,6 +88,7 @@ pub(crate) fn parse_slash_command(text: &str) -> Option<SlashCommand> {
         ("sleep", [], true) => Some(SlashCommand::Sleep),
         ("hibernate", [], true) => Some(SlashCommand::Hibernate),
         ("resume", [], true) => Some(SlashCommand::Resume),
+        ("refresh", [], _) => Some(SlashCommand::Refresh),
         (_, _, true) => Some(SlashCommand::Unknown(body.to_owned())),
         _ => None,
     }
@@ -94,7 +97,7 @@ pub(crate) fn parse_slash_command(text: &str) -> Option<SlashCommand> {
 /// Help text for `/help`.
 #[must_use]
 pub(crate) fn help_text() -> String {
-    "Commands: /help /status /clear /halve|/reduce /compact /model [ai|voice <id>] /voice [list|<id>] /new /profile [<name>] /sleep /hibernate /resume"
+    "Commands: /help /status /clear /halve|/reduce /compact /model [ai|voice <id>] /voice [list|<id>] /new /profile [<name>] /sleep /hibernate /resume /refresh"
         .to_owned()
 }
 
@@ -342,6 +345,8 @@ mod tests {
             Some(SlashCommand::Hibernate)
         );
         assert_eq!(parse_slash_command("/resume"), Some(SlashCommand::Resume));
+        assert_eq!(parse_slash_command("/refresh"), Some(SlashCommand::Refresh));
+        assert_eq!(parse_slash_command("refresh"), Some(SlashCommand::Refresh));
     }
 
     #[test]

@@ -402,7 +402,8 @@ impl Runtime {
             crate::chat::appendix_for_ask(text, Option::<&softwake_memory::MockMemory>::None);
         let tools_settings = self.hands.tools_settings();
         let appendix = crate::chat::system_appendix(&memory, &tools_settings);
-        let tools = softwake_tools::advertise_chat_tools(&tools_settings);
+        let mut tools = softwake_tools::advertise_chat_tools(&tools_settings);
+        crate::mcp_bridge::append_mcp_chat_tools(&tools_settings, &mut tools);
         let trace = self.trace_context();
         let (system, _context) = crate::chat::prepare_ask_session(
             &mut self.session,
@@ -415,17 +416,13 @@ impl Runtime {
         .map_err(|e| e.sentence().to_owned())?;
         let messages = self.session.messages().to_vec();
         let loop_ok = {
-            let hands = &mut self.hands;
-            let machine = &self.machine;
             crate::chat::finish_prepared_chat_tools(
                 &call,
                 &bearer,
                 &system,
                 &messages,
                 &tools,
-                |name, args| {
-                    crate::tool_loop::invoke_from_request(hands.request(machine, name, args))
-                },
+                |name, args| self.invoke_for_chat(name, args),
             )
         };
         match loop_ok {
@@ -456,20 +453,17 @@ impl Runtime {
         let tools_settings = self.hands.tools_settings();
         let appendix = crate::chat::system_appendix(&memory, &tools_settings);
         let system = softwake_session::assemble_system(&pack, &appendix);
-        let tools = softwake_tools::advertise_chat_tools(&tools_settings);
+        let mut tools = softwake_tools::advertise_chat_tools(&tools_settings);
+        crate::mcp_bridge::append_mcp_chat_tools(&tools_settings, &mut tools);
         let turns = vec![softwake_session::SessionMessage::user(text)];
         let loop_ok = {
-            let hands = &mut self.hands;
-            let machine = &self.machine;
             crate::chat::finish_prepared_chat_tools(
                 &ready.prepared,
                 &ready.bearer,
                 &system,
                 &turns,
                 &tools,
-                |name, args| {
-                    crate::tool_loop::invoke_from_request(hands.request(machine, name, args))
-                },
+                |name, args| self.invoke_for_chat(name, args),
             )
         };
         match loop_ok {
@@ -675,6 +669,7 @@ impl Runtime {
             | SlashCommand::VoiceList
             | SlashCommand::VoiceSet(_)
             | SlashCommand::NewSession
+            | SlashCommand::Refresh
             | SlashCommand::ProfileList
             | SlashCommand::ProfileSet(_)
                 if self.machine.permit_tool_dispatch().is_err()
@@ -709,6 +704,7 @@ impl Runtime {
                 Err(err) => self.quiet_slash(err),
             },
             SlashCommand::NewSession => self.fresh_session("Session refreshed from soul pack"),
+            SlashCommand::Refresh => self.full_refresh(),
             SlashCommand::ProfileList => match crate::slash::format_profile_list() {
                 Ok(line) => self.quiet_slash(line),
                 Err(err) => self.quiet_slash(err),
@@ -803,6 +799,96 @@ impl Runtime {
             ));
         }
         self.apply_fresh_awake_session(ok_message)
+    }
+
+    /// `/refresh` / `softwake_refresh`: reload active profile soul, clear model session,
+    /// reseed HUD, rediscover MCP (ADR-0031).
+    fn full_refresh(&mut self) -> Outcome {
+        let mcp_note = crate::mcp_bridge::rediscover();
+        let base = "Refreshed: reloaded active profile soul, cleared model session, reseeding HUD";
+        let msg = format!("{base}. {mcp_note}");
+        self.fresh_session(&msg)
+    }
+
+    /// Apply a Softwake ctl effect after Hands staged/ran a softwake_* tool.
+    fn apply_ctl_effect(
+        &mut self,
+        effect: softwake_tools::SoftwakeCtlEffect,
+    ) -> Result<String, String> {
+        use softwake_tools::SoftwakeCtlEffect;
+        if let Some(disk) = crate::ctl_disk::try_apply_disk_ctl(&effect) {
+            return disk;
+        }
+        match effect {
+            SoftwakeCtlEffect::Status => Ok(self.format_slash_status()),
+            SoftwakeCtlEffect::SetProfile { name } => {
+                let outcome = self.slash_set_profile(&name);
+                match outcome.body {
+                    softwake_ipc::ResponseBody::Ok { snapshot } => Ok(snapshot
+                        .message
+                        .unwrap_or_else(|| "profile updated".to_owned())),
+                    softwake_ipc::ResponseBody::Err { error } => Err(error.to_string()),
+                }
+            }
+            SoftwakeCtlEffect::Sleep => {
+                let _ = self.sleep_phrase();
+                Ok("Entering sleep".to_owned())
+            }
+            SoftwakeCtlEffect::Hibernate => {
+                let _ = self.hibernate_phrase();
+                Ok("Entering hibernate".to_owned())
+            }
+            SoftwakeCtlEffect::Resume => {
+                if self.machine.state() != softwake_state::VoiceState::Hibernate {
+                    return Err("Resume only works from hibernate (lands in sleep)".to_owned());
+                }
+                let _ = self.transition(softwake_ipc::Command::WakeFromUi);
+                Ok("Resumed to sleep".to_owned())
+            }
+            SoftwakeCtlEffect::NewSession => {
+                let outcome = self.fresh_session("Session refreshed from soul pack");
+                match outcome.body {
+                    softwake_ipc::ResponseBody::Ok { snapshot } => Ok(snapshot
+                        .message
+                        .unwrap_or_else(|| "Session refreshed from soul pack".to_owned())),
+                    softwake_ipc::ResponseBody::Err { error } => Err(error.to_string()),
+                }
+            }
+            SoftwakeCtlEffect::Refresh => {
+                let outcome = self.full_refresh();
+                match outcome.body {
+                    softwake_ipc::ResponseBody::Ok { snapshot } => {
+                        Ok(snapshot.message.unwrap_or_else(|| "Refreshed".to_owned()))
+                    }
+                    softwake_ipc::ResponseBody::Err { error } => Err(error.to_string()),
+                }
+            }
+            SoftwakeCtlEffect::ListModels
+            | SoftwakeCtlEffect::ListVoices
+            | SoftwakeCtlEffect::ListProfiles
+            | SoftwakeCtlEffect::SetModel { .. }
+            | SoftwakeCtlEffect::SetVoice { .. } => {
+                Err("internal: disk ctl effect not applied".to_owned())
+            }
+        }
+    }
+
+    /// Hands tool invoke for chat loops: drain Softwake ctl effects into the tool result.
+    fn invoke_for_chat(
+        &mut self,
+        name: &str,
+        args: &[String],
+    ) -> crate::tool_loop::ToolInvokeResult {
+        let step = self.hands.request(&self.machine, name, args);
+        let result = crate::tool_loop::invoke_from_request(step);
+        if let Some(effect) = self.hands.take_ctl_effect() {
+            match self.apply_ctl_effect(effect) {
+                Ok(detail) => crate::tool_loop::ToolInvokeResult::Ran(detail),
+                Err(message) => crate::tool_loop::ToolInvokeResult::Failed(message),
+            }
+        } else {
+            result
+        }
     }
 
     /// Commit the loaded pack and open a new session while already awake.
@@ -1038,7 +1124,8 @@ impl Runtime {
                 );
                 let tools_settings = self.hands.tools_settings();
                 let appendix = crate::chat::system_appendix(&memory, &tools_settings);
-                let tools = softwake_tools::advertise_chat_tools(&tools_settings);
+                let mut tools = softwake_tools::advertise_chat_tools(&tools_settings);
+                crate::mcp_bridge::append_mcp_chat_tools(&tools_settings, &mut tools);
                 let budget = crate::chat::budget_for_handle(
                     self.chat_fixture
                         .as_ref()
@@ -1064,23 +1151,15 @@ impl Runtime {
                 };
                 let (system, context) = prepared_ask;
                 let messages = self.session.messages().to_vec();
-                let loop_ok = {
-                    let hands = &mut self.hands;
-                    let machine = &self.machine;
-                    crate::chat::complete_fixture_tools(
-                        &transport,
-                        &call,
-                        &bearer,
-                        &system,
-                        &messages,
-                        &tools,
-                        |name, args| {
-                            crate::tool_loop::invoke_from_request(
-                                hands.request(machine, name, args),
-                            )
-                        },
-                    )
-                };
+                let loop_ok = crate::chat::complete_fixture_tools(
+                    &transport,
+                    &call,
+                    &bearer,
+                    &system,
+                    &messages,
+                    &tools,
+                    |name, args| self.invoke_for_chat(name, args),
+                );
                 self.finish_tool_loop_ask(loop_ok, context)
             }
             Err(message) => Self::chat_rejected(&message),
@@ -1109,7 +1188,8 @@ impl Runtime {
             crate::chat::appendix_for_ask(text, Option::<&softwake_memory::MockMemory>::None);
         let tools_settings = self.hands.tools_settings();
         let appendix = crate::chat::system_appendix(&memory, &tools_settings);
-        let tools = softwake_tools::advertise_chat_tools(&tools_settings);
+        let mut tools = softwake_tools::advertise_chat_tools(&tools_settings);
+        crate::mcp_bridge::append_mcp_chat_tools(&tools_settings, &mut tools);
         let trace = self.trace_context();
         let prepared_ask = match crate::chat::prepare_ask_session(
             &mut self.session,
@@ -1125,17 +1205,13 @@ impl Runtime {
         let (system, context) = prepared_ask;
         let messages = self.session.messages().to_vec();
         let loop_ok = {
-            let hands = &mut self.hands;
-            let machine = &self.machine;
             crate::chat::finish_prepared_chat_tools(
                 &call,
                 &bearer,
                 &system,
                 &messages,
                 &tools,
-                |name, args| {
-                    crate::tool_loop::invoke_from_request(hands.request(machine, name, args))
-                },
+                |name, args| self.invoke_for_chat(name, args),
             )
         };
         self.finish_tool_loop_ask(loop_ok, context)
@@ -1459,7 +1535,17 @@ impl Runtime {
     /// same id fails because the first confirm clears the record.
     pub(crate) fn confirm_tool(&mut self, pending_id: &str, name: Option<&str>) -> Outcome {
         match self.hands.confirm(&self.machine, pending_id, name) {
-            Ok(confirmed) => self.confirmed_outcome(confirmed),
+            Ok(mut confirmed) => {
+                if let Some(effect) = self.hands.take_ctl_effect() {
+                    match self.apply_ctl_effect(effect) {
+                        Ok(detail) => confirmed.detail = detail,
+                        Err(message) => {
+                            return Self::rejected(softwake_ipc::IpcError::protocol(message));
+                        }
+                    }
+                }
+                self.confirmed_outcome(confirmed)
+            }
             Err(error) => Self::rejected(tool_ipc_error(&error)),
         }
     }

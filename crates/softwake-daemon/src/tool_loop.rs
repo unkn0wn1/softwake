@@ -127,6 +127,10 @@ fn dispatch_one(
 ) -> ToolInvokeResult {
     match tool_args_from_json(&call.name, &call.arguments) {
         Ok(args) => invoke(&call.name, &args),
+        Err(_message) if softwake_tools::is_mcp_tool_name(&call.name) => {
+            let args = vec![call.arguments.clone()];
+            invoke(&call.name, &args)
+        }
         Err(message) => ToolInvokeResult::Failed(message),
     }
 }
