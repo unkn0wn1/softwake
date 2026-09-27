@@ -37,6 +37,10 @@ pub(crate) struct Outcome {
     pub(crate) events: Vec<WireEvent>,
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "voice/session flags are independent latches, not one enum"
+)]
 pub(crate) struct Runtime {
     machine: Machine,
     /// Wall clock for [`Self::tick`]. Phrase cooldowns use machine time only.
@@ -99,6 +103,12 @@ pub(crate) struct Runtime {
     /// When set, `talk_stop` skips cloud STT and asks with this text.
     #[cfg(test)]
     talk_transcript: Option<String>,
+    /// Free-speech ambient reply latch (ADR 0028).
+    reply_latch: crate::reply_latch::ReplyLatch,
+    /// Next [`Self::ask`] came from free-speech STT (latch + NL self-sleep).
+    ask_from_free_speech: bool,
+    /// Soul path locked by `--soul-dir` / `SOFTWAKE_SOUL_DIR` (no profile retarget).
+    soul_path_locked: bool,
 }
 
 impl Runtime {
@@ -185,6 +195,9 @@ impl Runtime {
             #[cfg(test)]
             talk_transcript: None,
             mode_confirm: crate::mode_confirm::ModeConfirm::default(),
+            reply_latch: crate::reply_latch::ReplyLatch::default(),
+            ask_from_free_speech: false,
+            soul_path_locked: crate::slash::soul_path_env_locked(),
         };
         #[cfg(test)]
         {
@@ -323,6 +336,11 @@ impl Runtime {
         if text.trim().is_empty() {
             return Self::chat_rejected("ask needs text");
         }
+        // Slash first so `/sleep` is immediate (no NL confirm) and `/resume`
+        // works from hibernate before the awake-only gate.
+        if let Some(outcome) = self.try_slash_command(text) {
+            return outcome;
+        }
         if let Some(outcome) = self.route_mode_ask(text) {
             return outcome;
         }
@@ -334,9 +352,6 @@ impl Runtime {
         }
         if self.session.phase() != SessionPhase::Open {
             return Self::chat_rejected("session is closed");
-        }
-        if let Some(outcome) = self.try_context_command(text) {
-            return outcome;
         }
         if let Some(outcome) = self.try_shell_ask(text) {
             return outcome;
@@ -518,10 +533,175 @@ impl Runtime {
         let _ = self.arm_mode(crate::mode_confirm::ConfirmKind::FuzzyWake);
     }
 
-    /// Slash / clear-typed context commands (`/clear`, `/compact`, `/halve`).
-    fn try_context_command(&mut self, text: &str) -> Option<Outcome> {
-        let command = crate::chat::parse_context_command(text)?;
-        Some(self.run_context_command(command))
+    /// Slash / clear-typed operator commands (ADR 0027 + 0028).
+    fn try_slash_command(&mut self, text: &str) -> Option<Outcome> {
+        let command = crate::slash::parse_slash_command(text)?;
+        Some(self.run_slash_command(command))
+    }
+
+    fn run_slash_command(&mut self, command: crate::slash::SlashCommand) -> Outcome {
+        use crate::slash::SlashCommand;
+        match command {
+            SlashCommand::Help => self.quiet_slash(crate::slash::help_text()),
+            SlashCommand::Status => {
+                let line = self.format_slash_status();
+                self.quiet_slash(line)
+            }
+            SlashCommand::Clear
+            | SlashCommand::Compact
+            | SlashCommand::Halve
+            | SlashCommand::ModelList
+            | SlashCommand::ModelAi(_)
+            | SlashCommand::ModelVoice(_)
+            | SlashCommand::VoiceList
+            | SlashCommand::VoiceSet(_)
+            | SlashCommand::NewSession
+            | SlashCommand::ProfileList
+            | SlashCommand::ProfileSet(_)
+                if self.machine.permit_tool_dispatch().is_err()
+                    || self.session.phase() != SessionPhase::Open =>
+            {
+                self.quiet_slash(format!(
+                    "Command needs an awake session (now {})",
+                    wire_state(self.machine.state()).as_str()
+                ))
+            }
+            SlashCommand::Clear => self.run_context_command(crate::chat::ContextCommand::Clear),
+            SlashCommand::Compact => self.run_context_command(crate::chat::ContextCommand::Compact),
+            SlashCommand::Halve => self.run_context_command(crate::chat::ContextCommand::Halve),
+            SlashCommand::ModelList => match crate::slash::format_model_list() {
+                Ok(line) => self.quiet_slash(line),
+                Err(err) => self.quiet_slash(err),
+            },
+            SlashCommand::ModelAi(name) => match crate::slash::set_chat_model(&name) {
+                Ok(line) => self.quiet_slash(line),
+                Err(err) => self.quiet_slash(err),
+            },
+            SlashCommand::ModelVoice(name) => match crate::slash::set_voice_model(&name) {
+                Ok(line) => self.quiet_slash(line),
+                Err(err) => self.quiet_slash(err),
+            },
+            SlashCommand::VoiceList => match crate::slash::format_voice_list() {
+                Ok(line) => self.quiet_slash(line),
+                Err(err) => self.quiet_slash(err),
+            },
+            SlashCommand::VoiceSet(name) => match crate::slash::set_tts_voice(&name) {
+                Ok(line) => self.quiet_slash(line),
+                Err(err) => self.quiet_slash(err),
+            },
+            SlashCommand::NewSession => self.fresh_session("Session refreshed from soul pack"),
+            SlashCommand::ProfileList => match crate::slash::format_profile_list() {
+                Ok(line) => self.quiet_slash(line),
+                Err(err) => self.quiet_slash(err),
+            },
+            SlashCommand::ProfileSet(name) => self.slash_set_profile(&name),
+            SlashCommand::Sleep => self.sleep_phrase(),
+            SlashCommand::Hibernate => self.hibernate_phrase(),
+            SlashCommand::Resume => {
+                if self.machine.state() != VoiceState::Hibernate {
+                    return self.quiet_slash(
+                        "Resume only works from hibernate (lands in sleep)".to_owned(),
+                    );
+                }
+                self.transition(Command::WakeFromUi)
+            }
+            SlashCommand::Unknown(body) => self.quiet_slash(format!(
+                "Unknown command `/{body}`. {}",
+                crate::slash::help_text()
+            )),
+        }
+    }
+
+    fn quiet_slash(&mut self, reply: String) -> Outcome {
+        self.retain_status_text(Some(reply.clone()), None);
+        Self::quiet(self.snapshot(Some(reply), None))
+    }
+
+    fn format_slash_status(&mut self) -> String {
+        self.refresh_context_meter();
+        let state = wire_state(self.machine.state()).as_str();
+        let profile = self.soul.agent_name();
+        let model =
+            crate::slash::format_model_list().unwrap_or_else(|_| "model unknown".to_owned());
+        let meter = match (
+            self.last_context_used,
+            self.last_context_limit,
+            self.last_context_compact_at,
+        ) {
+            (Some(u), Some(l), Some(c)) => {
+                let pct = u.saturating_mul(100).checked_div(l).unwrap_or(0);
+                format!("context ~{u}/{l} ({pct}%); auto @{c}%")
+            }
+            _ => "context n/a".to_owned(),
+        };
+        format!("status: {state}; profile={profile}; {model}; {meter}")
+    }
+
+    fn slash_set_profile(&mut self, name: &str) -> Outcome {
+        let label = match crate::slash::activate_profile(name) {
+            Ok(line) => line,
+            Err(err) => return self.quiet_slash(err),
+        };
+        if self.soul_path_locked {
+            return self.quiet_slash(format!(
+                "{label}. Soul dir override is set — daemon pack unchanged; restart without --soul-dir / SOFTWAKE_SOUL_DIR to apply."
+            ));
+        }
+        match softwake_soul::resolve_soul_dir(None) {
+            Ok(dir) => {
+                self.soul.retarget(dir);
+                self.rebuild_pcm();
+            }
+            Err(err) => {
+                return self.quiet_slash(format!("{label}. Retarget failed: {err}"));
+            }
+        }
+        if self.machine.state() == VoiceState::Awake {
+            let msg = format!("{label}. Fresh session applied.");
+            return self.apply_fresh_awake_session(&msg);
+        }
+        self.quiet_slash(format!("{label}. Reloaded pack; applies on next awake."))
+    }
+
+    /// Re-read soul, re-apply if awake, open a fresh session (seed HUD history).
+    fn fresh_session(&mut self, ok_message: &str) -> Outcome {
+        if self.soul_path_locked {
+            self.soul.reload();
+        } else if let Ok(dir) = softwake_soul::resolve_soul_dir(None) {
+            if dir.path() == self.soul.dir_path() {
+                self.soul.reload();
+            } else {
+                self.soul.retarget(dir);
+            }
+        } else {
+            self.soul.reload();
+        }
+        self.rebuild_pcm();
+        self.reply_latch.clear();
+        if self.machine.state() != VoiceState::Awake {
+            return self.quiet_slash(format!(
+                "{ok_message} (not awake — pack applies on next wake)"
+            ));
+        }
+        self.apply_fresh_awake_session(ok_message)
+    }
+
+    /// Commit the loaded pack and open a new session while already awake.
+    fn apply_fresh_awake_session(&mut self, ok_message: &str) -> Outcome {
+        if let Some(reason) = self.soul.refusal() {
+            return self.quiet_slash(format!("Soul pack invalid ({reason}); session unchanged"));
+        }
+        self.soul.commit_awake();
+        self.sync_shell_glossary();
+        self.session.close();
+        self.last_context_used = None;
+        self.last_context_limit = None;
+        self.last_context_compacted = false;
+        self.last_context_compact_at = None;
+        self.reply_latch.clear();
+        self.open_session();
+        self.refresh_context_meter();
+        self.quiet_slash(ok_message.to_owned())
     }
 
     fn run_context_command(&mut self, command: crate::chat::ContextCommand) -> Outcome {
@@ -889,6 +1069,24 @@ impl Runtime {
         self.last_context_limit = Some(context.limit);
         self.last_context_compacted = context.compacted;
         self.last_context_compact_at = Some(context.threshold_percent);
+
+        let from_free = self.ask_from_free_speech;
+        self.ask_from_free_speech = false;
+        let now = Instant::now();
+
+        // Ambient latch: N near-identical short free-speech replies → sleep (no TTS).
+        if from_free && self.reply_latch.would_trigger(&reply, now) {
+            let _ = self.reply_latch.record(&reply, now);
+            self.reply_latch.clear();
+            let note = "Ambient loop detected — sleeping.".to_owned();
+            self.retain_status_text(Some(note.clone()), Some(note.clone()));
+            let mut outcome = self.sleep_phrase();
+            if let ResponseBody::Ok { snapshot } = &mut outcome.body {
+                snapshot.message = Some(note);
+            }
+            return outcome;
+        }
+
         self.speak_if_configured(&reply);
         let mut detail = self.last_speech_note.clone();
         if context.compacted {
@@ -901,9 +1099,23 @@ impl Runtime {
                 None => compact_note,
             });
         }
-        self.last_voice_activity = Some(Instant::now());
+        self.last_voice_activity = Some(now);
         self.auto_utt.reset();
         self.retain_status_text(Some(reply.clone()), detail.clone());
+
+        if from_free {
+            let _ = self.reply_latch.record(&reply, now);
+            if crate::reply_latch::is_self_sleep_reply(&reply) {
+                self.reply_latch.clear();
+                let mut outcome = self.sleep_phrase();
+                if let ResponseBody::Ok { snapshot } = &mut outcome.body {
+                    snapshot.message.clone_from(&Some(reply.clone()));
+                    snapshot.detail.clone_from(&detail);
+                }
+                return outcome;
+            }
+        }
+
         Outcome {
             body: ResponseBody::ok(self.snapshot(Some(reply), detail)),
             events: Vec::new(),
@@ -1022,7 +1234,7 @@ impl Runtime {
             Some("thinking…".to_owned()),
             Some("press to talk".to_owned()),
         );
-        self.transcribe_and_ask(&samples)
+        self.transcribe_and_ask(&samples, false)
     }
 
     fn talk_buffer_empty(&self) -> bool {
@@ -1041,10 +1253,10 @@ impl Runtime {
     }
 
     pub(crate) fn transcribe_and_ask_pub(&mut self, samples: &[i16]) -> Outcome {
-        self.transcribe_and_ask(samples)
+        self.transcribe_and_ask(samples, true)
     }
 
-    fn transcribe_and_ask(&mut self, samples: &[i16]) -> Outcome {
+    fn transcribe_and_ask(&mut self, samples: &[i16], from_free_speech: bool) -> Outcome {
         if self.voice_test {
             return self.voice_test_speech_outcome();
         }
@@ -1052,7 +1264,9 @@ impl Runtime {
         if let Some(text) = self.take_talk_transcript_override() {
             let _ = samples;
             let events = self.emit_final_transcript(&text);
+            self.ask_from_free_speech = from_free_speech;
             let mut outcome = self.ask(&text);
+            self.ask_from_free_speech = false;
             outcome.events.splice(0..0, events);
             return outcome;
         }
@@ -1067,7 +1281,9 @@ impl Runtime {
         match crate::talk::transcribe_pcm(&ready, &model, samples) {
             Ok(text) => {
                 let events = self.emit_final_transcript(&text);
+                self.ask_from_free_speech = from_free_speech;
                 let mut outcome = self.ask(&text);
+                self.ask_from_free_speech = false;
                 outcome.events.splice(0..0, events);
                 outcome
             }
@@ -1647,6 +1863,7 @@ impl Runtime {
             Ok(applied) => {
                 // A keyword hit is one-shot and drops a question that was waiting.
                 self.mode_confirm.clear();
+                self.reply_latch.clear();
                 if event == Event::WakePhrase {
                     self.soul.commit_awake();
                     self.sync_shell_glossary();
@@ -1777,6 +1994,37 @@ impl Runtime {
         Self::quiet(self.snapshot(
             Some(format!(
                 "Seeded {seeded} prior turn(s) into this awake session"
+            )),
+            None,
+        ))
+    }
+
+    /// Best-effort drop matching session turns after HUD multi-select delete.
+    pub(crate) fn drop_chat_turns_from_ui(
+        &mut self,
+        turns: &[softwake_ipc::SeedChatTurn],
+    ) -> Outcome {
+        if self.session.phase() != SessionPhase::Open {
+            return Self::quiet(
+                self.snapshot(
+                    Some(
+                        "Session closed — HUD history updated; model unchanged (/clear when awake)"
+                            .to_owned(),
+                    ),
+                    None,
+                ),
+            );
+        }
+        let pairs: Vec<(&str, &str)> = turns
+            .iter()
+            .filter(|t| !t.error && !t.text.trim().is_empty())
+            .map(|t| (t.role.as_str(), t.text.as_str()))
+            .collect();
+        let dropped = self.session.drop_matching_turns(&pairs);
+        self.refresh_context_meter();
+        Self::quiet(self.snapshot(
+            Some(format!(
+                "Dropped {dropped} matching model-session turn(s); /clear still clears all"
             )),
             None,
         ))
@@ -3964,5 +4212,75 @@ mod tests {
             softwake_state::VoiceState::Hibernate
         );
         assert!(runtime.chat_posts().is_empty());
+    }
+
+    #[test]
+    fn slash_help_does_not_post_to_provider() {
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        install_fixture(&mut runtime);
+        let outcome = runtime.ask("/help");
+        let status = outcome.body.status().expect("status");
+        assert!(
+            status
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains("/clear") && m.contains("/sleep")),
+            "{status:?}"
+        );
+        assert!(runtime.chat_posts().is_empty());
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Awake);
+    }
+
+    #[test]
+    fn slash_sleep_leaves_awake_without_confirm() {
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        runtime.machine.advance(Duration::from_millis(800));
+        let outcome = runtime.ask("/sleep");
+        let status = outcome.body.status().expect("status");
+        assert_eq!(status.state, VoiceState::Sleep);
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Sleep);
+    }
+
+    #[test]
+    fn free_speech_latch_sleeps_after_three_identical_short_replies() {
+        let (mut runtime, _soul) = valid_runtime();
+        wake(&mut runtime);
+        runtime.machine.advance(Duration::from_millis(800));
+        let line = "Still the telly. Not you. / Mic off.";
+        for i in 0..3 {
+            runtime.install_chat_fixture(crate::chat::xai_key_fixture(
+                true,
+                Some("sk-test-secret"),
+                line,
+            ));
+            runtime.ask_from_free_speech = true;
+            let outcome = runtime.ask(&format!("ambient {i}"));
+            runtime.ask_from_free_speech = false;
+            if i < 2 {
+                assert_eq!(
+                    runtime.machine.state(),
+                    softwake_state::VoiceState::Awake,
+                    "pass {i}"
+                );
+                let status = outcome.body.status().expect("status");
+                assert_eq!(status.message.as_deref(), Some(line));
+            } else {
+                assert_eq!(
+                    runtime.machine.state(),
+                    softwake_state::VoiceState::Sleep,
+                    "latch should sleep on third"
+                );
+                let status = outcome.body.status().expect("status");
+                assert!(
+                    status
+                        .message
+                        .as_deref()
+                        .is_some_and(|m| m.contains("Ambient loop")),
+                    "{status:?}"
+                );
+            }
+        }
     }
 }

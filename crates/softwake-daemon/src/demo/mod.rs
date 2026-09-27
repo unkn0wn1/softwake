@@ -452,7 +452,18 @@ impl Demo {
 
     /// `/clear`, `/compact`, `/halve` (and clear-typed forms) while awake.
     fn try_context_command(&mut self, text: &str) -> Option<Vec<String>> {
-        let command = crate::chat::parse_context_command(text)?;
+        let slash = crate::slash::parse_slash_command(text)?;
+        let command = match slash {
+            crate::slash::SlashCommand::Clear => crate::chat::ContextCommand::Clear,
+            crate::slash::SlashCommand::Compact => crate::chat::ContextCommand::Compact,
+            crate::slash::SlashCommand::Halve => crate::chat::ContextCommand::Halve,
+            crate::slash::SlashCommand::Help => {
+                return Some(
+                    self.with_status(vec![format!("assistant: {}", crate::slash::help_text())]),
+                );
+            }
+            _ => return None, // other slash cmds are serve/runtime only in this slice
+        };
         let Some(instructions) = self.session.instructions().map(str::to_owned) else {
             return Some(self.chat_rejected("session is closed", None));
         };

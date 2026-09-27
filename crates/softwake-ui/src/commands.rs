@@ -433,3 +433,15 @@ pub fn hud_seed_session(turns: Vec<softwake_ipc::SeedChatTurn>) -> Result<String
         .map_err(|error| error.to_string())?;
     Ok(status.message.unwrap_or_else(|| "seeded".to_owned()))
 }
+
+/// Best-effort trim matching turns from the open model session after HUD delete.
+#[tauri::command]
+pub fn hud_drop_session_turns(turns: Vec<softwake_ipc::SeedChatTurn>) -> Result<String, String> {
+    let mut client = connect()?;
+    let status = client
+        .call_drop_chat_turns(turns)
+        .map_err(|error| error.to_string())?;
+    Ok(status
+        .message
+        .unwrap_or_else(|| "session turns updated".to_owned()))
+}

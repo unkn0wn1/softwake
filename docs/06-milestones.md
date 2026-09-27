@@ -112,3 +112,9 @@ Linux and Windows x86_64 GitHub Releases (AppImage, tar.gz + systemd --user inst
 - [x] Default `compact_at_percent` **80**; auto-compact still runs before ask over threshold
 - [x] Seed-on-wake: budgeted HUD history into the model session (plaintext daemon + UI SeedChat)
 
+
+## Slash UX + HUD delete + ambient self-sleep ([ADR-0028](ADR-0028-slash-hud-self-sleep.md))
+
+- [x] Expanded slash / clear-typed commands (`/help` `/status` `/model` `/voice` `/new` `/profile` `/sleep` `/hibernate` `/resume`)
+- [x] HUD multi-select delete + `hud-chat.json` persist + best-effort session trim
+- [x] Free-speech ambient reply latch → auto-sleep; NL self-sleep markers

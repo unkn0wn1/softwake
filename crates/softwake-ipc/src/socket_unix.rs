@@ -483,7 +483,8 @@ impl ServerConnection {
             | ClientMessage::ReloadKws { .. }
             | ClientMessage::ReloadUtterance { .. }
             | ClientMessage::ReloadPlayback { .. }
-            | ClientMessage::SeedChat { .. } => {
+            | ClientMessage::SeedChat { .. }
+            | ClientMessage::DropChatTurns { .. } => {
                 let message = "expected a hello message".to_owned();
                 endpoint.write(&ServerMessage::HelloRejected {
                     protocol_version: PROTOCOL_VERSION,
@@ -716,6 +717,19 @@ impl Client {
     pub fn call_seed_chat(&mut self, turns: Vec<crate::SeedChatTurn>) -> Result<Status, CallError> {
         let id = self.allocate_id();
         self.round_trip(&ClientMessage::SeedChat { id, turns }, id)
+    }
+
+    /// Best-effort drop matching turns from the open model session (HUD delete).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] on transport failure or a rejected drop.
+    pub fn call_drop_chat_turns(
+        &mut self,
+        turns: Vec<crate::SeedChatTurn>,
+    ) -> Result<Status, CallError> {
+        let id = self.allocate_id();
+        self.round_trip(&ClientMessage::DropChatTurns { id, turns }, id)
     }
 
     /// Arm press-to-talk on the daemon.
