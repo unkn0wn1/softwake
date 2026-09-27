@@ -134,7 +134,11 @@ pub fn default_permission(name: &str) -> Option<ToolPermission> {
         | crate::EMAIL_LIST_TOOL
         | crate::CALENDAR_LIST_TOOL
         | crate::DRIVE_LIST_TOOL
-        | crate::SKILL_LIST_TOOL => Some(ToolPermission::AlwaysAllow),
+        | crate::SKILL_LIST_TOOL
+        | crate::SOFTWAKE_STATUS_TOOL
+        | crate::SOFTWAKE_LIST_MODELS_TOOL
+        | crate::SOFTWAKE_LIST_VOICES_TOOL
+        | crate::SOFTWAKE_LIST_PROFILES_TOOL => Some(ToolPermission::AlwaysAllow),
         crate::NOTIFY_TOOL
         | crate::EMAIL_SEND_TOOL
         | crate::EMAIL_SEARCH_TOOL
@@ -144,7 +148,15 @@ pub fn default_permission(name: &str) -> Option<ToolPermission> {
         | crate::DRIVE_GET_TOOL
         | crate::SKILL_SAVE_TOOL
         | crate::SKILL_GET_TOOL
-        | crate::SCHEDULE_TOOL => Some(ToolPermission::Ask),
+        | crate::SCHEDULE_TOOL
+        | crate::SOFTWAKE_SET_MODEL_TOOL
+        | crate::SOFTWAKE_SET_VOICE_TOOL
+        | crate::SOFTWAKE_SET_PROFILE_TOOL
+        | crate::SOFTWAKE_SLEEP_TOOL
+        | crate::SOFTWAKE_HIBERNATE_TOOL
+        | crate::SOFTWAKE_RESUME_TOOL
+        | crate::SOFTWAKE_NEW_SESSION_TOOL
+        | crate::SOFTWAKE_REFRESH_TOOL => Some(ToolPermission::Ask),
         crate::SHELL_TOOL => Some(ToolPermission::Deny),
         _ => None,
     }
@@ -193,13 +205,14 @@ impl ToolsSettings {
     /// A name that is not registered is deny.
     #[must_use]
     pub fn permission(&self, name: &str) -> ToolPermission {
+        if let Some(permission) = self.permissions.get(name).copied() {
+            return permission;
+        }
         if crate::ToolRegistry::phase2().lookup(name).is_none() {
+            // MCP tools inherit server group via mcp_bridge; unknown → deny.
             return ToolPermission::Deny;
         }
-        self.permissions
-            .get(name)
-            .copied()
-            .unwrap_or_else(|| default_permission(name).unwrap_or(ToolPermission::Deny))
+        default_permission(name).unwrap_or(ToolPermission::Deny)
     }
 
     /// Fill defaults, drop unknown keys, and sync the shell mirror.
@@ -232,6 +245,18 @@ impl ToolsSettings {
             crate::SKILL_LIST_TOOL,
             crate::SKILL_GET_TOOL,
             crate::SCHEDULE_TOOL,
+            crate::SOFTWAKE_STATUS_TOOL,
+            crate::SOFTWAKE_LIST_MODELS_TOOL,
+            crate::SOFTWAKE_LIST_VOICES_TOOL,
+            crate::SOFTWAKE_LIST_PROFILES_TOOL,
+            crate::SOFTWAKE_SET_MODEL_TOOL,
+            crate::SOFTWAKE_SET_VOICE_TOOL,
+            crate::SOFTWAKE_SET_PROFILE_TOOL,
+            crate::SOFTWAKE_SLEEP_TOOL,
+            crate::SOFTWAKE_HIBERNATE_TOOL,
+            crate::SOFTWAKE_RESUME_TOOL,
+            crate::SOFTWAKE_NEW_SESSION_TOOL,
+            crate::SOFTWAKE_REFRESH_TOOL,
         ] {
             if !self.permissions.contains_key(name) {
                 if let Some(permission) = default_permission(name) {
@@ -241,7 +266,7 @@ impl ToolsSettings {
         }
         let registry = crate::ToolRegistry::phase2();
         self.permissions
-            .retain(|name, _| registry.lookup(name).is_some());
+            .retain(|name, _| registry.lookup(name).is_some() || name.starts_with("mcp_"));
         let shell = self
             .permissions
             .get(crate::SHELL_TOOL)
@@ -535,7 +560,7 @@ pub fn tools_permissions_appendix(settings: &ToolsSettings, email: &EmailOauthSt
     out.push_str(&email_oauth_line(email));
     out.push('\n');
     out.push_str(
-        "Do not claim a tool is denied when this list says otherwise. When a tool is listed as always_allow or ask, Softwake advertises it as a chat function tool — call it when you need real results (email_list/email_search/email_get, calendar_list/calendar_get, drive_list/drive_search/drive_get, email_send, skill_list/skill_get/skill_save, schedule/timers, notify, echo, shell). Ask-mode tools wait for HUD Approve before they run; the turn may pause with a pending confirmation. Saying `run <command>` or `shell <command>` still works as a fast path. Never invent command output; only report stdout/stderr Softwake returns from a tool result. When Email OAuth is connected and inbox/calendar/drive tools are always_allow or ask, call those tools for real mailbox/calendar/Drive data — do not claim you lack them. Drive is limited to Google drive.file / Microsoft AppFolder scopes. Use email_send for outbound only.",
+        "Do not claim a tool is denied when this list says otherwise. When a tool is listed as always_allow or ask, Softwake advertises it as a chat function tool — call it when you need real results (email_list/email_search/email_get, calendar_list/calendar_get, drive_list/drive_search/drive_get, email_send, skill_list/skill_get/skill_save, schedule/timers, softwake_status/list_*/set_*/sleep/hibernate/resume/new_session/refresh, mcp_<server>_<tool>, notify, echo, shell). Ask-mode tools wait for HUD Approve before they run; the turn may pause with a pending confirmation. Saying `run <command>` or `shell <command>` still works as a fast path. Never invent command output; only report stdout/stderr Softwake returns from a tool result. When Email OAuth is connected and inbox/calendar/drive tools are always_allow or ask, call those tools for real mailbox/calendar/Drive data — do not claim you lack them. Drive is limited to Google drive.file / Microsoft AppFolder scopes. Use email_send for outbound only. Use softwake_refresh after Settings or profile/soul edits to reload the active profile pack, clear the model session, and reseed from HUD. MCP tools appear as mcp_<server>_<tool> when the server is enabled and not Deny.",
     );
     out
 }

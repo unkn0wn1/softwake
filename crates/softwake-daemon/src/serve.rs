@@ -280,6 +280,8 @@ impl Shared {
         if voice_test {
             let _ = runtime.set_voice_test(true);
         }
+        let mcp_note = crate::mcp_bridge::rediscover();
+        eprintln!("softwaked: {mcp_note}");
         Ok(Self {
             runtime: Mutex::new(runtime),
             last_status: Mutex::new(None),

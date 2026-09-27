@@ -103,8 +103,10 @@ pub(crate) fn appendix_for_ask(
 #[must_use]
 pub(crate) fn system_appendix(memory: &str, tools: &softwake_tools::ToolsSettings) -> String {
     let email = email_oauth_status_for_appendix();
+    let mcp = crate::mcp_bridge::mcp_appendix_lines(tools);
     softwake_session::join_appendices(&[
         &softwake_tools::tools_permissions_appendix(tools, &email),
+        &mcp,
         memory,
     ])
 }

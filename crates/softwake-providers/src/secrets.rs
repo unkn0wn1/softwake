@@ -4,6 +4,7 @@
 //! pointer and the secret fields live in one keyring item. Plaintext remains an
 //! opt-in fallback. Version 1 is still read. See [ADR 0012](../../docs/ADR-0012-model-providers.md).
 
+use std::collections::BTreeMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -91,6 +92,9 @@ pub struct SecretBag {
     /// Microsoft account connections (Email OAuth). At most one in the Email pane.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub microsoft_connections: Vec<AccountConnection>,
+    /// MCP server auth secrets keyed by server id (ADR-0031). Never logged.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub mcp_secrets: BTreeMap<String, String>,
 }
 
 fn legacy_version() -> u32 {
@@ -135,6 +139,14 @@ impl std::fmt::Debug for SecretBag {
             )
             .field("google_connections", &self.google_connections)
             .field("microsoft_connections", &self.microsoft_connections)
+            .field(
+                "mcp_secrets",
+                &self
+                    .mcp_secrets
+                    .keys()
+                    .map(|k| (k.as_str(), "<redacted>"))
+                    .collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -157,6 +169,7 @@ impl SecretBag {
             telegram_bot_token: None,
             google_connections: Vec::new(),
             microsoft_connections: Vec::new(),
+            mcp_secrets: BTreeMap::new(),
         }
     }
 
@@ -667,6 +680,10 @@ pub(crate) fn bag_has_secret(bag: &SecretBag) -> bool {
         })
         || bag.google_connections.iter().any(connection_has_secret)
         || bag.microsoft_connections.iter().any(connection_has_secret)
+        || bag
+            .mcp_secrets
+            .values()
+            .any(|value| !value.trim().is_empty())
 }
 
 fn connection_has_secret(connection: &AccountConnection) -> bool {
@@ -694,6 +711,8 @@ pub(crate) struct SecretPayload {
     pub(crate) google_connections: Vec<AccountConnection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) microsoft_connections: Vec<AccountConnection>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) mcp_secrets: BTreeMap<String, String>,
 }
 
 pub(crate) fn encode_payload(bag: &SecretBag) -> Result<String, SecretStoreError> {
@@ -707,6 +726,7 @@ pub(crate) fn encode_payload(bag: &SecretBag) -> Result<String, SecretStoreError
         xai_oauth: bag.xai_oauth.clone(),
         google_connections: bag.google_connections.clone(),
         microsoft_connections: bag.microsoft_connections.clone(),
+        mcp_secrets: bag.mcp_secrets.clone(),
     };
     serde_json::to_string(&payload).map_err(|_| SecretStoreError::Keyring)
 }
@@ -736,6 +756,7 @@ pub(crate) fn decode_payload(path: &Path, json: &str) -> Result<SecretBag, Secre
         telegram_bot_token: payload.telegram_bot_token,
         google_connections: payload.google_connections,
         microsoft_connections: payload.microsoft_connections,
+        mcp_secrets: payload.mcp_secrets,
     })
 }
 

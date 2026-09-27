@@ -4,6 +4,11 @@
 
 ### Added
 
+- **MCP Settings** (Messengers-like pane): add stdio/url servers, enable/disable, group Always/Ask/Deny, auth secret in the bag (`mcp_secrets`). Discovered tools advertise as `mcp_<server>_<tool>` when not Deny. Rediscover on serve start and `/refresh`. See [ADR-0031](docs/ADR-0031-mcp-settings-ctl-tools.md).
+- **Softwake ctl tools** (agent-callable slash mirrors): `softwake_status`, `softwake_list_models`, `softwake_list_voices`, `softwake_list_profiles` (Always allow); `softwake_set_model`, `softwake_set_voice`, `softwake_set_profile`, `softwake_sleep`, `softwake_hibernate`, `softwake_resume`, `softwake_new_session`, `softwake_refresh` (Ask). OpenAI tools + live appendix.
+- **`/refresh`** and `softwake_refresh`: reload active profile soul pack, **clear the model session**, reseed from plaintext HUD history, rediscover MCP. Pair with `/profile` / `softwake_set_profile` when switching agents. Does not restart softwaked.
+
+
 ### Added
 
 - Inbox / calendar / Drive read tools over Email OAuth (Google preferred, else Microsoft Graph): `email_list`, `email_search`, `email_get`, `calendar_list`, `calendar_get`, `drive_list`, `drive_search`, `drive_get`. Defaults: list Always allow; search/get Ask. Live HTTPS under daemon `live-http`. Scope-honest: Google `drive.file` / Microsoft AppFolder only for Drive. See [ADR-0030](docs/ADR-0030-inbox-calendar-drive-tools.md).

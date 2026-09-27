@@ -40,11 +40,12 @@ use softwake_tools::{
     CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL,
     EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, FileToolsSettings,
     NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL,
-    ScheduleAction, ToolError, ToolPermission, ToolRegistry, ToolResult, ToolRisk, ToolsSettings,
-    apply_action, format_shell_output, load_schedules, now_ms, parse_calendar_get_args,
-    parse_calendar_list_args, parse_drive_get_args, parse_drive_list_args, parse_drive_search_args,
-    parse_email_get_args, parse_email_list_args, parse_email_search_args, parse_email_send_args,
-    parse_schedule_args, parse_skill_get_args, parse_skill_list_args, parse_skill_save_args,
+    ScheduleAction, SoftwakeCtlEffect, ToolError, ToolPermission, ToolRegistry, ToolResult,
+    ToolRisk, ToolsSettings, apply_action, format_shell_output, is_softwake_ctl, load_schedules,
+    now_ms, parse_calendar_get_args, parse_calendar_list_args, parse_drive_get_args,
+    parse_drive_list_args, parse_drive_search_args, parse_email_get_args, parse_email_list_args,
+    parse_email_search_args, parse_email_send_args, parse_schedule_args, parse_skill_get_args,
+    parse_skill_list_args, parse_skill_save_args, parse_softwake_ctl,
     resolve_active_schedules_file, resolve_tools_file, run_shell, save_schedules,
 };
 
@@ -53,6 +54,7 @@ use crate::cloud_tools::{
     run_drive_search, run_email_get, run_email_list, run_email_search,
 };
 use crate::email_tool::{commit_detail, commit_email_send};
+use crate::mcp_bridge;
 
 /// How many tool-log entries the runtime keeps.
 const LOG_CAP: usize = 64;
@@ -269,6 +271,8 @@ pub(crate) struct Hands {
     /// Test-only Tools Settings override. Production always reads disk.
     tools_settings_override: Option<ToolsSettings>,
     pending: Option<Pending>,
+    /// Softwake ctl side effect staged by the last successful softwake_* run.
+    ctl_effect: Option<SoftwakeCtlEffect>,
     sink: VecDeque<String>,
     log: VecDeque<ToolLogEntry>,
     next_seq: u64,
@@ -300,6 +304,7 @@ impl Hands {
             glossary: Glossary::parse("").expect("empty glossary"),
             tools_settings_override: None,
             pending: None,
+            ctl_effect: None,
             sink: VecDeque::new(),
             log: VecDeque::new(),
             next_seq: 0,
@@ -325,6 +330,11 @@ impl Hands {
     #[must_use]
     pub(crate) fn glossary(&self) -> &Glossary {
         &self.glossary
+    }
+
+    /// Take a Softwake ctl effect produced by the last softwake_* tool run.
+    pub(crate) fn take_ctl_effect(&mut self) -> Option<SoftwakeCtlEffect> {
+        self.ctl_effect.take()
     }
 
     /// Override Tools Settings (tests). `None` restores disk loads.
@@ -409,7 +419,8 @@ impl Hands {
                 state,
             });
         }
-        if self.registry.lookup(name).is_none() {
+        let known_mcp = mcp_bridge::is_known_mcp_tool(name);
+        if self.registry.lookup(name).is_none() && !known_mcp {
             return Err(self.unknown_tool(name));
         }
         match self.decision_now(name) {
@@ -594,10 +605,17 @@ impl Hands {
 
     /// Registry floor, operator grant, then soul tighten.
     fn decision_now(&self, name: &str) -> PolicyDecision {
-        let Some(risk) = self.registry.risk(name) else {
+        let settings = self.tools_settings();
+        let (risk, grant) = if let Some(risk) = self.registry.risk(name) {
+            (risk, settings.permission(name))
+        } else if mcp_bridge::is_known_mcp_tool(name) {
+            (
+                ToolRisk::Confirm,
+                mcp_bridge::mcp_permission(&settings, name),
+            )
+        } else {
             return PolicyDecision::Deny;
         };
-        let grant = self.tools_settings().permission(name);
         effective_tool_decision(
             policy_floor(risk),
             grant,
@@ -656,11 +674,16 @@ impl Hands {
         if let Err(error) = validate_cloud_tool_args(name, args) {
             return Err(self.fail_tool(error));
         }
-        let description = self
-            .registry
-            .lookup(name)
-            .map(|meta| meta.description.to_owned())
-            .unwrap_or_default();
+        let description = self.registry.lookup(name).map_or_else(
+            || {
+                if mcp_bridge::is_known_mcp_tool(name) {
+                    format!("MCP tool {name}")
+                } else {
+                    String::new()
+                }
+            },
+            |meta| meta.description.to_owned(),
+        );
         Ok(self.store_pending(name, args.to_vec(), description))
     }
 
@@ -743,6 +766,7 @@ impl Hands {
                     name: name.to_owned(),
                 })
             }
+            None if mcp_bridge::is_known_mcp_tool(name) => self.execute_confirm_row(name, args),
             None => Err(self.unknown_tool(name)),
         }
     }
@@ -753,6 +777,32 @@ impl Hands {
         name: &str,
         args: &[String],
     ) -> Result<String, DispatchError> {
+        if is_softwake_ctl(name) {
+            let effect = match parse_softwake_ctl(name, args) {
+                Ok(effect) => effect,
+                Err(error) => return Err(self.fail_tool(error)),
+            };
+            if let Err(error) = self.registry.invoke_confirmed(name, args) {
+                return Err(self.fail_tool(error));
+            }
+            self.ctl_effect = Some(effect);
+            return Ok(String::new());
+        }
+        if mcp_bridge::is_known_mcp_tool(name) {
+            let payload = mcp_bridge::mcp_args_json_from_positional(args);
+            return match mcp_bridge::invoke_mcp_tool(name, &payload) {
+                Ok(detail) => Ok(detail),
+                Err(message) => {
+                    self.record(
+                        name,
+                        Some(ToolRisk::Confirm),
+                        ToolOutcome::Unknown,
+                        Some(message.clone()),
+                    );
+                    Err(DispatchError::Connector { message })
+                }
+            };
+        }
         if name == EMAIL_SEND_TOOL {
             let parsed = match parse_email_send_args(args) {
                 Ok(parsed) => parsed,

@@ -267,6 +267,13 @@ Default workspace tests do not call the network. Live HTTPS is the `live-http` f
 2. Settings → **Messengers** → **Telegram**: paste the token, enable the channel, set **Default** / **Receive all** / **Voice** as needed. Save.
 3. Message the bot once from your Telegram account (softwaked with `live-http` must be running) so Softwake binds `chat_id`.
 4. Reinstall daemon + UI with `live-http` (same features as today: `live-http,sherpa-kws,pipewire-capture`). Restart softwaked yourself — this change does not restart it for you.
+
+### MCP servers
+
+Settings → **MCP** (Messengers-like chips): add a server id, stdio command/args (or URL), enable it, set group permission (Ask by default), optional auth secret in the bag. Softwake advertises tools as `mcp_<server>_<tool>` when not Deny. After edits, awake `/refresh` (or ask the agent for `softwake_refresh`) rediscovers tools and reloads the active profile soul + chat (clears the model session, reseeds HUD). See [ADR-0031](docs/ADR-0031-mcp-settings-ctl-tools.md).
+
+Softwake ctl tools mirror slash commands (`softwake_status`, `softwake_list_*`, `softwake_set_*`, `softwake_sleep` / `hibernate` / `resume`, `softwake_new_session`, `softwake_refresh`). List tools default Always allow; state changes default Ask.
+
 5. Shared history: Telegram turns append to `profiles/<id>/hud-chat.json` (encrypted vaults use a short inbox merge). See [ADR-0029](docs/ADR-0029-messengers-telegram.md).
 
 ## Serve and ctl

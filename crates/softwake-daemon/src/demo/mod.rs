@@ -640,7 +640,8 @@ impl Demo {
         let memory = crate::chat::appendix_for_ask(text, fixture);
         let tools_settings = self.hands.tools_settings();
         let appendix = crate::chat::system_appendix(&memory, &tools_settings);
-        let tools = softwake_tools::advertise_chat_tools(&tools_settings);
+        let mut tools = softwake_tools::advertise_chat_tools(&tools_settings);
+        crate::mcp_bridge::append_mcp_chat_tools(&tools_settings, &mut tools);
         let prepared_ask = match crate::chat::prepare_ask_session(
             &mut self.session,
             text,
@@ -663,7 +664,21 @@ impl Demo {
             let hands = &mut self.hands;
             let machine = &self.machine;
             let mut invoke = |name: &str, args: &[String]| {
-                crate::tool_loop::invoke_from_request(hands.request(machine, name, args))
+                let result =
+                    crate::tool_loop::invoke_from_request(hands.request(machine, name, args));
+                if let Some(effect) = hands.take_ctl_effect() {
+                    if let Some(disk) = crate::ctl_disk::try_apply_disk_ctl(&effect) {
+                        return match disk {
+                            Ok(detail) => crate::tool_loop::ToolInvokeResult::Ran(detail),
+                            Err(message) => crate::tool_loop::ToolInvokeResult::Failed(message),
+                        };
+                    }
+                    return crate::tool_loop::ToolInvokeResult::Failed(
+                        "softwake ctl state change needs softwaked serve (not typed demo)"
+                            .to_owned(),
+                    );
+                }
+                result
             };
             run_loop(&system, &messages, &tools, &mut invoke)
         };
@@ -812,7 +827,24 @@ impl Demo {
         self.push_verbose(&mut lines, format!("tool: {name}"));
         self.push_verbose(&mut lines, format!("args: {args:?}"));
         match self.hands.request(&self.machine, name, args) {
-            Ok(RequestOutcome::Ran(ran)) => {
+            Ok(RequestOutcome::Ran(mut ran)) => {
+                if let Some(effect) = self.hands.take_ctl_effect() {
+                    if let Some(disk) = crate::ctl_disk::try_apply_disk_ctl(&effect) {
+                        match disk {
+                            Ok(detail) => ran.detail = detail,
+                            Err(message) => {
+                                lines.push(format!("rejected: {message}"));
+                                return self.with_status(lines);
+                            }
+                        }
+                    } else {
+                        lines.push(
+                            "rejected: softwake ctl state change needs softwaked serve (not typed demo)"
+                                .to_owned(),
+                        );
+                        return self.with_status(lines);
+                    }
+                }
                 lines.push(format!("tool {}: {}", ran.name, ran.detail));
             }
             Ok(RequestOutcome::Pending(pending)) => {
@@ -837,7 +869,24 @@ impl Demo {
         };
         let mut lines = Vec::new();
         match self.hands.confirm(&self.machine, &pending_id, None) {
-            Ok(confirmed) => {
+            Ok(mut confirmed) => {
+                if let Some(effect) = self.hands.take_ctl_effect() {
+                    if let Some(disk) = crate::ctl_disk::try_apply_disk_ctl(&effect) {
+                        match disk {
+                            Ok(detail) => confirmed.detail = detail,
+                            Err(message) => {
+                                lines.push(format!("rejected: {message}"));
+                                return self.with_status(lines);
+                            }
+                        }
+                    } else {
+                        lines.push(
+                            "rejected: softwake ctl state change needs softwaked serve (not typed demo)"
+                                .to_owned(),
+                        );
+                        return self.with_status(lines);
+                    }
+                }
                 lines.push(format!(
                     "confirmed {}: tool {}: {}",
                     confirmed.pending_id, confirmed.name, confirmed.detail
