@@ -91,6 +91,15 @@ reconnect).
 - **Consent scopes newly added:** Settings → Email → **Disconnect** Google, then
   **Connect** again so the authorize URL re-requests the full Softwake set
   (`prompt=consent`). Token refresh alone does not enlarge the grant.
+- **Confirmed `email_send`:** with Email OAuth connected and the daemon built
+  with `live-http`, Google uses `users.messages.send` and Microsoft Graph uses
+  `POST /me/sendMail` (HTTP 202, empty body, no message id). The Gmail API must
+  be enabled (same HTTP 403 class as inbox).
+- **Send scope already granted:** stored `scope` includes `gmail.send` (Google)
+  or `Mail.Send` (Microsoft) → no Disconnect/Connect for send.
+- **Send scope missing** (connected before those send scopes were on the token):
+  Settings → Email → Disconnect that provider → Connect. Token refresh does not
+  enlarge the grant.
 
 ## Microsoft Entra
 

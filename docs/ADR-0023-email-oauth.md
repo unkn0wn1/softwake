@@ -37,7 +37,9 @@ client secrets into the window.
    usual desktop readonly / AppFolder pattern.
 6. **Live I/O:** This ADR ships connect, disconnect, and token storage. Live
    Gmail / Graph send and list stay later. Confirm-gated `email_send` and
-   draft-only mode remain.
+   draft-only mode remain. **Superseded (2026-09-27):** list shipped in
+   [ADR-0030](ADR-0030-inbox-calendar-drive-tools.md); confirmed `email_send`
+   over Gmail and Graph ships in the amendment below. SMTP Send mode stays unwired.
 7. **PROTOCOL_VERSION** stays 1. OAuth is in-process Tauri (no new socket
    messages).
 8. **Timers / cron** are out of scope.
@@ -96,3 +98,27 @@ must **Disconnect** then **Connect** Google in Settings → Email so consent run
 again (`prompt=consent`). Token refresh does not enlarge the grant. Settings
 copy states this; the authorize URL keeps `access_type=offline`,
 `prompt=consent`, and `include_granted_scopes=true`.
+
+## Amendment — OAuth `email_send` (2026-09-27)
+
+This supersedes §6 for live send. List already shipped in
+[ADR-0030](ADR-0030-inbox-calendar-drive-tools.md). Confirmed `email_send`
+delivers through the connected Email OAuth account when the daemon is built
+with `live-http`:
+
+- Google: `POST https://gmail.googleapis.com/gmail/v1/users/me/messages/send`
+  with a base64url RFC 2822 `raw` body. Detail is `sent gmail {id}`.
+- Microsoft Graph: `POST https://graph.microsoft.com/v1.0/me/sendMail`
+  (HTTP 202, empty body, no message id). Detail is `sent graph`.
+
+Google is preferred when both providers are connected, same as inbox. There is
+no account picker. A build without `live-http`, or with no usable account,
+keeps the mock outbox, live draft, or SMTP `TransportNotWired` path. An error
+after an account is selected (refresh, HTTP 403, network) is returned and does
+not fall through to SMTP.
+
+Reconnect only when the stored `scope` lacks `gmail.send` (Google) or
+`Mail.Send` (Microsoft). An operator whose stored scope already lists those
+send scopes does not Disconnect/Connect for this slice. Token refresh does not
+enlarge the grant. The Gmail API must still be enabled on the publisher GCP
+project (same 403 class as inbox). SMTP Send mode remains `TransportNotWired`.

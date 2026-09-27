@@ -287,7 +287,9 @@ fn extract_gmail_body(payload: Option<&Value>) -> String {
     String::new()
 }
 
-fn decode_b64url(data: &str) -> Option<String> {
+/// Decode URL-safe base64 (padding optional) into a UTF-8 string.
+#[must_use]
+pub(crate) fn decode_b64url(data: &str) -> Option<String> {
     use std::collections::HashMap;
     // Minimal URL-safe base64 decode without extra deps.
     let remapped = data.replace('-', "+").replace('_', "/");

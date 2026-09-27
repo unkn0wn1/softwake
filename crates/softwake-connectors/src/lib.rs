@@ -7,7 +7,8 @@
 //! or list either: it only reports that a confirm action may proceed.
 //! [`MockEmail`] stores outbound messages in memory. [`LiveEmail`] is an opt-in
 //! scaffold (off by default) that can store drafts after confirm and does not
-//! open a socket. [`MockDrive`] and [`MockCalendar`] list entries stored on that
+//! open a socket. OAuth send builders are network-free; [`LiveEmail`] SMTP send
+//! stays unwired. [`MockDrive`] and [`MockCalendar`] list entries stored on that
 //! value. Default builds do not read credentials for connectors; the live email
 //! password lives in the provider secret bag and is only checked as a bool here.
 
@@ -16,6 +17,7 @@ mod calendar_api;
 mod drive;
 mod drive_api;
 mod email;
+mod email_send_api;
 mod email_settings;
 mod inbox_api;
 mod live_email;
@@ -39,6 +41,10 @@ pub use drive_api::{
     parse_graph_drive_list, truncate_drive_text,
 };
 pub use email::{EmailConnector, OutboundEmail, SendReceipt};
+pub use email_send_api::{
+    gmail_raw_rfc2822, gmail_send_body, gmail_send_url, graph_send_mail_body, graph_send_mail_url,
+    parse_gmail_send_id,
+};
 pub use email_settings::{
     DEFAULT_SMTP_PORT, EMAIL_FILE_NAME, EmailSettings, EmailSettingsError, FileEmailSettings,
     LiveEmailMode, MAX_EMAIL_SETTINGS_BYTES, parse_live_email_mode, resolve_email_file,

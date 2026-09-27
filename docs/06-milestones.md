@@ -32,8 +32,8 @@
 1. [ ] Email / Drive / calendar via explicit connectors
    - [x] Connector boundary ([ADR 0008](ADR-0008-connector-boundary.md)): `softwake-connectors`, `EmailConnector`, `MockEmail`, confirm/deny registry, no live cloud client in the default build
    - [x] Confirm-gated tool `email_send` ([ADR 0008](ADR-0008-connector-boundary.md)): daemon `Hands` holds `MockEmail`; confirm calls `authorize_confirmed` then `EmailConnector::send`. No live client.
-   - [ ] Live email backend (opt-in, not in CI)
-   - [x] Email OAuth Connect/Disconnect for Google and Microsoft ([ADR 0023](ADR-0023-email-oauth.md)): PKCE + loopback; tokens in the secret bag; mail+calendar+drive scopes. Live send/list stay draft-gated.
+   - [x] Live email backend (opt-in, not in CI): OAuth Gmail `users.messages.send` and Microsoft Graph `sendMail` on confirmed `email_send` when the daemon is built with `live-http` ([ADR 0023](ADR-0023-email-oauth.md), [ADR 0030](ADR-0030-inbox-calendar-drive-tools.md)). SMTP client is not wired.
+   - [x] Email OAuth Connect/Disconnect for Google and Microsoft ([ADR 0023](ADR-0023-email-oauth.md)): PKCE + loopback; tokens in the secret bag; mail+calendar+drive scopes.
    - [x] Drive backend stub ([ADR 0008](ADR-0008-connector-boundary.md)): `DriveConnector`, `MockDrive`, `drive` / `list` confirm. No live client. The daemon does not call it.
    - [ ] Live Drive backend (opt-in, not in CI)
    - [x] Calendar backend stub ([ADR 0008](ADR-0008-connector-boundary.md)): `CalendarConnector`, `MockCalendar`, `calendar` / `list` confirm. No live client. The daemon does not call it.

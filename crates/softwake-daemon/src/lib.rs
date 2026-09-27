@@ -11,8 +11,9 @@
 //! The demo uses mock capture and does not open a microphone.
 //! Native `PipeWire` capture stays behind the daemon `pipewire-capture` feature (audio `pipewire-native`). While awake, `echo`
 //! runs immediately. `notify`, `email_send`, inbox/calendar/Drive read tools, `skill_save`, and `schedule` wait for confirmation (operator Always allow may skip the prompt). `shell` is confirm-gated and off until Tools Settings enable it.
-//! Sleep and hibernate refuse every tool. Confirming `email_send` appends one
-//! in-memory message and does not open a socket.
+//! Sleep and hibernate refuse every tool. Confirming `email_send` delivers via
+//! OAuth when an account is connected and `live-http` is on; otherwise it
+//! appends one in-memory message (or a local draft) and does not open a socket.
 
 mod announce;
 mod capture;
@@ -23,6 +24,7 @@ mod ctl;
 mod ctl_disk;
 mod demo;
 mod dispatch;
+mod email_send;
 mod email_tool;
 mod free_speech;
 mod hud_chat_write;

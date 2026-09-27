@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-25
-- **Amended:** 2026-09-25 (`email_send` on the tool bus); 2026-09-25 (Drive and calendar list mocks); 2026-09-25 (live email opt-in scaffold)
+- **Amended:** 2026-09-25 (`email_send` on the tool bus); 2026-09-25 (Drive and calendar list mocks); 2026-09-25 (live email opt-in scaffold); 2026-09-27 (OAuth `email_send`)
 
 ## Decision
 
@@ -123,3 +123,9 @@ Add an opt-in live email **scaffold** without turning Softwake into a Gmail prod
 - Settings Send button that bypasses confirm. Rejected. Confirm stays on the tool bus.
 - Full SMTP client in this PR. Rejected. Scaffold first; transport needs its own review.
 - Cargo feature flag instead of Settings toggle. Rejected for the operator path; Settings is how providers already opt into live HTTPS. A Cargo feature is unnecessary while the scaffold opens no socket.
+
+## Amendment — OAuth `email_send` (2026-09-27)
+
+After confirm, if a usable Email OAuth account exists on a `live-http` daemon, Hands posts via the Gmail and Graph builders in `softwake-connectors` instead of `EmailBackend::send`. Mock and draft-only are unchanged. Live SMTP send is still not wired. The registry pair stays `email` / `send`.
+
+This supersedes the earlier note that Gmail OAuth send is a later transport. A real SMTP client, calendar writes, and Drive upload/trash stay out of scope. A missing usable account, or a daemon built without `live-http`, still uses `EmailBackend` (mock, draft, or `TransportNotWired`).

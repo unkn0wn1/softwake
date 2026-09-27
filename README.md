@@ -36,7 +36,7 @@ Cargo workspace on stable Rust (edition 2024). Default builds stay offline and m
 ### Connectors, memory, and policy
 
 - Phase 3 wires the connector boundary to the tool bus ([ADR 0008](docs/ADR-0008-connector-boundary.md)):
-  - `email_send` waits for confirmation; confirming appends one message to an in-memory outbox (or a local draft when live email is opted in and draft-only).
+  - `email_send` waits for confirmation. With Google or Microsoft connected, confirming delivers through that account (Google preferred; daemon `live-http`). Without OAuth, confirming appends one message to an in-memory outbox (or a local draft when live email is opted in and draft-only). SMTP send is still unwired.
   - `MockDrive` / `MockCalendar` list files and events on that value.
   - In the connector registry, `drive` / `list` and `calendar` / `list` are confirm; delete actions are denied.
   - Those list mocks are not tools on the bus. The default build has no live cloud client.
@@ -504,9 +504,9 @@ Reload reads `soul.md`, `user.md`, `rules.md`, and `glossary.md`; new text appli
 
 - PKCE loopback; tokens in the secret bag / keyring; scopes for mail + calendar + drive. Status shows the connected account.
 - Live inbox/calendar/Drive read tools (`email_list` / `email_search` / `email_get`, `calendar_list` / `calendar_get`, `drive_list` / `drive_search` / `drive_get`) use those tokens under daemon `live-http` ([ADR 0030](docs/ADR-0030-inbox-calendar-drive-tools.md)).
-- `email_send` remains confirm-gated draft/mock until SMTP transport ships. Optional SMTP fields and password remain for non-OAuth setups.
+- Confirmed `email_send` with Google or Microsoft connected delivers through that account (Google preferred when both are connected; daemon `live-http`). Without OAuth, it uses the in-memory outbox or a local draft. SMTP send is still unwired. Optional SMTP fields and password remain for non-OAuth setups.
 - Publisher client ids are env-only (`SOFTWAKE_GOOGLE_CLIENT_ID`, optional `SOFTWAKE_GOOGLE_CLIENT_SECRET`, `SOFTWAKE_MICROSOFT_CLIENT_ID`).
-- The pane does not send mail; confirm-gated `email_send` on Status still owns send/draft after awake confirm.
+- The pane does not send mail by itself; confirm-gated `email_send` still owns delivery after awake confirm.
 
 ```bash
 cargo run -p softwake-ui
