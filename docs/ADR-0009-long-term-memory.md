@@ -4,6 +4,7 @@
 - **Date:** 2026-09-25
 - **Amended:** 2026-09-25 (opt-in `FileMemory` writes `memory.json`)
 - **Amended:** 2026-09-25 (budgeted recall on awake ask/chat)
+- **Amended:** 2026-09-28 (agent `remember` / `forget` tools — [ADR 0037](ADR-0037-memory-write-tools.md))
 
 ## Decision
 
@@ -74,6 +75,12 @@ The 8 KiB cap is the snippet-sized form of the soul pack's limit on a huge paste
 - Wire `MockMemory` or `FileMemory` into `TextStubSession` as a trait dependency. Rejected. Session close drops one awake period. Memory must outlive that period. The session takes an appendix string; the daemon opens `FileMemory` when `memory.json` exists. No IPC change. Protocol generation stays 1.
 - An async trait. Rejected. Library crates stay runtime-agnostic. The daemon is where the runtime is chosen.
 - Embeddings, peer ids, or a dialectic query. Rejected. The record is an id and text until a backend needs more.
+
+## Agent write tools
+
+Confirm-gated chat tools `remember` (default Always allow) and `forget` (default Ask, including forget-all) persist and remove snippets through `FileMemory`. The first successful `remember` creates `memory.json` so the existing ask/chat recall path engages on later turns. See [ADR 0037](ADR-0037-memory-write-tools.md). Softwake still does not ship Honcho or a vector index. Memory stays process-global (not under `profiles/<id>/`).
+
+`FileMemory::forget_all` clears every snippet in one write and leaves `next_id` unchanged.
 
 ## How to demo
 

@@ -135,6 +135,7 @@ pub fn default_permission(name: &str) -> Option<ToolPermission> {
         | crate::CALENDAR_LIST_TOOL
         | crate::DRIVE_LIST_TOOL
         | crate::SKILL_LIST_TOOL
+        | crate::REMEMBER_TOOL
         | crate::SOFTWAKE_STATUS_TOOL
         | crate::SOFTWAKE_LIST_MODELS_TOOL
         | crate::SOFTWAKE_LIST_VOICES_TOOL
@@ -153,6 +154,7 @@ pub fn default_permission(name: &str) -> Option<ToolPermission> {
         | crate::SKILL_SAVE_TOOL
         | crate::SKILL_GET_TOOL
         | crate::SCHEDULE_TOOL
+        | crate::FORGET_TOOL
         | crate::SOFTWAKE_SET_MODEL_TOOL
         | crate::SOFTWAKE_SET_VOICE_TOOL
         | crate::SOFTWAKE_SET_PROFILE_TOOL
@@ -253,6 +255,8 @@ impl ToolsSettings {
             crate::SKILL_LIST_TOOL,
             crate::SKILL_GET_TOOL,
             crate::SCHEDULE_TOOL,
+            crate::REMEMBER_TOOL,
+            crate::FORGET_TOOL,
             crate::SOFTWAKE_STATUS_TOOL,
             crate::SOFTWAKE_LIST_MODELS_TOOL,
             crate::SOFTWAKE_LIST_VOICES_TOOL,
@@ -585,7 +589,7 @@ pub fn tools_permissions_appendix(settings: &ToolsSettings, email: &EmailOauthSt
     out.push_str(&email_oauth_line(email));
     out.push('\n');
     out.push_str(
-        "Do not claim a tool is denied when this list says otherwise. When a tool is listed as always_allow or ask, Softwake advertises it as a chat function tool — call it when you need real results (email_list/email_search/email_get, calendar_list/calendar_get/calendar_create/calendar_update/calendar_delete, drive_list/drive_search/drive_get, email_send, skill_list/skill_get/skill_save, schedule/timers, softwake_status/list_*/set_*/sleep/hibernate/resume/new_session/refresh, mcp_<server>_<tool>, notify, echo, shell). Ask-mode tools wait for HUD Approve before they run; the turn may pause with a pending confirmation. Saying `run <command>` or `shell <command>` still works as a fast path. Never invent command output; only report stdout/stderr Softwake returns from a tool result. When Email OAuth is connected and inbox/calendar/drive tools are always_allow or ask, call those tools for real mailbox/calendar/Drive data — do not claim you lack them. Drive list/search/get use Google drive.readonly and Microsoft Files.Read (user Drive / OneDrive, not App Folder only). calendar_create, calendar_update, and calendar_delete change the primary calendar (Ask by default). If a connected account's stored scope lacks calendar.events / Calendars.ReadWrite or drive.readonly / Files.Read, Remove that account under Settings → Email → Accounts and Connect again; token refresh does not enlarge the grant. Use email_send for outbound only. Use softwake_refresh after Settings or profile/soul edits to reload the active profile pack, clear the model session, and reseed from HUD. MCP tools appear as mcp_<server>_<tool> when the server is enabled and not Deny.",
+        "Do not claim a tool is denied when this list says otherwise. When a tool is listed as always_allow or ask, Softwake advertises it as a chat function tool — call it when you need real results (email_list/email_search/email_get, calendar_list/calendar_get/calendar_create/calendar_update/calendar_delete, drive_list/drive_search/drive_get, email_send, skill_list/skill_get/skill_save, remember/forget, schedule/timers, softwake_status/list_*/set_*/sleep/hibernate/resume/new_session/refresh, mcp_<server>_<tool>, notify, echo, shell). Ask-mode tools wait for HUD Approve before they run; the turn may pause with a pending confirmation. Saying `run <command>` or `shell <command>` still works as a fast path. Never invent command output; only report stdout/stderr Softwake returns from a tool result. When Email OAuth is connected and inbox/calendar/drive tools are always_allow or ask, call those tools for real mailbox/calendar/Drive data — do not claim you lack them. Drive list/search/get use Google drive.readonly and Microsoft Files.Read (user Drive / OneDrive, not App Folder only). calendar_create, calendar_update, and calendar_delete change the primary calendar (Ask by default). If a connected account's stored scope lacks calendar.events / Calendars.ReadWrite or drive.readonly / Files.Read, Remove that account under Settings → Email → Accounts and Connect again; token refresh does not enlarge the grant. Use email_send for outbound only. Use softwake_refresh after Settings or profile/soul edits to reload the active profile pack, clear the model session, and reseed from HUD. MCP tools appear as mcp_<server>_<tool> when the server is enabled and not Deny.",
     );
     out
 }
@@ -755,6 +759,11 @@ mod tests {
             ToolPermission::Ask
         );
         assert_eq!(settings.permission(SCHEDULE_TOOL), ToolPermission::Ask);
+        assert_eq!(
+            settings.permission(crate::REMEMBER_TOOL),
+            ToolPermission::AlwaysAllow
+        );
+        assert_eq!(settings.permission(crate::FORGET_TOOL), ToolPermission::Ask);
         assert_eq!(settings.permission(SHELL_TOOL), ToolPermission::Deny);
         assert_eq!(settings.permission("volume"), ToolPermission::Deny);
         assert!(!settings.permissions.contains_key("volume"));

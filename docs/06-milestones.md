@@ -42,6 +42,7 @@
 2. [ ] Long-term memory
    - [x] Decision ([ADR 0009](ADR-0009-long-term-memory.md)): thin local store behind a `Memory` trait in `softwake-memory`. `MockMemory` is in-process and off until enabled. Honcho is not the default and is not a dependency.
    - [x] Productized durable store ([ADR 0009](ADR-0009-long-term-memory.md)): `FileMemory` writes `memory.json` under `$XDG_STATE_HOME/softwake` when that variable is set and non-blank, otherwise under `~/.local/state/softwake`. The handle stays off until `open_enabled`. `MockMemory` stays the default. Awake ask/chat open it only when `memory.json` exists (budgeted recall).
+   - [x] Agent write tools ([ADR 0037](ADR-0037-memory-write-tools.md)): confirm-gated `remember` (Always allow) and `forget` (Ask, including forget-all). First successful `remember` creates `memory.json`. No Honcho / vector DB; store stays process-global.
 3. [x] Stricter policy engine
    - [x] Connector actions are confirm or deny; unknown pairs fail closed ([ADR 0008](ADR-0008-connector-boundary.md)).
    - [x] Policy beyond the connector registry ([ADR 0010](ADR-0010-policy-engine.md)): `softwake-policy` evaluates tool names and connector pairs. Unknown subjects are denied. Overrides may only tighten. The daemon classifies through that engine. No live cloud client.

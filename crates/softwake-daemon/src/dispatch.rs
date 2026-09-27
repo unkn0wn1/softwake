@@ -28,6 +28,7 @@ use softwake_connectors::{
     ConnectorRegistry, EMAIL, EMAIL_SEND, EmailBackend, EmailSettings, FileEmailSettings,
     OutboundEmail, resolve_email_file,
 };
+use softwake_memory::{FileMemory, MemoryId, resolve_memory_file};
 use softwake_policy::{
     PolicyDecision, PolicyEngine, Subject, effective_tool_decision, permits_confirmed_connector,
 };
@@ -39,14 +40,15 @@ use softwake_state::{Machine, StateError, VoiceState};
 use softwake_tools::{
     CALENDAR_CREATE_TOOL, CALENDAR_DELETE_TOOL, CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL,
     CALENDAR_UPDATE_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL, EMAIL_GET_TOOL,
-    EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, FileToolsSettings, NOTIFY_TOOL,
-    SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL, ScheduleAction,
-    SoftwakeCtlEffect, ToolError, ToolPermission, ToolRegistry, ToolResult, ToolRisk,
-    ToolsSettings, apply_action, format_shell_output, invalid_args_message, is_softwake_ctl,
-    load_schedules, now_ms, parse_calendar_create_args, parse_calendar_delete_args,
-    parse_calendar_get_args, parse_calendar_list_args, parse_calendar_update_args,
-    parse_drive_get_args, parse_drive_list_args, parse_drive_search_args, parse_email_get_args,
-    parse_email_list_args, parse_email_search_args, parse_email_send_args, parse_schedule_args,
+    EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, FORGET_TOOL, FileToolsSettings,
+    ForgetArgs, NOTIFY_TOOL, REMEMBER_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL,
+    SKILL_LIST_TOOL, SKILL_SAVE_TOOL, ScheduleAction, SoftwakeCtlEffect, ToolError, ToolPermission,
+    ToolRegistry, ToolResult, ToolRisk, ToolsSettings, apply_action, format_shell_output,
+    invalid_args_message, is_softwake_ctl, load_schedules, now_ms, parse_calendar_create_args,
+    parse_calendar_delete_args, parse_calendar_get_args, parse_calendar_list_args,
+    parse_calendar_update_args, parse_drive_get_args, parse_drive_list_args,
+    parse_drive_search_args, parse_email_get_args, parse_email_list_args, parse_email_search_args,
+    parse_email_send_args, parse_forget_args, parse_remember_args, parse_schedule_args,
     parse_skill_get_args, parse_skill_list_args, parse_skill_save_args, parse_softwake_ctl,
     resolve_active_schedules_file, resolve_tools_file, run_shell, save_schedules,
 };
@@ -681,6 +683,16 @@ impl Hands {
         if let Err(error) = validate_cloud_tool_args(name, args) {
             return Err(self.fail_tool(error));
         }
+        if name == REMEMBER_TOOL {
+            if let Err(error) = parse_remember_args(args) {
+                return Err(self.fail_tool(error));
+            }
+        }
+        if name == FORGET_TOOL {
+            if let Err(error) = parse_forget_args(args) {
+                return Err(self.fail_tool(error));
+            }
+        }
         let description = self.registry.lookup(name).map_or_else(
             || {
                 if mcp_bridge::is_known_mcp_tool(name) {
@@ -828,6 +840,12 @@ impl Hands {
         }
         if name == SCHEDULE_TOOL {
             return self.apply_schedule_row(args);
+        }
+        if name == REMEMBER_TOOL {
+            return self.remember_row(args);
+        }
+        if name == FORGET_TOOL {
+            return self.forget_row(args);
         }
         if connector_action_for(name).is_some() {
             return self.execute_cloud_read(name, args);
@@ -1190,6 +1208,78 @@ impl Hands {
         }
     }
 
+    /// Persist a confirm-gated `remember` into `memory.json` (creates the file if missing).
+    fn remember_row(&mut self, args: &[String]) -> Result<String, DispatchError> {
+        let text = match parse_remember_args(args) {
+            Ok(text) => text,
+            Err(error) => return Err(self.fail_tool(error)),
+        };
+        if let Err(error) = self.registry.invoke_confirmed(REMEMBER_TOOL, args) {
+            return Err(self.fail_tool(error));
+        }
+        let path = match resolve_memory_file() {
+            Ok(path) => path,
+            Err(error) => {
+                let message = error.to_string();
+                self.record(
+                    REMEMBER_TOOL,
+                    Some(ToolRisk::Confirm),
+                    ToolOutcome::Unknown,
+                    Some(message.clone()),
+                );
+                return Err(DispatchError::Shell { message });
+            }
+        };
+        match apply_remember_at_path(&path, &text) {
+            Ok(detail) => Ok(detail),
+            Err(message) => {
+                self.record(
+                    REMEMBER_TOOL,
+                    Some(ToolRisk::Confirm),
+                    ToolOutcome::Unknown,
+                    Some(message.clone()),
+                );
+                Err(DispatchError::Shell { message })
+            }
+        }
+    }
+
+    /// Confirm-gated `forget` by id or all against `memory.json`.
+    fn forget_row(&mut self, args: &[String]) -> Result<String, DispatchError> {
+        let action = match parse_forget_args(args) {
+            Ok(action) => action,
+            Err(error) => return Err(self.fail_tool(error)),
+        };
+        if let Err(error) = self.registry.invoke_confirmed(FORGET_TOOL, args) {
+            return Err(self.fail_tool(error));
+        }
+        let path = match resolve_memory_file() {
+            Ok(path) => path,
+            Err(error) => {
+                let message = error.to_string();
+                self.record(
+                    FORGET_TOOL,
+                    Some(ToolRisk::Confirm),
+                    ToolOutcome::Unknown,
+                    Some(message.clone()),
+                );
+                return Err(DispatchError::Shell { message });
+            }
+        };
+        match apply_forget_at_path(&path, action) {
+            Ok(detail) => Ok(detail),
+            Err(message) => {
+                self.record(
+                    FORGET_TOOL,
+                    Some(ToolRisk::Confirm),
+                    ToolOutcome::Unknown,
+                    Some(message.clone()),
+                );
+                Err(DispatchError::Shell { message })
+            }
+        }
+    }
+
     /// Spawn `/bin/sh -c` on an already expanded command. Does not log the command line.
     fn spawn_shell(&mut self, command: &str) -> Result<String, DispatchError> {
         let args = vec![command.to_owned()];
@@ -1273,6 +1363,33 @@ impl Hands {
             outcome,
             detail,
         });
+    }
+}
+
+fn apply_remember_at_path(path: &std::path::Path, text: &str) -> Result<String, String> {
+    let mut memory = FileMemory::open_enabled(path).map_err(|error| error.to_string())?;
+    let id = memory.remember(text).map_err(|error| error.to_string())?;
+    Ok(format!("remembered id={id}"))
+}
+
+fn apply_forget_at_path(path: &std::path::Path, action: ForgetArgs) -> Result<String, String> {
+    if !path.exists() {
+        return match action {
+            ForgetArgs::All => Ok("forgot all (0 snippets)".to_owned()),
+            ForgetArgs::Id(id) => Err(format!("memory id {id} is missing")),
+        };
+    }
+    let mut memory = FileMemory::open_enabled(path).map_err(|error| error.to_string())?;
+    match action {
+        ForgetArgs::All => {
+            let count = memory.forget_all().map_err(|error| error.to_string())?;
+            Ok(format!("forgot all ({count} snippets)"))
+        }
+        ForgetArgs::Id(raw) => {
+            let id = MemoryId::from_raw(raw);
+            memory.forget(id).map_err(|error| error.to_string())?;
+            Ok(format!("forgot id={id}"))
+        }
     }
 }
 
@@ -1432,7 +1549,7 @@ mod tests {
 
     use super::{DispatchError, Hands, RequestOutcome, ToolOutcome};
     use softwake_state::{CooldownConfig, Event, Machine, VoiceState};
-    use softwake_tools::ToolRisk;
+    use softwake_tools::{ForgetArgs, ToolRisk};
 
     fn awake() -> Machine {
         let mut machine = Machine::new(CooldownConfig {
@@ -2135,6 +2252,53 @@ mod tests {
         hands.cancel("1", None).expect("cancel");
         assert!(hands.notifications().is_empty());
         assert!(hands.pending().is_none());
+    }
+
+    #[test]
+    fn remember_creates_file_and_forget_rounds_trip() {
+        let root = std::env::temp_dir().join(format!(
+            "softwake-dispatch-memory-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("root");
+        let path = root.join(softwake_memory::MEMORY_FILE_NAME);
+        assert!(!path.exists());
+
+        let detail =
+            super::apply_remember_at_path(&path, "garage code is on the hook").expect("remember");
+        assert_eq!(detail, "remembered id=1");
+        assert!(path.exists());
+        let appendix = crate::chat::memory_appendix_at_path(&path, "garage");
+        assert!(
+            appendix.contains("garage code is on the hook"),
+            "{appendix}"
+        );
+
+        let forgot = super::apply_forget_at_path(&path, ForgetArgs::Id(1)).expect("forget");
+        assert_eq!(forgot, "forgot id=1");
+        assert!(crate::chat::memory_appendix_at_path(&path, "garage").is_empty());
+
+        let _ = super::apply_remember_at_path(&path, "one").expect("r1");
+        let _ = super::apply_remember_at_path(&path, "two").expect("r2");
+        let cleared = super::apply_forget_at_path(&path, ForgetArgs::All).expect("all");
+        assert_eq!(cleared, "forgot all (2 snippets)");
+        let again = super::apply_remember_at_path(&path, "three").expect("r3");
+        assert_eq!(again, "remembered id=4");
+        assert!(crate::chat::memory_appendix_at_path(&path, "three").contains("three"));
+        assert!(!crate::chat::memory_appendix_at_path(&path, "one").contains("one"));
+
+        let missing = super::apply_forget_at_path(&path, ForgetArgs::Id(99));
+        assert!(missing.is_err(), "{missing:?}");
+        let empty_all =
+            super::apply_forget_at_path(&root.join("missing.json"), ForgetArgs::All).expect("noop");
+        assert_eq!(empty_all, "forgot all (0 snippets)");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

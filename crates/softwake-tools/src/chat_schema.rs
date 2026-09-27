@@ -9,8 +9,8 @@ use crate::settings::{ToolPermission, ToolsSettings};
 use crate::{
     CALENDAR_CREATE_TOOL, CALENDAR_DELETE_TOOL, CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL,
     CALENDAR_UPDATE_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL, ECHO_TOOL,
-    EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL,
-    SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL,
+    EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, FORGET_TOOL, NOTIFY_TOOL,
+    REMEMBER_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL,
     SOFTWAKE_HIBERNATE_TOOL, SOFTWAKE_LIST_MODELS_TOOL, SOFTWAKE_LIST_PROFILES_TOOL,
     SOFTWAKE_LIST_REASONING_TOOL, SOFTWAKE_LIST_VOICES_TOOL, SOFTWAKE_NEW_SESSION_TOOL,
     SOFTWAKE_REFRESH_TOOL, SOFTWAKE_RESUME_TOOL, SOFTWAKE_SET_MODEL_TOOL,
@@ -268,6 +268,29 @@ fn parameters_for(name: &str) -> Value {
                 "verify": { "type": "string", "description": "Verify section." }
             },
             "required": ["title", "procedure", "pitfalls", "verify"]
+        }),
+        REMEMBER_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "Fact or snippet to store in long-term memory (unchanged)."
+                }
+            },
+            "required": ["text"]
+        }),
+        FORGET_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "Snippet id from a prior remember (decimal). Omit when all is true."
+                },
+                "all": {
+                    "type": "boolean",
+                    "description": "When true, forget every snippet. Ask-gated; prefer over wiping by hand."
+                }
+            }
         }),
         SCHEDULE_TOOL => json!({
             "type": "object",
@@ -547,6 +570,28 @@ pub fn tool_args_from_json(name: &str, arguments: &str) -> Result<Vec<String>, S
             }
             Ok(vec![title, procedure, pitfalls, verify])
         }
+        REMEMBER_TOOL => {
+            let text = string_field(obj, "text").ok_or_else(|| "remember needs text".to_owned())?;
+            if text.trim().is_empty() {
+                return Err("remember needs text".to_owned());
+            }
+            Ok(vec![text])
+        }
+        FORGET_TOOL => {
+            let all = obj
+                .get("all")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            if all {
+                return Ok(vec!["all".to_owned()]);
+            }
+            let id = string_field(obj, "id").ok_or_else(|| "forget needs id or all".to_owned())?;
+            if id.trim().is_empty() || id.trim() == "0" {
+                return Err("forget needs id or all".to_owned());
+            }
+            // allow literal "all" via id field too
+            Ok(vec![id.trim().to_owned()])
+        }
         SCHEDULE_TOOL => schedule_args_from_object(obj),
         SOFTWAKE_SET_MODEL_TOOL => {
             let which = string_field(obj, "which")
@@ -702,8 +747,8 @@ mod tests {
     use crate::settings::{ToolPermission, ToolsSettings};
     use crate::{
         CALENDAR_CREATE_TOOL, CALENDAR_DELETE_TOOL, CALENDAR_LIST_TOOL, CALENDAR_UPDATE_TOOL,
-        DRIVE_GET_TOOL, ECHO_TOOL, EMAIL_LIST_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL, SCHEDULE_TOOL,
-        SHELL_TOOL, SKILL_SAVE_TOOL, ToolRegistry,
+        DRIVE_GET_TOOL, ECHO_TOOL, EMAIL_LIST_TOOL, EMAIL_SEND_TOOL, FORGET_TOOL, NOTIFY_TOOL,
+        REMEMBER_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_SAVE_TOOL, ToolRegistry,
     };
 
     #[test]
@@ -786,6 +831,7 @@ mod tests {
             tool_args_from_json(NOTIFY_TOOL, r#"{"message":"ping"}"#).expect("notify"),
             vec!["ping".to_owned()]
         );
+
         assert_eq!(
             tool_args_from_json(
                 EMAIL_SEND_TOOL,
@@ -897,5 +943,22 @@ mod tests {
             vec!["evt-1".to_owned(), "account=ada@example.com".to_owned()]
         );
         assert!(tool_args_from_json(CALENDAR_UPDATE_TOOL, r#"{"id":"evt-1"}"#).is_err());
+    }
+    #[test]
+    fn tool_args_from_json_maps_remember_and_forget() {
+        assert_eq!(
+            tool_args_from_json(REMEMBER_TOOL, r#"{"text":"garage code"}"#).expect("remember"),
+            vec!["garage code".to_owned()]
+        );
+        assert_eq!(
+            tool_args_from_json(FORGET_TOOL, r#"{"id":"3"}"#).expect("forget id"),
+            vec!["3".to_owned()]
+        );
+        assert_eq!(
+            tool_args_from_json(FORGET_TOOL, r#"{"all":true}"#).expect("forget all"),
+            vec!["all".to_owned()]
+        );
+        assert!(tool_args_from_json(REMEMBER_TOOL, r#"{"text":"  "}"#).is_err());
+        assert!(tool_args_from_json(FORGET_TOOL, "{}").is_err());
     }
 }
