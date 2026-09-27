@@ -478,6 +478,10 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
             let outcome = lock(&shared.runtime).seed_chat_from_ui(turns);
             reply(shared, tx, id, outcome)
         }
+        Ok(ClientMessage::DropChatTurns { id, turns }) => {
+            let outcome = lock(&shared.runtime).drop_chat_turns_from_ui(&turns);
+            reply(shared, tx, id, outcome)
+        }
         Ok(ClientMessage::Hello { .. }) => false,
         Err(error) if error.is_disconnect() => false,
         Err(error) => {

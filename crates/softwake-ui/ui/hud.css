@@ -511,3 +511,52 @@ body {
 .capsule.expanded .resize-grip:not([hidden]) {
   display: block;
 }
+
+.chat-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.5rem 0.35rem;
+  flex-shrink: 0;
+}
+
+.chat-toolbar button {
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 0.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.35);
+  color: inherit;
+  cursor: pointer;
+}
+
+.chat-toolbar button[aria-pressed="true"] {
+  background: rgba(100, 160, 255, 0.35);
+  border-color: rgba(140, 190, 255, 0.55);
+}
+
+.chat-toolbar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.select-count {
+  font-size: 0.7rem;
+  opacity: 0.75;
+}
+
+.capsule.selecting .bubble {
+  cursor: pointer;
+}
+
+.bubble.selected {
+  outline: 2px solid rgba(120, 180, 255, 0.85);
+  outline-offset: 2px;
+}
+
+.bubble .pick {
+  float: left;
+  margin: 0.15rem 0.4rem 0 0;
+  accent-color: #7ab0ff;
+}

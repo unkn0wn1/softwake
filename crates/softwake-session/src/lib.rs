@@ -223,6 +223,34 @@ impl TextStubSession {
         self.messages.clear();
     }
 
+    /// Remove messages that match `(role, text)` once each (best-effort HUD delete).
+    ///
+    /// `role` is `"user"` or `"assistant"`. Returns how many messages were dropped.
+    pub fn drop_matching_turns(&mut self, turns: &[(&str, &str)]) -> usize {
+        if self.phase != SessionPhase::Open {
+            return 0;
+        }
+        let mut dropped = 0;
+        for (role, text) in turns {
+            let want_user = role.eq_ignore_ascii_case("user");
+            let want_assistant = role.eq_ignore_ascii_case("assistant");
+            if !(want_user || want_assistant) {
+                continue;
+            }
+            if let Some(idx) = self.messages.iter().position(|m| {
+                let role_ok = match m.role {
+                    MessageRole::User => want_user,
+                    MessageRole::Assistant => want_assistant,
+                };
+                role_ok && m.content == *text
+            }) {
+                self.messages.remove(idx);
+                dropped += 1;
+            }
+        }
+        dropped
+    }
+
     /// Seed prior HUD turns once per awake session.
     ///
     /// `turns` are oldest-first. Only the newest suffix that fits in

@@ -24,6 +24,7 @@
     "allow-hud-set-layout",
     "allow-hud-save-size",
     "allow-hud-seed-session",
+    "allow-hud-drop-session-turns",
     "core:window:allow-start-dragging",
     "core:window:allow-start-resize-dragging",
     "allow-hud-reset-position",

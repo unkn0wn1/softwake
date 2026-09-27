@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- Expanded awake slash commands: `/help`, `/status`, `/model` (`ai`/`voice`), `/voice`, `/new`, `/profile`, `/sleep`, `/hibernate`, `/resume` (plus clear-typed aliases where natural). Keeps `/clear` `/halve|/reduce` `/compact`. See [ADR 0028](docs/ADR-0028-slash-hud-self-sleep.md).
+- HUD multi-select + Delete for chat bubbles; rewrites `hud-chat.json`; best-effort `DropChatTurns` trims matching model-session messages (`/clear` still drops all).
+- Free-speech ambient self-sleep latch: three near-identical short free-speech replies within 90s auto-sleep (no TTS on the Nth). NL self-sleep markers (`going to sleep`, `mic off`, …) also sleep after one free-speech reply.
+
+
 ### Fixed
 
 - Seed-on-wake for **encrypted** HUD vaults: UI `SeedChat` now runs once when awake + unlocked + turns loaded (not only on the woke edge), and the daemon prepends budgeted history even if an early post-wake ask already landed.

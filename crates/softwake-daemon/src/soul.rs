@@ -45,6 +45,19 @@ impl LoadedSoul {
         self.read();
     }
 
+    /// Point at a different pack directory and re-read it (profile switch).
+    pub(crate) fn retarget(&mut self, dir: SoulDir) {
+        self.dir = dir;
+        self.reload_pending = true;
+        self.read();
+    }
+
+    /// Current pack directory path.
+    #[must_use]
+    pub(crate) fn dir_path(&self) -> &std::path::Path {
+        self.dir.path()
+    }
+
     /// The last read produced a pack.
     pub(crate) fn is_valid(&self) -> bool {
         self.pack.is_some()

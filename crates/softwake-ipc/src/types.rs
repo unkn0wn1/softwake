@@ -691,6 +691,16 @@ pub enum ClientMessage {
         /// Prior HUD turns (oldest-first).
         turns: Vec<SeedChatTurn>,
     },
+    /// Best-effort remove matching turns from the open model session (HUD delete).
+    ///
+    /// Each `{role, text}` drops at most one message. Additive on protocol
+    /// generation 1. No-op when the session is closed.
+    DropChatTurns {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+        /// Turns to drop (role + exact text).
+        turns: Vec<SeedChatTurn>,
+    },
 }
 
 /// Daemon messages after a client connects.

@@ -32,6 +32,10 @@ const contextMeterMark = document.querySelector("#context-meter-mark");
 const contextMeterLabel = document.querySelector("#context-meter-label");
 const pinBtn = document.querySelector("#pin");
 const resizeGrip = document.querySelector("#resize-grip");
+const chatToolbar = document.querySelector("#chat-toolbar");
+const selectToggle = document.querySelector("#select-toggle");
+const deleteSelectedBtn = document.querySelector("#delete-selected");
+const selectCountEl = document.querySelector("#select-count");
 
 const IDLE_MIN_MS = 1000;
 const IDLE_MAX_MS = 30000;
@@ -70,6 +74,9 @@ let chatPersistReady = false;
 let chatSaveTimer = null;
 /** True after we successfully dispatched SeedChat for this awake period. */
 let sessionHudSeeded = false;
+let selecting = false;
+/** Indices into `turns` currently selected for delete. */
+const selectedIdx = new Set();
 
 function invoke(command, args) {
   const core = window.__TAURI__ && window.__TAURI__.core;
@@ -270,6 +277,9 @@ function setExpanded(next) {
   void applyWindowLayout(next);
   if (next) {
     strip.hidden = false;
+    if (chatToolbar) {
+      chatToolbar.hidden = false;
+    }
     if (pinBtn) {
       pinBtn.hidden = false;
     }
@@ -281,6 +291,10 @@ function setExpanded(next) {
   } else {
     strip.hidden = true;
     liveEl.hidden = true;
+    if (chatToolbar) {
+      chatToolbar.hidden = true;
+    }
+    setSelecting(false);
     if (pinBtn) {
       pinBtn.hidden = true;
     }
@@ -329,11 +343,27 @@ function formatClock(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-function appendBubble(turn) {
+function appendBubble(turn, index) {
   const article = document.createElement("article");
   article.className = "bubble " + (turn.role === "user" ? "user" : "assistant");
+  article.dataset.index = String(index);
   if (turn.error) {
     article.classList.add("error");
+  }
+  if (selectedIdx.has(index)) {
+    article.classList.add("selected");
+  }
+  if (selecting) {
+    const pick = document.createElement("input");
+    pick.type = "checkbox";
+    pick.className = "pick";
+    pick.checked = selectedIdx.has(index);
+    pick.tabIndex = -1;
+    pick.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleSelectIndex(index);
+    });
+    article.append(pick);
   }
   const header = document.createElement("header");
   const who = document.createElement("span");
@@ -353,14 +383,90 @@ function appendBubble(turn) {
     note.textContent = turn.note;
     article.append(note);
   }
+  article.addEventListener("click", (event) => {
+    if (!selecting) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    toggleSelectIndex(index);
+  });
   logEl.append(article);
   logEl.scrollTop = logEl.scrollHeight;
 }
 
 function renderLog() {
   logEl.replaceChildren();
-  for (const turn of turns) {
-    appendBubble(turn);
+  turns.forEach((turn, index) => {
+    appendBubble(turn, index);
+  });
+  syncSelectChrome();
+}
+
+function setSelecting(next) {
+  selecting = !!next;
+  selectedIdx.clear();
+  capsule.classList.toggle("selecting", selecting);
+  if (selectToggle) {
+    selectToggle.setAttribute("aria-pressed", selecting ? "true" : "false");
+    selectToggle.textContent = selecting ? "Cancel" : "Select";
+  }
+  renderLog();
+  syncSelectChrome();
+}
+
+function toggleSelectIndex(index) {
+  if (selectedIdx.has(index)) {
+    selectedIdx.delete(index);
+  } else {
+    selectedIdx.add(index);
+  }
+  renderLog();
+}
+
+function syncSelectChrome() {
+  const n = selectedIdx.size;
+  if (deleteSelectedBtn) {
+    deleteSelectedBtn.disabled = !selecting || n === 0;
+  }
+  if (selectCountEl) {
+    if (selecting && n > 0) {
+      selectCountEl.hidden = false;
+      selectCountEl.textContent = n + " selected";
+    } else {
+      selectCountEl.hidden = true;
+      selectCountEl.textContent = "";
+    }
+  }
+}
+
+async function deleteSelectedTurns() {
+  if (!selecting || selectedIdx.size === 0) {
+    return;
+  }
+  const doomed = Array.from(selectedIdx).sort((a, b) => a - b);
+  const removed = doomed.map((i) => turns[i]).filter(Boolean);
+  for (let i = doomed.length - 1; i >= 0; i -= 1) {
+    turns.splice(doomed[i], 1);
+  }
+  selectedIdx.clear();
+  renderLog();
+  scheduleChatSave();
+  setSelecting(false);
+  markActivity();
+  // Best-effort trim matching model-session turns while awake.
+  if (state === "awake" && removed.length) {
+    try {
+      await invoke("hud_drop_session_turns", {
+        turns: removed.map((turn) => ({
+          role: turn.role,
+          text: turn.text,
+          error: !!turn.error,
+        })),
+      });
+    } catch (_error) {
+      // HUD history is already updated; /clear still clears the model session.
+    }
   }
 }
 
@@ -373,7 +479,7 @@ function pushTurn(turn) {
   if (overflow) {
     renderLog();
   } else {
-    appendBubble(turn);
+    appendBubble(turn, turns.length - 1);
   }
   scheduleChatSave();
 }
@@ -1159,7 +1265,7 @@ function isInteractiveTarget(target) {
     return false;
   }
   return !!target.closest(
-    "#ask-form, #talk, #ask-send, #ask-input, #log, #live, #hud-pending, #hud-allow, #pin, #resize-grip, button, input, textarea, a, .bubble",
+    "#ask-form, #talk, #ask-send, #ask-input, #log, #live, #hud-pending, #hud-allow, #pin, #resize-grip, #chat-toolbar, button, input, textarea, a, .bubble",
   );
 }
 
@@ -1411,6 +1517,22 @@ if (vaultPass) {
         vaultSetBtn.click();
       }
     }
+  });
+}
+
+if (selectToggle) {
+  selectToggle.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelecting(!selecting);
+    markActivity();
+  });
+}
+if (deleteSelectedBtn) {
+  deleteSelectedBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void deleteSelectedTurns();
   });
 }
 

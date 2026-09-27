@@ -30,6 +30,11 @@
           <button type="button" id="vault-skip" hidden>Skip (plaintext)</button>
         </div>
       </div>
+        <div id="chat-toolbar" class="chat-toolbar" hidden>
+          <button type="button" id="select-toggle" aria-pressed="false" title="Select messages">Select</button>
+          <button type="button" id="delete-selected" disabled title="Delete selected">Delete</button>
+          <span id="select-count" class="select-count" hidden></span>
+        </div>
         <div id="log" class="log" role="log" aria-live="polite" aria-relevant="additions"></div>
         <p id="live" class="live" hidden></p>
         <div id="hud-pending" hidden>
@@ -68,7 +73,7 @@
             id="ask-input"
             rows="2"
             maxlength="2000"
-            placeholder="Ask…  /clear /halve /compact"
+            placeholder="Ask…  /help /clear /model /voice /sleep"
             aria-label="Ask Softwake"
           ></textarea>
           <button type="submit" id="ask-send">Send</button>

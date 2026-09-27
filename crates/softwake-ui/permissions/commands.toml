@@ -385,3 +385,8 @@ commands.allow = ["ui_prefs_set_hud_expanded_size"]
 identifier = "allow-hud-seed-session"
 description = "Seed the awake model session with prior HUD turns."
 commands.allow = ["hud_seed_session"]
+
+[[permission]]
+identifier = "allow-hud-drop-session-turns"
+description = "Best-effort drop matching model-session turns after HUD delete"
+commands.allow = ["hud_drop_session_turns"]
