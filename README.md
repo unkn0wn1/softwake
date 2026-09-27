@@ -2,11 +2,67 @@
 
 Voice-first local conductor: asleep until hailed, awake with tools, hibernate when you want silence.
 
-Rust end-to-end (daemon + Tauri UI). Phase 1 nails reliable **wake / sleep / hibernate** and a single safe tool loop. Phase 2 adds a confirmation gate for one risky tool. Personality and rules live in a **soul pack** (`soul.md`, `user.md`, `rules.md`, `glossary.md`) with multi-profile support under Settings → Profiles ([ADR 0017](docs/ADR-0017-profiles.md)). Long-term memory is a separate local trait ([ADR 0009](docs/ADR-0009-long-term-memory.md)), off by default, and not required to run the daemon.
+Rust end-to-end (daemon + Tauri UI).
+
+- **Phase 1** — reliable **wake / sleep / hibernate** and a single safe tool loop.
+- **Phase 2** — confirmation gate for one risky tool.
+- **Soul pack** — personality and rules in `soul.md`, `user.md`, `rules.md`, `glossary.md`, with multi-profile support under Settings → Profiles ([ADR 0017](docs/ADR-0017-profiles.md)).
+- **Long-term memory** — separate local trait ([ADR 0009](docs/ADR-0009-long-term-memory.md)), off by default, not required to run the daemon.
 
 ## Status
 
-Cargo workspace on stable Rust (edition 2024). `softwake-state` implements sleep / awake / hibernate, including rejected transitions and phrase cooldowns. `softwake-audio` has a mock capture backend (`stop` ends frame delivery) and a trait-shaped PipeWire stub (default `pipewire` feature, no native library). `softwake-wake` scores configured phrases with a local text matcher ([ADR 0002](docs/ADR-0002-wake-engine-spike.md)). The production on-device wake engine is sherpa-onnx keyword spotting ([ADR 0006](docs/ADR-0006-on-device-wake.md)). While awake, STT/TTS use a local streaming boundary ([ADR 0007](docs/ADR-0007-awake-stt-tts.md)): mock inject/record by default, sherpa stubs behind features, and an optional xAI press-to-talk / listen-while-awake path (voice Eve) behind `live-http`. Weights are not in the repo, and the demo stays typed. `softwake-soul` loads `soul.md`, `user.md`, `rules.md`, and `glossary.md`, checks them, and renders system instructions ([ADR 0011](docs/ADR-0011-context-pack.md)). `softwaked serve` speaks newline-delimited JSON on a Unix socket ([ADR 0003](docs/ADR-0003-ipc-transport.md)). `softwaked ctl` and the Tauri window `softwake-ui` are clients of that socket. Entering awake opens a text session with the rendered soul instructions. `echo` runs immediately while awake ([ADR 0004](docs/ADR-0004-first-safe-tool.md)). `notify` waits for confirmation and then appends a line to an in-memory sink. `shell` is confirm-gated and off until Settings → Tools enables it ([ADR 0018](docs/ADR-0018-tools-settings-shell.md), [ADR 0005](docs/ADR-0005-tool-confirmation.md)). When shell (or another tool) is Always allow or Ask, Softwake also advertises it as a chat function tool so natural asks can invoke it without saying `run …` ([ADR 0025](docs/ADR-0025-api-tool-calling.md)). Phase 3 wires the connector boundary to the tool bus ([ADR 0008](docs/ADR-0008-connector-boundary.md)): `email_send` waits for confirmation, and confirming it appends one message to an in-memory outbox (or a local draft when live email is opted in and draft-only). `MockDrive` and `MockCalendar` list files and events stored on that value. In the connector registry, `drive` / `list` and `calendar` / `list` are confirm, and delete actions are denied. Those list mocks are not tools on the bus. The default build has no live cloud client. `softwake-memory` is a `Memory` trait, an in-memory `MockMemory`, and an opt-in `FileMemory` that writes `memory.json` only after `open_enabled`. Both stay off until that value is enabled. When `memory.json` exists under the Softwake state directory, awake `ask` / `chat` attach a budgeted recall appendix after the rendered pack ([ADR 0009](docs/ADR-0009-long-term-memory.md), [ADR 0013](docs/ADR-0013-session-provider.md)). Missing or disabled memory is fail-open (no snippets). `softwake-policy` classifies the existing tool and connector allowlists. Unknown names are denied. The daemon uses that classification, and its override map is empty ([ADR 0010](docs/ADR-0010-policy-engine.md)). `softwake-providers` holds xAI device-code OAuth, xAI API key, OpenAI API key, OpenRouter API key, and OpenAI-compatible (key + base URL) Settings ([ADR 0012](docs/ADR-0012-model-providers.md)). Secrets stay in an XDG state bag (plaintext v1 with a warning). The window Settings panel runs Test, then fills the model picker. Mock transport keeps default tests offline; `live-http` enables real HTTPS. While awake, typed `ask` and `chat` in `softwaked demo` send the rendered context pack and the user line to the selected provider ([ADR 0013](docs/ADR-0013-session-provider.md)). Default tests use `MockTransport`. The daemon `live-http` feature performs the real call and is off by default. `softwaked ctl ask` and `ctl chat` send that same turn to a running `softwaked serve`. `softwaked ctl wake` enters awake on a running `softwaked serve` when the four-file pack is valid. `ctl resume` still lands in sleep. Serve can open a real mic with `pipewire-capture`; wake-from-voice needs `sherpa-kws` + installed weights. Protocol generation stays 1. OpenRouter and OpenAI-compatible base URL are available in Settings. Budgeted memory snippets on ask/chat are shipped. The expanded HUD shows context fullness while awake; slash commands manage session context, model/voice/reasoning/profile, and sleep ([ADR 0027](docs/ADR-0027-context-meter-slash.md), [ADR 0028](docs/ADR-0028-slash-hud-self-sleep.md), [ADR 0032](docs/ADR-0032-reasoning-effort.md)). HUD bubbles support multi-select delete. Free-speech ambient loops self-sleep after repeated short replies. Default auto-compact is 80%. A missing or invalid four-file pack refuses awake; `reload-soul` re-reads that pack and applies on the next awake.
+Cargo workspace on stable Rust (edition 2024). Default builds stay offline and mic-free.
+
+### Voice state and audio
+
+- `softwake-state` — sleep / awake / hibernate, rejected transitions, phrase cooldowns.
+- `softwake-audio` — mock capture (`stop` ends frame delivery) and a trait-shaped PipeWire stub (default `pipewire` feature, no native library).
+- `softwake-wake` — local text phrase matcher ([ADR 0002](docs/ADR-0002-wake-engine-spike.md)).
+- Production on-device wake — sherpa-onnx keyword spotting ([ADR 0006](docs/ADR-0006-on-device-wake.md)).
+- While awake, STT/TTS use a local streaming boundary ([ADR 0007](docs/ADR-0007-awake-stt-tts.md)): mock inject/record by default, sherpa stubs behind features, optional xAI press-to-talk / listen-while-awake (voice Eve) behind `live-http`.
+- Weights are not in the repo; the demo stays typed.
+
+### Soul, IPC, and tools
+
+- `softwake-soul` loads `soul.md`, `user.md`, `rules.md`, and `glossary.md`, checks them, and renders system instructions ([ADR 0011](docs/ADR-0011-context-pack.md)).
+- `softwaked serve` speaks newline-delimited JSON on a Unix socket ([ADR 0003](docs/ADR-0003-ipc-transport.md)).
+- Clients: `softwaked ctl` and the Tauri window `softwake-ui`.
+- Entering awake opens a text session with the rendered soul instructions.
+- `echo` runs immediately while awake ([ADR 0004](docs/ADR-0004-first-safe-tool.md)).
+- `notify` waits for confirmation, then appends to an in-memory sink.
+- `shell` is confirm-gated and off until Settings → Tools enables it ([ADR 0018](docs/ADR-0018-tools-settings-shell.md), [ADR 0005](docs/ADR-0005-tool-confirmation.md)).
+- When a tool is Always allow or Ask, Softwake also advertises it as a chat function tool so natural asks can invoke it without saying `run …` ([ADR 0025](docs/ADR-0025-api-tool-calling.md)).
+
+### Connectors, memory, and policy
+
+- Phase 3 wires the connector boundary to the tool bus ([ADR 0008](docs/ADR-0008-connector-boundary.md)):
+  - `email_send` waits for confirmation; confirming appends one message to an in-memory outbox (or a local draft when live email is opted in and draft-only).
+  - `MockDrive` / `MockCalendar` list files and events on that value.
+  - In the connector registry, `drive` / `list` and `calendar` / `list` are confirm; delete actions are denied.
+  - Those list mocks are not tools on the bus. The default build has no live cloud client.
+- `softwake-memory` — `Memory` trait, in-memory `MockMemory`, and opt-in `FileMemory` that writes `memory.json` only after `open_enabled`. Both stay off until enabled.
+- When `memory.json` exists under the Softwake state directory, awake `ask` / `chat` attach a budgeted recall appendix after the rendered pack ([ADR 0009](docs/ADR-0009-long-term-memory.md), [ADR 0013](docs/ADR-0013-session-provider.md)). Missing or disabled memory is fail-open (no snippets).
+- `softwake-policy` classifies tool and connector allowlists. Unknown names are denied. The daemon uses that classification; its override map is empty ([ADR 0010](docs/ADR-0010-policy-engine.md)).
+
+### Providers and session
+
+- `softwake-providers` — xAI device-code OAuth, xAI API key, OpenAI, OpenRouter, and OpenAI-compatible (key + base URL) Settings ([ADR 0012](docs/ADR-0012-model-providers.md)).
+- Secrets stay in an XDG state bag (plaintext v1 with a warning). The window Settings panel runs Test, then fills the model picker.
+- Mock transport keeps default tests offline; `live-http` enables real HTTPS.
+- While awake, typed `ask` / `chat` in `softwaked demo` send the rendered context pack and the user line to the selected provider ([ADR 0013](docs/ADR-0013-session-provider.md)). Default tests use `MockTransport`. Daemon `live-http` is off by default.
+- `softwaked ctl ask` / `ctl chat` send that same turn to a running `softwaked serve`.
+- `softwaked ctl wake` enters awake when the four-file pack is valid; `ctl resume` still lands in sleep.
+- Serve can open a real mic with `pipewire-capture`; wake-from-voice needs `sherpa-kws` + installed weights.
+
+### HUD, slash commands, and gates
+
+- Protocol generation stays 1. OpenRouter and OpenAI-compatible base URL are available in Settings.
+- Budgeted memory snippets on ask/chat are shipped.
+- Expanded HUD shows context fullness while awake; slash commands manage session context, model/voice/reasoning/profile, and sleep ([ADR 0027](docs/ADR-0027-context-meter-slash.md), [ADR 0028](docs/ADR-0028-slash-hud-self-sleep.md), [ADR 0032](docs/ADR-0032-reasoning-effort.md)).
+- HUD bubbles support multi-select delete.
+- Free-speech ambient loops self-sleep after repeated short replies.
+- Default auto-compact is 80%.
+- A missing or invalid four-file pack refuses awake; `reload-soul` re-reads that pack and applies on the next awake.
 
 ## Build and test
 
@@ -21,7 +77,13 @@ See [Cargo features](#cargo-features) for `pipewire`, `pipewire-native`, and `sh
 
 ## Releases
 
-Tagged builds (`v*`) publish a Linux **AppImage** (preferred portable), a Linux **tar.gz** with `install-linux.sh` (user-prefix + systemd --user), a Windows **setup.exe**, and a Windows **portable** zip. Each package includes both `softwaked` and `softwake-ui`. See [docs/releases.md](docs/releases.md) for download, install, the OS feature matrix, and how to cut a tag. Design: [ADR 0019](docs/ADR-0019-multiplatform-releases.md).
+Tagged builds (`v*`) publish:
+
+- Linux **AppImage** (preferred portable)
+- Linux **tar.gz** with `install-linux.sh` (user-prefix + systemd --user)
+- Windows **setup.exe** and Windows **portable** zip
+
+Each package includes both `softwaked` and `softwake-ui`. See [docs/releases.md](docs/releases.md) for download, install, the OS feature matrix, and how to cut a tag. Design: [ADR 0019](docs/ADR-0019-multiplatform-releases.md).
 
 ## Cargo features
 
@@ -63,7 +125,15 @@ That installs the `softwaked` binary. The window binary is `softwake-ui` (Settin
 cargo run -p softwake-ui
 ```
 
-The tray stays while Settings is closed. The HUD is always-on-top at the **bottom-right of the primary screen**. Collapsed, it is a square bloom with no composer. Click it to expand chat bubbles (You or the active profile name, with a timestamp) and a composer: text, Send, and a mic icon. Any non-empty submit wakes Softwake when it is asleep, runs ask, and shows the full assistant reply in a bubble. Spaces work in the ask field. After the pointer leaves, the panel collapses (Settings → General, 1–30 seconds, default 3). The key is `hud_idle_collapse_ms` in `ui-prefs.json`. A pending tool expands the panel and holds it open until Approve or Deny.
+HUD and tray behavior:
+
+- Tray stays while Settings is closed.
+- HUD is always-on-top at the **bottom-right of the primary screen**.
+- Collapsed: square bloom with no composer.
+- Click to expand: chat bubbles (You or the active profile name + timestamp) and a composer (text, Send, mic icon).
+- Any non-empty submit wakes Softwake when asleep, runs ask, and shows the full assistant reply. Spaces work in the ask field.
+- Idle collapse after the pointer leaves (Settings → General, 1–30 seconds, default 3) — key `hud_idle_collapse_ms` in `ui-prefs.json`.
+- A pending tool expands the panel and holds it open until Approve or Deny.
 
 The same lockfile install for the window:
 
@@ -87,7 +157,15 @@ cargo run -p softwake-daemon
 softwaked state: sleep
 ```
 
-The interactive demo is typed commands only. The microphone is not opened. Mock capture is the default, and native PipeWire is an optional feature that is not linked in the default build. It starts in sleep with mock capture running. `wake` and `sleep` submit the configured phrases to the text detector, then apply the voice-state machine, including the 800 ms phrase cooldown. `hibernate` stops capture. A voice command is rejected until `resume`, which returns to sleep and starts capture again. `wake` also requires a valid soul pack. Copy the repo templates into the config directory first (or pass `--soul-dir`):
+The interactive demo is typed commands only (no microphone). Mock capture is the default; native PipeWire is optional and not linked in the default build.
+
+It starts in **sleep** with mock capture running:
+
+- `wake` / `sleep` — submit configured phrases to the text detector, then apply the voice-state machine (800 ms phrase cooldown).
+- `hibernate` — stops capture. Voice commands are rejected until `resume` (back to sleep, capture on).
+- `wake` also requires a valid soul pack.
+
+Copy the repo templates into the config directory first (or pass `--soul-dir`):
 
 ```bash
 mkdir -p ~/.config/softwake/soul
@@ -177,7 +255,13 @@ capture: running
 soul: ok
 ```
 
-`chat` is the same command. The same turn against a running daemon is `softwaked ctl ask` or `softwaked ctl chat` once that `softwaked serve` process is awake. `softwaked ctl wake` enters awake on that serve when the four-file pack is valid, and `ctl resume` still lands in sleep. Serve can open a real mic with `pipewire-capture`; wake-from-voice needs `sherpa-kws` + installed weights. See [Serve and ctl](#serve-and-ctl). Without the daemon `live-http` feature, a fully configured Settings file still gets `Live HTTP is not enabled in this build. Re-run with the live-http feature to call the provider.` and does not open a provider socket. With the feature:
+`chat` is the same command. Against a running daemon once awake:
+
+- `softwaked ctl ask` / `ctl chat` — same turn over the socket.
+- `softwaked ctl wake` — enters awake when the four-file pack is valid; `ctl resume` still lands in sleep.
+- Real mic: `pipewire-capture`. Wake-from-voice: `sherpa-kws` + installed weights.
+
+See [Serve and ctl](#serve-and-ctl). Without daemon `live-http`, a fully configured Settings file still gets `Live HTTP is not enabled in this build. Re-run with the live-http feature to call the provider.` and does not open a provider socket. With the feature:
 
 ```bash
 cargo run -p softwake-daemon --features live-http -- demo
@@ -237,9 +321,27 @@ The outbox line appears only after `confirm`. `cancel` prints `cancelled 1: emai
 
 A `> ` prompt is printed before each line is read. The same path accepts a pipe (`printf 'wake\nstatus\nquit\n' | cargo run -p softwake-daemon -- demo`). `softwaked --demo` is the same mode.
 
-`softwaked demo --verbose` and `softwaked demo -v` (also `--demo -v`) print extra `verbose:` lines for each command: the raw input, the parsed command, for `wake` / `sleep` the phrase, the detector hit, and whether the transition succeeded or why it was rejected, and for `ask` / `chat` the provider id and model id. The bearer is not printed. `SOFTWAKE_LOG=debug` enables that same detail.
+`softwaked demo --verbose` / `-v` (also `--demo -v`) print extra `verbose:` lines per command:
 
-`softwaked serve -v` (or `softwaked -v serve`) prints KWS **hear/match** lines on stderr when the spotter decodes a keyword: `profile=<name>` (and `id=<id>` when they differ), the raw tag, `match=wake|sleep|hibernate|none`, voice state, mic RMS, and the configured phrase lists. The same verbosity logs `context sent=… before_compact=…` on ask and `compact before=… after=… threshold=…` when compaction runs. `softwaked serve -vv` (or `SOFTWAKE_LOG=trace`) also prints periodic mic-energy lines while sleeping with weights loaded and no match yet, plus **near-miss** lines when a low-threshold probe stream hears a keyword that did not reach the fire threshold (`near-miss keyword=\`sally\` … thresholds global=0.15 short=0.10 probe=0.05`). sherpa does not expose raw below-fire scores; the probe is the Softwake stand-in. Startup logs the loaded profile, KWS backend, feature flag, weights path, and phrase lists when weights load. `softwaked --help` prints usage.
+- Raw input and parsed command.
+- For `wake` / `sleep`: phrase, detector hit, transition success or reject reason.
+- For `ask` / `chat`: provider id and model id (bearer never printed).
+
+`SOFTWAKE_LOG=debug` enables the same detail.
+
+`softwaked serve -v` (or `softwaked -v serve`) prints KWS **hear/match** lines on stderr when the spotter decodes a keyword:
+
+- `profile=<name>` (and `id=<id>` when they differ), raw tag, `match=wake|sleep|hibernate|none`
+- Voice state, mic RMS, configured phrase lists
+- On ask: `context sent=… before_compact=…`
+- On compact: `compact before=… after=… threshold=…`
+
+`softwaked serve -vv` (or `SOFTWAKE_LOG=trace`) also prints:
+
+- Periodic mic-energy lines while sleeping with weights loaded and no match yet
+- **Near-miss** lines when a low-threshold probe hears a keyword below the fire threshold (`near-miss keyword=\`sally\` … thresholds global=0.15 short=0.10 probe=0.05`)
+
+sherpa does not expose raw below-fire scores; the probe is the Softwake stand-in. Startup logs the loaded profile, KWS backend, feature flag, weights path, and phrase lists when weights load. `softwaked --help` prints usage.
 
 Type one command per line. `sleep` in the 800 ms after `wake` stays awake. `wake` in the 800 ms after `sleep` or `resume` stays asleep. `hibernate` is a UI command and applies on the next line.
 
@@ -248,11 +350,23 @@ Type one command per line. `sleep` in the 800 ms after `wake` stays awake. `wake
 Settings in `softwake-ui` configure one acting provider ([ADR 0012](docs/ADR-0012-model-providers.md)). That panel is the Providers pane in the window:
 
 1. Choose **xAI sign-in**, **xAI API key**, **OpenAI**, **OpenRouter**, or **OpenAI-compatible**.
-2. For a key provider, paste the key and press **Save key**. For **OpenAI-compatible**, also set the **Base URL** (for example `http://127.0.0.1:11434/v1`) and press **Save base URL**. For xAI sign-in, press **Start sign-in**. Softwake opens the verification page in the default browser and shows that address as a link next to the user code. Enter the code on that page, then **Poll** (or wait for the automatic poll). If the browser does not open, use the link in Settings.
+2. Credentials:
+   - Key provider — paste the key and press **Save key**.
+   - **OpenAI-compatible** — also set **Base URL** (e.g. `http://127.0.0.1:11434/v1`) and **Save base URL**.
+   - xAI sign-in — **Start sign-in**; Softwake opens the verification page and shows the link next to the user code. Enter the code, then **Poll** (or wait for auto-poll). If the browser does not open, use the link in Settings.
 3. Press **Test**. On success, the **Chat model** and **Voice model** dropdowns fill from `GET /v1/models` (chat vs speech-to-text split, with a registry seed fallback). Both stay empty until Test succeeds.
 4. Pick a chat model (the acting session) and a voice / STT model. On xAI, pick a **TTS voice** (empty uses Eve). Other providers leave TTS disabled. Live press-to-talk is [ADR 0007](docs/ADR-0007-awake-stt-tts.md) and needs the daemon `live-http` feature.
 
-Secrets are stored under `$XDG_STATE_HOME/softwake/secrets.json` (or `~/.local/state/softwake/secrets.json`), mode `0600`. When the OS keyring answers (Linux Secret Service; macOS Keychain and Windows Credential Manager through the same crate), that file is a version-2 pointer and the bag is one keyring item (`softwake` / `secret-bag`). Plaintext is an opt-in fallback (`SOFTWAKE_SECRET_BACKEND=plaintext`, or the Settings button when the keyring is unavailable) and still shows a warning. An existing version-1 file migrates on the first resolved load when the keyring probe succeeds. A pointer is never rewritten as plaintext. `SOFTWAKE_SECRET_BACKEND=keyring` fails closed when the service is down. Non-secret selection and the model cache are `$XDG_CONFIG_HOME/softwake/providers.json`. The public xAI device-code client id is safe to commit; refresh tokens and API keys are not. Environment fallbacks: `XAI_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_COMPATIBLE_API_KEY` when no key is saved.
+**Secrets**
+
+- Path: `$XDG_STATE_HOME/softwake/secrets.json` (or `~/.local/state/softwake/secrets.json`), mode `0600`.
+- When the OS keyring answers (Linux Secret Service; macOS Keychain / Windows Credential Manager), that file is a v2 pointer and the bag is one keyring item (`softwake` / `secret-bag`).
+- Plaintext is an opt-in fallback (`SOFTWAKE_SECRET_BACKEND=plaintext`, or the Settings button when the keyring is unavailable) and still shows a warning.
+- Existing v1 files migrate on the first resolved load when the keyring probe succeeds. A pointer is never rewritten as plaintext.
+- `SOFTWAKE_SECRET_BACKEND=keyring` fails closed when the service is down.
+- Non-secret selection and model cache: `$XDG_CONFIG_HOME/softwake/providers.json`.
+- Public xAI device-code client id is safe to commit; refresh tokens and API keys are not.
+- Env fallbacks when no key is saved: `XAI_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`.
 
 ```bash
 cargo test -p softwake-providers
@@ -270,9 +384,21 @@ Default workspace tests do not call the network. Live HTTPS is the `live-http` f
 
 ### MCP servers
 
-Settings → **MCP** (Messengers-like chips): add a server id, stdio command/args (or URL), enable it, set group permission (Ask by default), optional auth secret in the bag. Softwake advertises tools as `mcp_<server>_<tool>` when not Deny. After edits, awake `/refresh` (or ask the agent for `softwake_refresh`) rediscovers tools and reloads the active profile soul + chat (clears the model session, reseeds HUD). See [ADR-0031](docs/ADR-0031-mcp-settings-ctl-tools.md).
+Settings → **MCP** (Messengers-like chips):
 
-Softwake ctl tools mirror slash commands (`softwake_status`, `softwake_list_*`, `softwake_set_*`, `softwake_sleep` / `hibernate` / `resume`, `softwake_new_session`, `softwake_refresh`). Includes `softwake_list_reasoning` / `softwake_set_reasoning` for chat `reasoning_effort` (`low`|`medium`|`high`|`xhigh`; slash `/reasoning`). List tools default Always allow; state changes default Ask. See [ADR-0032](docs/ADR-0032-reasoning-effort.md).
+- Add a server id, stdio command/args (or URL), enable it, set group permission (Ask by default), optional auth secret in the bag.
+- Softwake advertises tools as `mcp_<server>_<tool>` when not Deny.
+- After edits, awake `/refresh` (or ask for `softwake_refresh`) rediscovers tools and reloads the active profile soul + chat (clears the model session, reseeds HUD).
+
+See [ADR-0031](docs/ADR-0031-mcp-settings-ctl-tools.md).
+
+Softwake ctl tools mirror slash commands:
+
+- `softwake_status`, `softwake_list_*`, `softwake_set_*`
+- `softwake_sleep` / `hibernate` / `resume`, `softwake_new_session`, `softwake_refresh`
+- `softwake_list_reasoning` / `softwake_set_reasoning` for chat `reasoning_effort` (`low`|`medium`|`high`|`xhigh`; slash `/reasoning`)
+
+List tools default Always allow; state changes default Ask. See [ADR-0032](docs/ADR-0032-reasoning-effort.md).
 
 5. Shared history: Telegram turns append to `profiles/<id>/hud-chat.json` (encrypted vaults use a short inbox merge). See [ADR-0029](docs/ADR-0029-messengers-telegram.md).
 
@@ -313,14 +439,33 @@ Press-to-talk (mic in, Eve out) uses that same process ([ADR 0007](docs/ADR-0007
 
 1. In Settings, select **xAI sign-in** or **xAI API key**, save the credential, press **Test**, pick a chat model, and leave **TTS voice** empty (Eve) or pick another built-in xAI voice.
 2. Start serve with `live-http` and `pipewire-capture` as above. `ffplay` or `mpv` must be on `PATH` to hear the reply.
-3. Open the HUD, expand it, and **hold** the mic icon (accessible name “Hold to talk”) while you speak. Release returns the mic to idle immediately; Softwake shows **thinking…** while STT → ask → Eve run in the background. The bloom must keep animating while she thinks and while Eve speaks (playback is fire-and-forget; status polls use a non-blocking snapshot so the particle loop never waits on the daemon lock). A long reply can take up to 120 seconds to come back from the provider. The text is shown in full. Spoken audio stops if the clip runs past the playback reaper (Settings → General, default 60 s, range 30–300 s, `tts_playback_timeout_ms`). The written reply stays.
-4. **Free speech while awake:** with the daemon on `live-http` + `pipewire-capture` and Softwake **awake** (typed ask, `softwaked ctl wake`, or PTT-from-sleep), just speak — silence-gated utterances (default 2.0 s end-of-speech hangover, range 0.5–4.0 s in Settings → General) run the same STT → ask → Eve path without holding PTT. The collapsed HUD does not show hint text. PTT still wins if you hold the mic icon. The hangover is `free_speech_end_silence_ms` in softwake.json; `SOFTWAKE_FREE_SPEECH_END_SILENCE_MS` wins over the file. `softwaked ctl reload-utterance` applies it live without rebuilding wake-word spotting. While Eve speaks (speakers or headphones), Softwake mutes mic input so her voice cannot self-trigger another reply. Sleep→awake by voice needs `sherpa-kws` + installed weights (see Voice wake / sleep).
+3. Open the HUD, expand it, and **hold** the mic icon (accessible name “Hold to talk”) while you speak.
+   - Release returns the mic to idle immediately; Softwake shows **thinking…** while STT → ask → Eve run in the background.
+   - The bloom must keep animating while she thinks and while Eve speaks (playback is fire-and-forget; status polls use a non-blocking snapshot so the particle loop never waits on the daemon lock).
+   - A long reply can take up to 120 seconds from the provider. The text is shown in full.
+   - Spoken audio stops if the clip runs past the playback reaper (Settings → General, default 60 s, range 30–300 s, `tts_playback_timeout_ms`). The written reply stays.
+4. **Free speech while awake:** with the daemon on `live-http` + `pipewire-capture` and Softwake **awake** (typed ask, `softwaked ctl wake`, or PTT-from-sleep), just speak — silence-gated utterances run the same STT → ask → Eve path without holding PTT.
+   - Default 2.0 s end-of-speech hangover (range 0.5–4.0 s in Settings → General); key `free_speech_end_silence_ms` in softwake.json; `SOFTWAKE_FREE_SPEECH_END_SILENCE_MS` wins over the file.
+   - `softwaked ctl reload-utterance` applies it live without rebuilding wake-word spotting.
+   - Collapsed HUD does not show hint text. PTT still wins if you hold the mic icon.
+   - While Eve speaks, Softwake mutes mic input so her voice cannot self-trigger another reply.
+   - Sleep→awake by voice needs `sherpa-kws` + installed weights (see Voice wake / sleep).
 5. Drag the capsule (bloom area, not the mic/type controls) to reposition it. Softwake remembers the spot in `hud-position.json` under the Softwake config dir and will not yank it back to the primary bottom-right on expand/collapse. Delete that file (or call reset) to park at bottom-right again. On first open (no save), the HUD must spawn at **primary bottom-right**, not centred over Settings.
 5. A typed HUD ask speaks the same way when the provider is xAI and `live-http` is on.
 
 Default `cargo test --workspace` does not open a microphone and does not call STT or TTS. Phrase spotting (“hey Softwake” / profile name) needs `sherpa-kws` + installed weights.
 
-`ctl` prints `state`, `capture`, `soul` (`ok` or `missing`), and `soul reload`, and exits non-zero when the daemon rejects the command or cannot be reached. `ctl ask` and `ctl chat` send one line to that daemon. The reply is the line after the status lines. `ctl wake` enters awake from sleep when `soul.md`, `user.md`, `rules.md`, and `glossary.md` are valid. A missing or invalid file refuses `ctl wake` and leaves the voice state unchanged. Hibernate, sleep, and resume still run. After `ctl sleep` or `ctl resume`, a wake phrase waits out the 800 ms cooldown. `ctl resume` still lands in sleep. Serve can open a real mic with `pipewire-capture`; wake-from-voice needs `sherpa-kws` + installed weights. `ctl ask` still requires that same process to be awake. Without `live-http`, a ready Settings file still gets `Live HTTP is not enabled in this build. Re-run with the live-http feature to call the provider.` `resume` is wake-from-hibernate and lands in sleep. `reload-soul` re-reads the four-file pack from disk. The new text applies on the next awake, not in the middle of a session that is already awake. `ctl reload-utterance` re-reads free-speech end silence (`free_speech_end_silence_ms`, or `SOFTWAKE_FREE_SPEECH_END_SILENCE_MS` when set) and applies it live. It does not rebuild the keyword spotter. `ctl reload-playback` re-reads the TTS playback reaper deadline (`tts_playback_timeout_ms`, or `SOFTWAKE_TTS_PLAYBACK_TIMEOUT_MS` when set) and reports the effective milliseconds. The next speak uses that deadline. It does not rebuild the keyword spotter and does not change an in-flight player. `ctl tool` runs one safe tool, or stages a confirm-gated tool. The daemon starts in sleep, so `ctl tool echo hello` is refused until the daemon is awake. Serve has no microphone path into awake. A successful `echo` prints its result on the line after the status lines (`echo: hello`, or `pong` when `echo` has no arguments). `ctl tool notify hello` prints the pending id and does not append. `ctl tool email_send ada@example.com hello body` does the same, and `ctl confirm-tool <id>` appends one in-memory message. `ctl cancel-tool <id>` drops the pending call.
+`ctl` prints `state`, `capture`, `soul` (`ok` or `missing`), and `soul reload`, and exits non-zero when the daemon rejects the command or cannot be reached.
+
+- `ctl ask` / `ctl chat` — send one line; reply is the line after the status lines. Requires the daemon awake. Without `live-http`, a ready Settings file still gets `Live HTTP is not enabled in this build…`.
+- `ctl wake` — sleep → awake when `soul.md`, `user.md`, `rules.md`, and `glossary.md` are valid. Missing/invalid files refuse wake and leave voice state unchanged. Hibernate, sleep, and resume still run.
+- After `ctl sleep` or `ctl resume`, a wake phrase waits out the 800 ms cooldown. `ctl resume` still lands in sleep.
+- Serve can open a real mic with `pipewire-capture`; wake-from-voice needs `sherpa-kws` + installed weights.
+- `ctl reload-soul` — re-reads the four-file pack; new text applies on the next awake (not mid-session).
+- `ctl reload-utterance` — re-reads free-speech end silence (`free_speech_end_silence_ms`, or `SOFTWAKE_FREE_SPEECH_END_SILENCE_MS`) and applies it live. Does not rebuild the keyword spotter.
+- `ctl reload-playback` — re-reads the TTS playback reaper (`tts_playback_timeout_ms`, or `SOFTWAKE_TTS_PLAYBACK_TIMEOUT_MS`) and reports effective milliseconds. Next speak uses that deadline; does not change an in-flight player.
+- `ctl tool` — runs one safe tool, or stages a confirm-gated tool. Daemon starts in sleep, so `ctl tool echo hello` is refused until awake. Serve has no microphone path into awake.
+- Successful `echo` prints its result after the status lines (`echo: hello`, or `pong` with no args). `ctl tool notify hello` / `email_send …` print the pending id; `ctl confirm-tool <id>` / `cancel-tool <id>` confirm or drop.
 
 The socket path is the first match of `--socket PATH`, `SOFTWAKE_SOCKET`, `$XDG_RUNTIME_DIR/softwake/softwaked.sock`, and `/tmp/softwake-$UID/softwaked.sock` when `XDG_RUNTIME_DIR` is unset.
 
@@ -328,15 +473,40 @@ The soul directory is the first match of `--soul-dir PATH` (on `serve` and `demo
 
 ## Window
 
-`softwake-ui` opens a **system tray** icon, a small **always-on-top HUD**, and a resizable Settings window (860 by 680). Closing Settings hides it; Quit from the tray exits. The HUD parks at the **bottom-right of the primary monitor** by default (always-on-top above Settings). Collapsed it is a 120×120 bloom. The expanded log keeps up to 40 turns per profile in `profiles/<id>/hud-chat.json` (optional passphrase encryption — [ADR 0026](docs/ADR-0026-hud-chat-unlock.md)). On wake, a budgeted suffix of that history is seeded into the model session so Softwake remembers prior turns after sleep. Click expands a larger panel (default 520×620, resizable; size pinned in `ui-prefs.json`) with chat bubbles, a multiline composer, a mic-icon press-to-talk button, and the full reply. A top-right pin keeps it open (skips idle collapse). Otherwise it collapses after the pointer stays outside for the General idle setting (`hud_idle_collapse_ms` in `ui-prefs.json`, default 3 seconds, range 1–30), unless a tool is pending: Approve or Deny holds the panel open. Drag the bloom to move it; Softwake persists that spot and keeps the bottom-right corner across expand and collapse until `hud-position.json` is cleared. Settings left-nav shows **exactly one** content pane at a time. Particles follow capture level while listening ([ADR 0015](docs/ADR-0015-tray-hud.md), [ADR 0016](docs/ADR-0016-capture-level-hud.md)): the daemon sends peak-normalized RMS on `Status` when PCM is scored, and the UI falls back to a local sine only when that field is absent. Settings left-nav includes General, Profiles (sublist), Providers, Tools, Timers (sublist), Skills (sublist), Messengers (sublist), Email, and Status. Status is selected when the Settings window opens.
+`softwake-ui` opens a **system tray** icon, a small **always-on-top HUD**, and a resizable Settings window (860 by 680). Closing Settings hides it; Quit from the tray exits.
 
-**Status** shows the daemon state, whether capture is running, whether the soul pack is `ok` or `missing` (and the reason when the daemon sent one), whether a soul reload is pending, the latest tool line, and a confirm-gated tool when one is waiting. Buttons are Hibernate, Resume (hibernate → sleep via `wake_from_ui` / `ctl resume`), Wake (sleep → awake via `ctl wake`, valid soul pack required), Sleep (awake → sleep), Reload soul, Confirm, and Cancel. Reload reads `soul.md`, `user.md`, `rules.md`, and `glossary.md`. The new text applies on the next awake. The status snapshot does not include the socket path. The window uses the same default socket as `softwaked ctl`. Start `softwaked serve` first. Provider commands are not socket commands.
+**HUD**
+
+- Parks at the **bottom-right of the primary monitor** by default (always-on-top above Settings).
+- Collapsed: 120×120 bloom. Expanded: default 520×620 (resizable; size pinned in `ui-prefs.json`) with chat bubbles, multiline composer, mic-icon press-to-talk, and the full reply.
+- Chat log keeps up to 40 turns per profile in `profiles/<id>/hud-chat.json` (optional passphrase encryption — [ADR 0026](docs/ADR-0026-hud-chat-unlock.md)). On wake, a budgeted suffix seeds the model session so Softwake remembers prior turns after sleep.
+- Top-right pin keeps it open (skips idle collapse). Otherwise it collapses after the pointer stays outside for the General idle setting (`hud_idle_collapse_ms` in `ui-prefs.json`, default 3 s, range 1–30), unless a tool is pending: Approve or Deny holds the panel open.
+- Drag the bloom to move it; Softwake persists that spot and keeps the bottom-right corner across expand/collapse until `hud-position.json` is cleared.
+- Particles follow capture level while listening ([ADR 0015](docs/ADR-0015-tray-hud.md), [ADR 0016](docs/ADR-0016-capture-level-hud.md)): daemon sends peak-normalized RMS on `Status` when PCM is scored; UI falls back to a local sine when that field is absent.
+
+**Settings left-nav** shows **exactly one** content pane at a time: General, Profiles (sublist), Providers, Tools, Timers (sublist), Skills (sublist), Messengers (sublist), Email, and Status. Status is selected when the Settings window opens.
+
+**Status** shows:
+
+- Daemon state, whether capture is running
+- Soul pack `ok` or `missing` (and the reason when sent), whether a soul reload is pending
+- Latest tool line, and a confirm-gated tool when one is waiting
+
+Buttons: Hibernate, Resume (hibernate → sleep via `wake_from_ui` / `ctl resume`), Wake (sleep → awake via `ctl wake`, valid soul pack required), Sleep (awake → sleep), Reload soul, Confirm, and Cancel.
+
+Reload reads `soul.md`, `user.md`, `rules.md`, and `glossary.md`; new text applies on the next awake. The status snapshot does not include the socket path. The window uses the same default socket as `softwaked ctl`. Start `softwaked serve` first. Provider commands are not socket commands.
 
 **Providers** is the model Settings panel ([ADR 0012](docs/ADR-0012-model-providers.md)): choose a provider, save a key or sign in, press Test, then pick a chat model and a voice (STT) model. Both lists stay empty until Test succeeds. The **TTS voice** list is the xAI built-in roster (Eve is the default). It is disabled for other providers.
 
 **General** edits `soul.md`, `user.md`, `rules.md`, and `glossary.md` in the resolved soul directory (`SOFTWAKE_SOUL_DIR`, or the XDG default). Save writes the four files. Reload soul applies a valid pack on the next awake.
 
-**Email** can Connect / Disconnect Google or Microsoft ([ADR 0023](docs/ADR-0023-email-oauth.md)): PKCE loopback, tokens in the secret bag / keyring, scopes for mail + calendar + drive. Status shows the connected account. Live inbox/calendar/Drive read tools (`email_list` / `email_search` / `email_get`, `calendar_list` / `calendar_get`, `drive_list` / `drive_search` / `drive_get`) use those tokens under daemon `live-http` ([ADR 0030](docs/ADR-0030-inbox-calendar-drive-tools.md)). `email_send` remains confirm-gated draft/mock until SMTP transport ships. Optional SMTP fields and password remain for non-OAuth setups. Publisher client ids are env-only (`SOFTWAKE_GOOGLE_CLIENT_ID`, optional `SOFTWAKE_GOOGLE_CLIENT_SECRET`, `SOFTWAKE_MICROSOFT_CLIENT_ID`). The pane does not send mail; confirm-gated `email_send` on Status still owns send/draft after awake confirm.
+**Email** can Connect / Disconnect Google or Microsoft ([ADR 0023](docs/ADR-0023-email-oauth.md)):
+
+- PKCE loopback; tokens in the secret bag / keyring; scopes for mail + calendar + drive. Status shows the connected account.
+- Live inbox/calendar/Drive read tools (`email_list` / `email_search` / `email_get`, `calendar_list` / `calendar_get`, `drive_list` / `drive_search` / `drive_get`) use those tokens under daemon `live-http` ([ADR 0030](docs/ADR-0030-inbox-calendar-drive-tools.md)).
+- `email_send` remains confirm-gated draft/mock until SMTP transport ships. Optional SMTP fields and password remain for non-OAuth setups.
+- Publisher client ids are env-only (`SOFTWAKE_GOOGLE_CLIENT_ID`, optional `SOFTWAKE_GOOGLE_CLIENT_SECRET`, `SOFTWAKE_MICROSOFT_CLIENT_ID`).
+- The pane does not send mail; confirm-gated `email_send` on Status still owns send/draft after awake confirm.
 
 ```bash
 cargo run -p softwake-ui
@@ -385,10 +555,21 @@ Speak into the default input; the HUD capsule particles should bloom with your v
 
 1. Install weights (once): `./scripts/install-kws-weights.sh` → files under `$XDG_DATA_HOME/softwake/kws` (or `~/.local/share/softwake/kws`).
 2. Build with KWS + mic: `cargo build -p softwake-daemon --features live-http,sherpa-kws,pipewire-capture` (and the UI as usual), then install the binary (e.g. `cargo install --path crates/softwake-daemon --features live-http,sherpa-kws,pipewire-capture --force`).
-3. Set the active profile **name** in Settings → Profiles (e.g. `Sally`). Wake phrases are `<name>`, `hey <name>`, `hey softwake`, `softwake`, and bare `hi`. Sleep phrases keep `go to sleep`, `goodnight <name>`, `<name> sleep`, `goodnight softwake`, `softwake sleep`, and bare `sleep`. `deep sleep` enters hibernate (mic off). Only Resume / `ctl resume` leaves hibernate, and that lands in sleep. Short single-word keywords use a lower trigger threshold (`#0.10` by default; global multi-word default is `0.15`). **`hey <name>` is usually more reliable** than a bare short word. Tune in **Settings → General** (wake word / short-word sensitivity, floats 0.05–0.50; applied live without restarting softwaked), or via `softwake.json` (`kws_threshold_milli` / `kws_short_threshold_milli`, milli-units where `150` = `0.15`) or `SOFTWAKE_KWS_THRESHOLD` / `SOFTWAKE_KWS_SHORT_THRESHOLD` floats (env wins over file on every rebuild). If normal pitch near-misses at probe while deep voice fires, lower the short-word control toward 0.05. sherpa has no grammar: bare `hi` can false-wake while asleep. If `hi` is too noisy or too weak on your microphone, prefer `hey <name>` or the product phrases. Bare `sleep` is meant to match during awake chat; `go to sleep` and `<name> sleep` remain the more reliable multi-word options. At `-v`/`-vv`, startup logs `KWS profile=… keywords registered=[…] skipped=[…]`.
+3. Set the active profile **name** in Settings → Profiles (e.g. `Sally`).
+   - Wake phrases: `<name>`, `hey <name>`, `hey softwake`, `softwake`, and bare `hi`.
+   - Sleep phrases: `go to sleep`, `goodnight <name>`, `<name> sleep`, `goodnight softwake`, `softwake sleep`, and bare `sleep`.
+   - `deep sleep` enters hibernate (mic off). Only Resume / `ctl resume` leaves hibernate (lands in sleep).
+   - Short single-word keywords use a lower trigger threshold (`#0.10` by default; global multi-word default is `0.15`). **`hey <name>` is usually more reliable** than a bare short word.
+   - Tune in **Settings → General** (wake word / short-word sensitivity, floats 0.05–0.50; applied live), or via `softwake.json` (`kws_threshold_milli` / `kws_short_threshold_milli`, milli-units where `150` = `0.15`) or `SOFTWAKE_KWS_THRESHOLD` / `SOFTWAKE_KWS_SHORT_THRESHOLD` floats (env wins over file on every rebuild).
+   - If normal pitch near-misses at probe while deep voice fires, lower the short-word control toward 0.05.
+   - sherpa has no grammar: bare `hi` can false-wake while asleep — prefer `hey <name>` or product phrases if noisy/weak. Bare `sleep` is meant for awake chat; `go to sleep` and `<name> sleep` are more reliable multi-word options.
+   - At `-v`/`-vv`, startup logs `KWS profile=… keywords registered=[…] skipped=[…]`.
 4. Start serve with PipeWire capture and optional verbosity: `softwaked serve --capture pipewire -vv`. Leave Softwake in **sleep**. Add `--voice-test` (or later `softwaked ctl voice-test on`, or Settings → General) to exercise phrases and the short state voice without sending microphone speech to chat. The flag is off by default and is not saved.
 5. Say “hey Softwake” / “softwake” / `hi`, or `hey <name>` / `<name>` → awake. Look for `softwaked: KWS profile=… heard keyword=… match=wake` on stderr (and `KWS … wake match refused: …` if soul/cooldown blocks). Say “go to sleep”, “sleep”, or “goodnight &lt;name&gt;” → sleep. Say “deep sleep” → hibernate (`match=hibernate`). Each transition speaks a short state line. Those keyword hits stay immediate.
-6. Natural language is different. While awake, “put yourself to sleep”, “go to sleep for a little while”, “I’m going to sleep”, “I’m done for a bit”, or “hibernate” (when the spotter did not fire) asks `Sleep now?` or `Hibernate now?` and waits 15 seconds. Yes changes state and speaks the state line. No, or silence, stays awake. While asleep, a muffled wake word that only reaches the probe (not bare `hi`) asks `Were you trying to wake me?` at most once every 45 seconds. Yes wakes. No or silence stays asleep. Install the daemon with `live-http,pipewire-capture,sherpa-kws` so speech-to-text, the microphone, and keyword spotting are all present.
+6. Natural language is different from keyword hits:
+   - While awake, “put yourself to sleep”, “go to sleep for a little while”, “I’m going to sleep”, “I’m done for a bit”, or “hibernate” (when the spotter did not fire) asks `Sleep now?` or `Hibernate now?` and waits 15 seconds. Yes changes state and speaks the state line; No or silence stays awake.
+   - While asleep, a muffled wake word that only reaches the probe (not bare `hi`) asks `Were you trying to wake me?` at most once every 45 seconds. Yes wakes; No or silence stays asleep.
+   - Install the daemon with `live-http,pipewire-capture,sherpa-kws` so STT, mic, and keyword spotting are all present.
 7. Free speech / PTT / TTS while awake are unchanged unless voice test mode is on. Sleep-phrase KWS still runs so you can dismiss by voice. `-v` also logs `context sent=… before_compact=…` on ask and `compact before=… after=… threshold=…` when compaction runs.
 
 Without weights or without `sherpa-kws`, PCM stays on `NullDetector` and CI stays mic-free. See [ADR 0006](docs/ADR-0006-on-device-wake.md). Download is operator-consent only; weights are not vendored.
