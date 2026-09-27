@@ -47,11 +47,13 @@ pub use messengers::{
     save_messengers, take_hud_inbox, wants_ask_fanout, wants_timer_push,
 };
 pub use schedule::{
-    CATCH_UP_GRACE_MS, CronExpr, MAX_ENTRIES, SCHEDULES_FILE_NAME, ScheduleAction, ScheduleEntry,
-    ScheduleError, ScheduleKind, SchedulesFile, TIMEZONE_LOCAL, advance_after_fire, apply_action,
-    compute_next_fire_ms, fire_notify_line, fire_speak_line, list_profile_ids, load_schedules,
-    new_schedule_id, now_ms, parse_schedule_args, refresh_next_fire, resolve_active_schedules_file,
-    resolve_schedules_file, save_schedules, should_fire, skip_missed, validate_entry,
+    AGENT_TASK_SPEAK_MAX, CATCH_UP_GRACE_MS, CronExpr, MAX_ENTRIES, SCHEDULES_FILE_NAME,
+    ScheduleAction, ScheduleActionKind, ScheduleEntry, ScheduleError, ScheduleKind, SchedulesFile,
+    TIMEZONE_LOCAL, advance_after_fire, agent_task_user_prompt, apply_action, compute_next_fire_ms,
+    fire_agent_notify_line, fire_agent_speak_line, fire_notify_line, fire_speak_line,
+    list_profile_ids, load_schedules, new_schedule_id, now_ms, parse_schedule_args,
+    refresh_next_fire, resolve_active_schedules_file, resolve_schedules_file, save_schedules,
+    should_fire, skip_missed, truncate_chars, validate_entry,
 };
 pub use settings::{
     ConfirmPolicy, ConnectedAccount, EmailOauthStatus, FileToolsSettings, TOOLS_FILE_NAME,
@@ -288,7 +290,7 @@ const PHASE2: &[ToolMeta] = &[
     ToolMeta {
         name: SCHEDULE_TOOL,
         risk: ToolRisk::Confirm,
-        description: "Timers/schedule tool: create, edit, delete, or list a per-profile timer/reminder/cron after confirm.",
+        description: "Timers/schedule tool: create, edit, delete, or list a per-profile timer/reminder/cron or agent_task (prompt on fire) after confirm.",
     },
     ToolMeta {
         name: SOFTWAKE_STATUS_TOOL,

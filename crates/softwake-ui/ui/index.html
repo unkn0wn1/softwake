@@ -331,7 +331,7 @@
         <section id="pane-timers" class="pane glass hidden" hidden aria-labelledby="timers-title">
           <h2 id="timers-title">Timers</h2>
           <p class="lede">
-            Per-profile reminders and cron-like schedules. Softwake owns these files (not system crontab).
+            Per-profile reminders, cron-like schedules, and agent tasks (prompt → bounded agent turn → deliver). Softwake owns these files (not system crontab).
             Times use the host local wall clock (Asia/Bangkok when the host TZ is Asia/Bangkok).
             Fires while softwaked is running in any voice state; OS suspend skips until catch-up.
           </p>
@@ -345,6 +345,11 @@
             <select id="timers-list" aria-label="Schedule list" size="8"></select>
           </div>
           <div class="field">
+            <label for="timers-action">Action</label>
+            <select id="timers-action">
+              <option value="notify">Notify (fixed message)</option>
+              <option value="agent_task">Agent task (run prompt)</option>
+            </select>
             <label for="timers-kind">Kind</label>
             <select id="timers-kind">
               <option value="daily">daily</option>
@@ -361,8 +366,8 @@
             <input id="timers-title-input" type="text" maxlength="120" autocomplete="off" />
           </div>
           <div class="field">
-            <label for="timers-message">Message</label>
-            <input id="timers-message" type="text" maxlength="500" autocomplete="off" />
+            <label for="timers-message" id="timers-message-label">Message</label>
+            <input id="timers-message" type="text" maxlength="2000" autocomplete="off" />
           </div>
           <label class="row">
             <input type="checkbox" id="timers-enabled" checked />

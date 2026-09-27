@@ -594,6 +594,32 @@ impl Runtime {
         self.retain_status_text(Some(speak_line), Some(notify_line));
     }
 
+    /// Fire a scheduled agent task: bounded oneshot tool loop, then timer delivery.
+    ///
+    /// Uses the daemon's current soul + Tools permissions (Ask/Deny still apply;
+    /// Pending confirms are delivered as text — never silently Always-allowed).
+    /// Delivery targets the schedule row's `profile_id` channels (ADR-0036).
+    pub(crate) fn fire_schedule_agent_task(
+        &mut self,
+        profile_id: &str,
+        entry: &softwake_tools::ScheduleEntry,
+    ) {
+        let prompt = softwake_tools::agent_task_user_prompt(entry);
+        let summary = match self.messenger_ask_oneshot(&prompt) {
+            Ok(text) => text,
+            Err(err) => format!("agent task failed: {err}"),
+        };
+        let notify = softwake_tools::fire_agent_notify_line(&entry.title, &summary);
+        let speak = softwake_tools::fire_agent_speak_line(&summary);
+        // Full summary to Telegram/HUD; truncated speak for desktop TTS.
+        self.hands.push_notification(notify.clone());
+        if crate::telegram::desktop_wants_timer_voice(profile_id) {
+            self.speak_fixed_line(&speak);
+        }
+        crate::telegram::fanout_timer(profile_id, &summary);
+        self.retain_status_text(Some(summary), Some(notify));
+    }
+
     fn speak_fixed_line(&mut self, line: &str) {
         #[cfg(test)]
         {

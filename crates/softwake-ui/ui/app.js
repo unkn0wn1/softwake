@@ -1222,10 +1222,12 @@ if (skillsDeleteBtn) {
 const timersList = document.querySelector("#timers-list");
 const timersShowAll = document.querySelector("#timers-show-all");
 const timersActive = document.querySelector("#timers-active");
+const timersAction = document.querySelector("#timers-action");
 const timersKind = document.querySelector("#timers-kind");
 const timersWhen = document.querySelector("#timers-when");
 const timersTitleInput = document.querySelector("#timers-title-input");
 const timersMessage = document.querySelector("#timers-message");
+const timersMessageLabel = document.querySelector("#timers-message-label");
 const timersEnabled = document.querySelector("#timers-enabled");
 const timersStatus = document.querySelector("#timers-status");
 const timersError = document.querySelector("#timers-error");
@@ -1242,25 +1244,36 @@ function showTimersError(error) {
     typeof error === "string" ? error : error && error.message ? error.message : "request failed";
 }
 
+
+function syncTimersActionLabel() {
+  if (!timersMessageLabel) return;
+  const action = timersAction ? timersAction.value : "notify";
+  timersMessageLabel.textContent = action === "agent_task" ? "Prompt" : "Message";
+}
+
 function clearTimersForm() {
   timersSelectedId = "";
   timersSelectedProfile = "";
   if (timersList) timersList.selectedIndex = -1;
+  if (timersAction) timersAction.value = "notify";
   if (timersKind) timersKind.value = "daily";
   if (timersWhen) timersWhen.value = "";
   if (timersTitleInput) timersTitleInput.value = "";
   if (timersMessage) timersMessage.value = "";
   if (timersEnabled) timersEnabled.checked = true;
+  syncTimersActionLabel();
 }
 
 function fillTimersForm(row) {
   timersSelectedId = row.id || "";
   timersSelectedProfile = row.profileId || "";
+  if (timersAction) timersAction.value = row.action || "notify";
   if (timersKind) timersKind.value = row.kind || "daily";
   if (timersWhen) timersWhen.value = row.when || "";
   if (timersTitleInput) timersTitleInput.value = row.title || "";
   if (timersMessage) timersMessage.value = row.message || "";
   if (timersEnabled) timersEnabled.checked = !!row.enabled;
+  syncTimersActionLabel();
 }
 
 function renderTimers(snap) {
@@ -1277,6 +1290,7 @@ function renderTimers(snap) {
       const opt = document.createElement("option");
       opt.value = row.profileId + "\t" + row.id;
       const label = (snap.showAll ? "[" + row.profileName + "] " : "") +
+        (row.action === "agent_task" ? "agent " : "") +
         row.kind + " " + row.when + " — " + row.title + (row.enabled ? "" : " (off)");
       opt.textContent = label;
       timersList.appendChild(opt);
@@ -1342,6 +1356,9 @@ async function refreshTimers() {
 if (timersShowAll) {
   timersShowAll.addEventListener("change", () => refreshTimers());
 }
+if (timersAction) {
+  timersAction.addEventListener("change", () => syncTimersActionLabel());
+}
 if (timersList) {
   timersList.addEventListener("change", () => {
     const val = timersList.value || "";
@@ -1365,6 +1382,7 @@ if (timersSaveBtn) {
         profileId: timersSelectedProfile || null,
         id: timersSelectedId || null,
         kind: timersKind ? timersKind.value : "daily",
+        action: timersAction ? timersAction.value : "notify",
         when: timersWhen ? timersWhen.value : "",
         title: timersTitleInput ? timersTitleInput.value : "",
         message: timersMessage ? timersMessage.value : "",
