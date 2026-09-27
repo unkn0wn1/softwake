@@ -35,8 +35,8 @@ pub use schedule::{
     resolve_schedules_file, save_schedules, should_fire, skip_missed, validate_entry,
 };
 pub use settings::{
-    ConfirmPolicy, FileToolsSettings, TOOLS_FILE_NAME, TOOLS_PERMISSIONS_LEAD, ToolPermission,
-    ToolsSettings, ToolsSettingsError, default_permission, parse_confirm_policy,
+    ConfirmPolicy, EmailOauthStatus, FileToolsSettings, TOOLS_FILE_NAME, TOOLS_PERMISSIONS_LEAD,
+    ToolPermission, ToolsSettings, ToolsSettingsError, default_permission, parse_confirm_policy,
     parse_tool_permission, resolve_tools_file, resolve_tools_file_from, tools_permissions_appendix,
 };
 pub use shell::{
@@ -116,7 +116,7 @@ const PHASE2: &[ToolMeta] = &[
     ToolMeta {
         name: EMAIL_SEND_TOOL,
         risk: ToolRisk::Confirm,
-        description: "Append one message to the in-memory outbox.",
+        description: "Email tool: draft or send one message (to, subject, body).",
     },
     ToolMeta {
         name: SHELL_TOOL,
@@ -126,12 +126,12 @@ const PHASE2: &[ToolMeta] = &[
     ToolMeta {
         name: SKILL_SAVE_TOOL,
         risk: ToolRisk::Confirm,
-        description: "Save a Markdown skill (procedure / pitfalls / verify) after confirm.",
+        description: "Skills tool: save a Markdown skill (procedure / pitfalls / verify) after confirm.",
     },
     ToolMeta {
         name: SCHEDULE_TOOL,
         risk: ToolRisk::Confirm,
-        description: "Create, edit, or delete a per-profile timer/reminder/cron after confirm.",
+        description: "Timers/schedule tool: create, edit, delete, or list a per-profile timer/reminder/cron after confirm.",
     },
 ];
 
@@ -463,8 +463,7 @@ mod tests {
                 .is_some_and(|tool| tool.risk == ToolRisk::Confirm)
         );
         assert!(registry.lookup("email_send").is_some_and(|tool| {
-            tool.risk == ToolRisk::Confirm
-                && tool.description == "Append one message to the in-memory outbox."
+            tool.risk == ToolRisk::Confirm && tool.description.contains("Email tool:")
         }));
         assert_eq!(ToolRegistry::default().entries(), registry.entries());
     }

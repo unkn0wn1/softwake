@@ -372,7 +372,9 @@ impl Runtime {
     /// Answer a messenger inbound without changing voice state or speaking locally.
     ///
     /// Uses the open session when awake; otherwise a oneshot completion with the
-    /// applied (or pack) soul instructions. Does not run shell/schedule heuristics.
+    /// applied (or pack) soul instructions. Both paths attach the live Tools
+    /// permissions appendix and advertise non-deny `OpenAI` tools (same as desktop ask).
+    /// Does not run shell/schedule heuristics.
     pub(crate) fn messenger_ask(&mut self, text: &str) -> Result<String, String> {
         let text = text.trim();
         if text.is_empty() {
@@ -441,7 +443,7 @@ impl Runtime {
 
     fn messenger_ask_oneshot(&mut self, text: &str) -> Result<String, String> {
         let ready = crate::chat::load_disk_chat()?;
-        let system = if let Some(applied) = self.soul.applied_instructions() {
+        let pack = if let Some(applied) = self.soul.applied_instructions() {
             applied.to_owned()
         } else if let Some(pack) = self.soul.pack() {
             pack.render_instructions_as(&self.soul.agent_name())
@@ -449,8 +451,32 @@ impl Runtime {
             return Err("soul pack is not ready".into());
         };
         crate::chat::gate_live_http(&ready.prepared, &ready.bearer, text)?;
+        let memory =
+            crate::chat::appendix_for_ask(text, Option::<&softwake_memory::MockMemory>::None);
+        let tools_settings = self.hands.tools_settings();
+        let appendix = crate::chat::system_appendix(&memory, &tools_settings);
+        let system = softwake_session::assemble_system(&pack, &appendix);
+        let tools = softwake_tools::advertise_chat_tools(&tools_settings);
         let turns = vec![softwake_session::SessionMessage::user(text)];
-        crate::chat::finish_prepared_chat(&ready.prepared, &ready.bearer, &system, &turns)
+        let loop_ok = {
+            let hands = &mut self.hands;
+            let machine = &self.machine;
+            crate::chat::finish_prepared_chat_tools(
+                &ready.prepared,
+                &ready.bearer,
+                &system,
+                &turns,
+                &tools,
+                |name, args| {
+                    crate::tool_loop::invoke_from_request(hands.request(machine, name, args))
+                },
+            )
+        };
+        match loop_ok {
+            Ok(crate::tool_loop::ToolLoopOk::Message(reply)) => Ok(reply),
+            Ok(crate::tool_loop::ToolLoopOk::Pending { message, .. }) => Ok(message),
+            Err(e) => Err(e),
+        }
     }
 
     /// Sleep / hibernate / fuzzy-wake confirm, before shell intent and the model.

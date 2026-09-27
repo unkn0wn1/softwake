@@ -99,9 +99,38 @@ pub(crate) fn appendix_for_ask(
 ///
 /// Tools permissions are always present so the model sees the current
 /// `tools.json` modes even when memory is empty. Order: tools, then memory.
+/// Email OAuth connection status (no tokens) is embedded in the tools appendix.
 #[must_use]
 pub(crate) fn system_appendix(memory: &str, tools: &softwake_tools::ToolsSettings) -> String {
-    softwake_session::join_appendices(&[&softwake_tools::tools_permissions_appendix(tools), memory])
+    let email = email_oauth_status_for_appendix();
+    softwake_session::join_appendices(&[
+        &softwake_tools::tools_permissions_appendix(tools, &email),
+        memory,
+    ])
+}
+
+/// Non-secret Google/Microsoft connection flags for the tools appendix.
+///
+/// Fail-open: a missing secrets file or load error means "not connected".
+#[must_use]
+pub(crate) fn email_oauth_status_for_appendix() -> softwake_tools::EmailOauthStatus {
+    let Ok(path) = softwake_providers::resolve_secrets_file() else {
+        return softwake_tools::EmailOauthStatus::default();
+    };
+    let Ok(store) = softwake_providers::open_store(&path) else {
+        return softwake_tools::EmailOauthStatus::default();
+    };
+    let Ok(bag) = store.load() else {
+        return softwake_tools::EmailOauthStatus::default();
+    };
+    let google = bag.google_connections.first();
+    let microsoft = bag.microsoft_connections.first();
+    softwake_tools::EmailOauthStatus {
+        google_connected: google.is_some(),
+        google_email: google.and_then(|c| c.account_email.clone()),
+        microsoft_connected: microsoft.is_some(),
+        microsoft_email: microsoft.and_then(|c| c.account_email.clone()),
+    }
 }
 
 /// Context usage recorded for Status after one ask.
@@ -1197,6 +1226,10 @@ mod memory_tests {
         let tools_only = super::system_appendix("", &settings);
         assert!(tools_only.starts_with(softwake_tools::TOOLS_PERMISSIONS_LEAD));
         assert!(!tools_only.contains("Memory snippets"));
+        assert!(tools_only.contains("Email OAuth:"));
+        assert!(tools_only.contains("- email_send:"));
+        assert!(tools_only.contains("- skill_save:"));
+        assert!(tools_only.contains("- schedule:"));
     }
 }
 

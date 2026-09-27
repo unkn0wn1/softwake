@@ -13,6 +13,9 @@
 
 ### Fixed
 
+- HUD pin control: click listener and resize grip were nested inside `refreshHudPrefs`'s catch (only registered when prefs load failed), so pin did nothing when prefs succeeded. Listener is top-level again; pressed/on state uses `aria-pressed`, filled pin icon, stronger highlight, and an updated tooltip.
+- Agents (including Telegram inbound oneshot asks) now get the same live Tools permissions appendix and OpenAI `tools` advertise list as desktop ask: non-deny tools (`email_send`, `skill_save`, `schedule`, …) are in the system prompt and tools array when Always allow or Ask; Deny is omitted from advertise. Appendix states Email OAuth connected/not-connected clearly so agents do not claim they lack email tools after OAuth connect.
+
 - Seed-on-wake for **encrypted** HUD vaults: UI `SeedChat` now runs once when awake + unlocked + turns loaded (not only on the woke edge), and the daemon prepends budgeted history even if an early post-wake ask already landed.
 
 ### Added

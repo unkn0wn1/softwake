@@ -472,13 +472,32 @@ fn io_err(path: &Path, source: io::Error) -> ToolsSettingsError {
 /// Lead-in for the live Tools permissions appendix on each ask/chat turn.
 pub const TOOLS_PERMISSIONS_LEAD: &str = "Live Tools permissions (current Tools Settings). Trust this list over the static Runtime policy defaults for what is available right now.";
 
+/// Non-secret Email OAuth connection flags for the live Tools appendix.
+///
+/// Tokens never belong here. The daemon fills this from the secret bag
+/// (account emails only) so the model knows whether Google/Microsoft mail
+/// accounts are connected.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EmailOauthStatus {
+    /// True when a Google account row is present in the secret bag.
+    pub google_connected: bool,
+    /// Connected Google account email when known.
+    pub google_email: Option<String>,
+    /// True when a Microsoft account row is present in the secret bag.
+    pub microsoft_connected: bool,
+    /// Connected Microsoft account email when known.
+    pub microsoft_email: Option<String>,
+}
+
 /// Build the live Tools permissions appendix for one ask/chat system prompt.
 ///
 /// Lists every registered tool's operator mode (`always_allow` / `ask` / `deny`),
-/// then spells out shell availability and how the model must propose commands.
-/// Always non-empty so each turn carries a fresh permission signal.
+/// then spells out shell availability, email OAuth connection status, and how
+/// the model must call non-deny tools. Always non-empty so each turn carries a
+/// fresh permission signal. Deny tools stay listed here (so the model knows
+/// they are off) but are omitted from the `OpenAI` `tools` advertise array.
 #[must_use]
-pub fn tools_permissions_appendix(settings: &ToolsSettings) -> String {
+pub fn tools_permissions_appendix(settings: &ToolsSettings, email: &EmailOauthStatus) -> String {
     let mut out = String::from(TOOLS_PERMISSIONS_LEAD);
     for tool in crate::ToolRegistry::phase2().entries() {
         let mode = settings.permission(tool.name);
@@ -493,8 +512,10 @@ pub fn tools_permissions_appendix(settings: &ToolsSettings) -> String {
         settings.permission(crate::SHELL_TOOL),
     ));
     out.push('\n');
+    out.push_str(&email_oauth_line(email));
+    out.push('\n');
     out.push_str(
-        "Do not claim a tool is denied when this list says otherwise. When a tool is listed as always_allow or ask, Softwake advertises it as a chat function tool — call it when you need real results. Ask-mode tools wait for HUD Approve before they run; the turn may pause with a pending confirmation. Saying `run <command>` or `shell <command>` still works as a fast path. Never invent command output; only report stdout/stderr Softwake returns from a tool result.",
+        "Do not claim a tool is denied when this list says otherwise. When a tool is listed as always_allow or ask, Softwake advertises it as a chat function tool — call it when you need real results (email_send, skill_save, schedule/timers, notify, echo, shell). Ask-mode tools wait for HUD Approve before they run; the turn may pause with a pending confirmation. Saying `run <command>` or `shell <command>` still works as a fast path. Never invent command output; only report stdout/stderr Softwake returns from a tool result. If email_send is always_allow or ask, you have an email tool — do not claim you lack inbox/email tools. Live Gmail/Graph list APIs are not separate tools yet; use email_send for outbound.",
     );
     out
 }
@@ -513,12 +534,41 @@ fn shell_availability_line(permission: ToolPermission) -> &'static str {
     }
 }
 
+fn email_oauth_line(email: &EmailOauthStatus) -> String {
+    let google = account_phrase(
+        email.google_connected,
+        email.google_email.as_deref(),
+        "Google",
+    );
+    let microsoft = account_phrase(
+        email.microsoft_connected,
+        email.microsoft_email.as_deref(),
+        "Microsoft",
+    );
+    if !email.google_connected && !email.microsoft_connected {
+        return "Email OAuth: no Google or Microsoft account connected (Settings → Email). email_send still follows the permission above (draft/mock until live send is wired).".to_owned();
+    }
+    format!(
+        "Email OAuth: {google}; {microsoft}. Tokens stay in the secret bag. email_send follows the permission above."
+    )
+}
+
+fn account_phrase(connected: bool, address: Option<&str>, label: &str) -> String {
+    if !connected {
+        return format!("{label} not connected");
+    }
+    match address.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(addr) => format!("{label} connected as {addr}"),
+        None => format!("{label} connected"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfirmPolicy, FileToolsSettings, TOOLS_PERMISSIONS_LEAD, ToolPermission, ToolsSettings,
-        ToolsSettingsError, default_permission, parse_confirm_policy, parse_tool_permission,
-        resolve_tools_file_from, tools_permissions_appendix,
+        ConfirmPolicy, EmailOauthStatus, FileToolsSettings, TOOLS_PERMISSIONS_LEAD, ToolPermission,
+        ToolsSettings, ToolsSettingsError, default_permission, parse_confirm_policy,
+        parse_tool_permission, resolve_tools_file_from, tools_permissions_appendix,
     };
     use crate::{ECHO_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, ToolRegistry};
 
@@ -715,7 +765,7 @@ mod tests {
     #[test]
     fn tools_permissions_appendix_lists_every_registered_tool() {
         let settings = ToolsSettings::default();
-        let appendix = tools_permissions_appendix(&settings);
+        let appendix = tools_permissions_appendix(&settings, &EmailOauthStatus::default());
         assert!(appendix.starts_with(TOOLS_PERMISSIONS_LEAD));
         for tool in ToolRegistry::phase2().entries() {
             let line = format!("- {}: {}", tool.name, settings.permission(tool.name));
@@ -738,7 +788,7 @@ mod tests {
             .permissions
             .insert(SHELL_TOOL.to_owned(), ToolPermission::AlwaysAllow);
         settings.normalize();
-        let appendix = tools_permissions_appendix(&settings);
+        let appendix = tools_permissions_appendix(&settings, &EmailOauthStatus::default());
         assert!(appendix.contains("- shell: always_allow"));
         assert!(appendix.contains(
             "Shell is available. Permission is always_allow: Softwake runs shell without a confirm prompt"
@@ -753,12 +803,33 @@ mod tests {
             .permissions
             .insert(SHELL_TOOL.to_owned(), ToolPermission::Ask);
         settings.normalize();
-        let appendix = tools_permissions_appendix(&settings);
+        let appendix = tools_permissions_appendix(&settings, &EmailOauthStatus::default());
         assert!(appendix.contains("- shell: ask"));
         assert!(
             appendix.contains("Shell is available. Permission is ask: Softwake stages the command")
         );
         assert!(appendix.contains("Approve in the HUD"));
         assert!(!appendix.contains("Shell is unavailable."));
+    }
+
+    #[test]
+    fn tools_permissions_appendix_reports_email_oauth_connected() {
+        let settings = ToolsSettings::default();
+        let disconnected = tools_permissions_appendix(&settings, &EmailOauthStatus::default());
+        assert!(disconnected.contains("Email OAuth: no Google or Microsoft account connected"));
+        assert!(disconnected.contains("you have an email tool"));
+        let email = EmailOauthStatus {
+            google_connected: true,
+            google_email: Some("ada@example.com".to_owned()),
+            microsoft_connected: false,
+            microsoft_email: None,
+        };
+        let appendix = tools_permissions_appendix(&settings, &email);
+        assert!(appendix.contains(
+            "Email OAuth: Google connected as ada@example.com; Microsoft not connected."
+        ));
+        assert!(appendix.contains("- email_send: ask"));
+        assert!(appendix.contains("- skill_save:"));
+        assert!(appendix.contains("- schedule:"));
     }
 }

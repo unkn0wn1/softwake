@@ -1434,7 +1434,7 @@ mod tests {
         assert_eq!(pending.name, "email_send");
         assert_eq!(
             pending.description,
-            "Append one message to the in-memory outbox."
+            "Email tool: draft or send one message (to, subject, body)."
         );
         assert!(hands.outbox().is_empty());
         assert!(hands.notifications().is_empty());
