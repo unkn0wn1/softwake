@@ -24,6 +24,8 @@
 
 ### Fixed
 
+- Inbox `email_list` HTTP 403 while calendar/Drive work is **not** a Softwake scope-drop bug when Connect already granted `gmail.readonly`/`gmail.send`: the MeetRec-shared Google Cloud project must **Enable Gmail API** (project `577210165352`). Softwake persists granted `scope` in the secret bag and sends `Authorization: Bearer` to `gmail.googleapis.com`. No Sally `/refresh` needed. Docs/Settings copy + clearer live 403 hints. See [oauth-clients.md](docs/oauth-clients.md).
+
 - HUD pin control: click listener and resize grip were nested inside `refreshHudPrefs`'s catch (only registered when prefs load failed), so pin did nothing when prefs succeeded. Listener is top-level again; pressed/on state uses `aria-pressed`, filled pin icon, stronger highlight, and an updated tooltip.
 - Agents (including Telegram inbound oneshot asks) now get the same live Tools permissions appendix and OpenAI `tools` advertise list as desktop ask: non-deny tools (`email_send`, `skill_save`, `schedule`, …) are in the system prompt and tools array when Always allow or Ask; Deny is omitted from advertise. Appendix states Email OAuth connected/not-connected clearly so agents do not claim they lack email tools after OAuth connect.
 

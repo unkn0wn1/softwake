@@ -362,7 +362,7 @@ fn get_body(
         .into_string()
         .map_err(|_| "cloud API body read failed".to_owned())?;
     if !(200..300).contains(&status) {
-        return Err(format!("cloud API HTTP {status}"));
+        return Err(cloud_http_error(status, &body));
     }
     Ok(body)
 }
@@ -375,6 +375,66 @@ fn get_json(_url: &str, _bearer: &str, _extra: Option<&[(&str, &str)]>) -> Resul
 #[cfg(not(feature = "live-http"))]
 fn get_text(_url: &str, _bearer: &str) -> Result<String, String> {
     Err(LIVE_REQUIRED.to_owned())
+}
+
+/// Build a token-free cloud HTTP error. Prefer Google/Graph `error.message` when present.
+fn cloud_http_error(status: u16, body: &str) -> String {
+    let mut message = format!("cloud API HTTP {status}");
+    if let Some(detail) = cloud_error_detail(body) {
+        message.push_str(": ");
+        message.push_str(&detail);
+    }
+    if status == 403 {
+        message.push_str(
+            " — If inbox fails while calendar/Drive work: enable Gmail API on the publisher GCP project (docs/oauth-clients.md). If the token lacks gmail.readonly, Disconnect and Connect Google in Settings → Email. No /refresh needed; Softwake reads the live secret bag.",
+        );
+    }
+    message
+}
+
+fn cloud_error_detail(body: &str) -> Option<String> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if let Some(msg) = value
+            .pointer("/error/message")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Some(truncate_error_detail(msg));
+        }
+        if let Some(msg) = value
+            .get("message")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Some(truncate_error_detail(msg));
+        }
+    }
+    let flat: String = trimmed
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.is_empty() {
+        None
+    } else {
+        Some(truncate_error_detail(&flat))
+    }
+}
+
+fn truncate_error_detail(detail: &str) -> String {
+    const MAX: usize = 240;
+    let trimmed = detail.trim();
+    if trimmed.chars().count() <= MAX {
+        return trimmed.to_owned();
+    }
+    let truncated: String = trimmed.chars().take(MAX).collect();
+    format!("{truncated}…")
 }
 
 #[allow(
@@ -428,7 +488,9 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{civil_from_days, connector_action_for, format_rfc3339};
+    use super::{
+        civil_from_days, cloud_error_detail, cloud_http_error, connector_action_for, format_rfc3339,
+    };
     use softwake_connectors::{CALENDAR, CALENDAR_LIST, EMAIL, EMAIL_LIST};
 
     #[test]
@@ -443,5 +505,25 @@ mod tests {
         );
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert!(format_rfc3339(0).starts_with("1970-01-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn cloud_http_403_surfaces_gmail_api_hint() {
+        let body = r#"{"error":{"code":403,"message":"Gmail API has not been used in project 1 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/gmail.googleapis.com/overview?project=1 then retry."}}"#;
+        let err = cloud_http_error(403, body);
+        assert!(err.contains("cloud API HTTP 403"));
+        assert!(err.contains("Gmail API has not been used"));
+        assert!(err.contains("enable Gmail API"));
+        assert!(err.contains("Disconnect and Connect Google"));
+        assert!(err.contains("No /refresh needed"));
+        assert!(!err.contains("ya29."));
+    }
+
+    #[test]
+    fn cloud_error_detail_truncates() {
+        let long = "x".repeat(400);
+        let detail = cloud_error_detail(&long).expect("detail");
+        assert!(detail.ends_with('…'));
+        assert!(detail.chars().count() <= 241);
     }
 }

@@ -75,3 +75,21 @@ cargo check -p softwake-daemon --features live-http
 
 Manual: Connect Google (or Microsoft) in Settings → Email, set tool permissions,
 awake ask “list my recent email” / “what’s on my calendar”.
+
+## Amendment — Gmail API 403 vs missing scopes (2026-09-27)
+
+`email_list` / `email_search` / `email_get` call Gmail over the Email OAuth
+bearer. Two different failures look similar in the HUD:
+
+1. **Gmail API disabled** on the publisher GCP project (common when Softwake
+   reuses a MeetRec project that only enabled Calendar + Drive). Symptom:
+   calendar/Drive tools work; inbox returns HTTP 403; Google’s JSON body says
+   enable `gmail.googleapis.com`. Fix: enable Gmail API ([oauth-clients.md](oauth-clients.md));
+   reconnect not required if `scope` already has `gmail.readonly`. Sally `/refresh` is unrelated — Softwake reads the live secret bag (and refreshes the access token near expiry) on each tool call.
+2. **Mail scopes not on the token** (connected before Softwake requested mail,
+   or consent skipped mail). Symptom: `scope` lacks `gmail.readonly`. Fix:
+   Settings → Email → Disconnect Google → Connect again.
+
+Daemon live-http errors now surface a short, token-free hint from the provider
+error body (and a Softwake reconnect / Gmail API note on HTTP 403) instead of
+only `cloud API HTTP 403`.
