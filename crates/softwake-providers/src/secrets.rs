@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::account_oauth::AccountConnection;
+use crate::account_oauth::{AccountConnection, AccountProvider};
 use crate::oauth::OAuthTokenSet;
 use crate::secrets_file::{self, FileSecretStore};
 use crate::secrets_keyring::{self, KeyringSecretStore};
@@ -51,6 +51,10 @@ const SECRET_BACKEND_ENV: &str = "SOFTWAKE_SECRET_BACKEND";
 /// Version written by this crate. Version 1 is legacy plaintext and is only read.
 pub(crate) const CURRENT_VERSION: u32 = 2;
 
+/// Sentence when no usable Google or Microsoft Email account is stored.
+pub const NO_CONNECTED_EMAIL_ACCOUNT: &str =
+    "no Google or Microsoft account connected (Settings → Email → Connect)";
+
 const LEGACY_VERSION: u32 = 1;
 
 /// In-memory secret bag. [`Debug`] redacts every secret string.
@@ -86,12 +90,18 @@ pub struct SecretBag {
     /// Telegram Bot API token (Messengers). Never logged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telegram_bot_token: Option<String>,
-    /// Google account connections (Email OAuth). At most one in the Email pane.
+    /// Google account connections (Email OAuth). Zero or more.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub google_connections: Vec<AccountConnection>,
-    /// Microsoft account connections (Email OAuth). At most one in the Email pane.
+    /// Microsoft account connections (Email OAuth). Zero or more.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub microsoft_connections: Vec<AccountConnection>,
+    /// Provider user id of the active Google account. Missing means the first row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_google_connection_id: Option<String>,
+    /// Provider user id of the active Microsoft account. Missing means the first row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_microsoft_connection_id: Option<String>,
     /// MCP server auth secrets keyed by server id (ADR-0031). Never logged.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub mcp_secrets: BTreeMap<String, String>,
@@ -140,6 +150,14 @@ impl std::fmt::Debug for SecretBag {
             .field("google_connections", &self.google_connections)
             .field("microsoft_connections", &self.microsoft_connections)
             .field(
+                "active_google_connection_id",
+                &self.active_google_connection_id,
+            )
+            .field(
+                "active_microsoft_connection_id",
+                &self.active_microsoft_connection_id,
+            )
+            .field(
                 "mcp_secrets",
                 &self
                     .mcp_secrets
@@ -169,6 +187,8 @@ impl SecretBag {
             telegram_bot_token: None,
             google_connections: Vec::new(),
             microsoft_connections: Vec::new(),
+            active_google_connection_id: None,
+            active_microsoft_connection_id: None,
             mcp_secrets: BTreeMap::new(),
         }
     }
@@ -181,6 +201,217 @@ impl SecretBag {
             plaintext: false,
             ..Self::empty()
         }
+    }
+
+    fn provider_mut(
+        &mut self,
+        provider: AccountProvider,
+    ) -> (&mut Vec<AccountConnection>, &mut Option<String>) {
+        match provider {
+            AccountProvider::Google => (
+                &mut self.google_connections,
+                &mut self.active_google_connection_id,
+            ),
+            AccountProvider::Microsoft => (
+                &mut self.microsoft_connections,
+                &mut self.active_microsoft_connection_id,
+            ),
+        }
+    }
+
+    fn provider_ref(&self, provider: AccountProvider) -> (&[AccountConnection], Option<&str>) {
+        match provider {
+            AccountProvider::Google => (
+                &self.google_connections,
+                self.active_google_connection_id.as_deref(),
+            ),
+            AccountProvider::Microsoft => (
+                &self.microsoft_connections,
+                self.active_microsoft_connection_id.as_deref(),
+            ),
+        }
+    }
+
+    /// Insert or replace one Email OAuth account. Identity is [`AccountConnection::id`].
+    ///
+    /// An email match replaces a row only when at least one of the two ids is empty.
+    /// The first account in an empty list becomes active. A later account does not.
+    pub fn upsert_account(&mut self, provider: AccountProvider, next: AccountConnection) {
+        let (list, active) = self.provider_mut(provider);
+        let next_id = next.id.clone();
+        if let Some(index) = upsert_index(list, &next) {
+            list[index] = next;
+        } else {
+            list.push(next);
+        }
+        assign_active_after_upsert(list, active, &next_id);
+    }
+
+    /// Remove one account by connection id or full email.
+    ///
+    /// # Errors
+    ///
+    /// Empty identity, no match, or two rows with the same email.
+    pub fn remove_account(
+        &mut self,
+        provider: AccountProvider,
+        identity: &str,
+    ) -> Result<AccountConnection, String> {
+        let identity = identity.trim();
+        if identity.is_empty() {
+            return Err("no account matches that id or email".to_owned());
+        }
+        let (list, active) = self.provider_mut(provider);
+        let index = find_identity(list, identity)?;
+        let removed = list.remove(index);
+        let marker_missing = match active.as_deref() {
+            None => true,
+            Some(id) => !list.iter().any(|row| row.id == id),
+        };
+        if marker_missing {
+            *active = list.first().and_then(|row| {
+                if row.id.is_empty() {
+                    None
+                } else {
+                    Some(row.id.clone())
+                }
+            });
+        }
+        Ok(removed)
+    }
+
+    /// Mark one stored account active for its provider.
+    ///
+    /// # Errors
+    ///
+    /// Unknown identity, or a row whose id is empty.
+    pub fn set_active_account(
+        &mut self,
+        provider: AccountProvider,
+        identity: &str,
+    ) -> Result<(), String> {
+        let identity = identity.trim();
+        if identity.is_empty() {
+            return Err("no account matches that id or email".to_owned());
+        }
+        let (list, active) = self.provider_mut(provider);
+        let index = find_identity(list, identity)?;
+        let id = list[index].id.clone();
+        if id.is_empty() {
+            return Err("reconnect this account before setting it active".to_owned());
+        }
+        *active = Some(id);
+        Ok(())
+    }
+
+    /// Active row, or the first row when the marker is missing or dangling.
+    ///
+    /// Includes a row that has no tokens so Settings can still list it.
+    #[must_use]
+    pub fn effective_account(&self, provider: AccountProvider) -> Option<&AccountConnection> {
+        let (list, active_id) = self.provider_ref(provider);
+        if list.is_empty() {
+            return None;
+        }
+        if let Some(id) = active_id.filter(|value| !value.is_empty()) {
+            if let Some(found) = list.iter().find(|row| row.id == id) {
+                return Some(found);
+            }
+        }
+        list.first()
+    }
+
+    /// Choose the Email OAuth account for a tool call.
+    ///
+    /// `hint` is a connection id or an email substring. An empty hint uses the
+    /// single usable account, otherwise the active Google account when any
+    /// Google account is usable, otherwise the active Microsoft account.
+    ///
+    /// # Errors
+    ///
+    /// No usable account, no match, or more than one match.
+    pub fn resolve_account(
+        &self,
+        hint: Option<&str>,
+    ) -> Result<(AccountProvider, AccountConnection), String> {
+        let hint = hint.map(str::trim).filter(|value| !value.is_empty());
+        if let Some(hint) = hint {
+            self.resolve_hint(hint)
+        } else {
+            self.resolve_default()
+        }
+    }
+
+    fn usable_rows(&self) -> Vec<(AccountProvider, &AccountConnection)> {
+        let mut rows = Vec::new();
+        for connection in &self.google_connections {
+            if connection_has_secret(connection) {
+                rows.push((AccountProvider::Google, connection));
+            }
+        }
+        for connection in &self.microsoft_connections {
+            if connection_has_secret(connection) {
+                rows.push((AccountProvider::Microsoft, connection));
+            }
+        }
+        rows
+    }
+
+    fn resolve_default(&self) -> Result<(AccountProvider, AccountConnection), String> {
+        let rows = self.usable_rows();
+        match rows.len() {
+            0 => Err(NO_CONNECTED_EMAIL_ACCOUNT.to_owned()),
+            1 => Ok((rows[0].0, rows[0].1.clone())),
+            _ => {
+                if rows
+                    .iter()
+                    .any(|(provider, _)| *provider == AccountProvider::Google)
+                {
+                    let picked = pick_usable(
+                        &self.google_connections,
+                        self.active_google_connection_id.as_deref(),
+                    )
+                    .ok_or_else(|| NO_CONNECTED_EMAIL_ACCOUNT.to_owned())?;
+                    Ok((AccountProvider::Google, picked.clone()))
+                } else {
+                    let picked = pick_usable(
+                        &self.microsoft_connections,
+                        self.active_microsoft_connection_id.as_deref(),
+                    )
+                    .ok_or_else(|| NO_CONNECTED_EMAIL_ACCOUNT.to_owned())?;
+                    Ok((AccountProvider::Microsoft, picked.clone()))
+                }
+            }
+        }
+    }
+
+    fn resolve_hint(&self, hint: &str) -> Result<(AccountProvider, AccountConnection), String> {
+        let rows = self.usable_rows();
+        let id_hits: Vec<_> = rows
+            .iter()
+            .copied()
+            .filter(|(_, row)| row.id == hint)
+            .collect();
+        if let Some((provider, row)) = only_hit(&id_hits, hint)? {
+            return Ok((provider, row.clone()));
+        }
+        let email_hits: Vec<_> = rows
+            .iter()
+            .copied()
+            .filter(|(_, row)| email_matches(row, hint, true))
+            .collect();
+        if let Some((provider, row)) = only_hit(&email_hits, hint)? {
+            return Ok((provider, row.clone()));
+        }
+        let substring_hits: Vec<_> = rows
+            .iter()
+            .copied()
+            .filter(|(_, row)| email_matches(row, hint, false))
+            .collect();
+        if let Some((provider, row)) = only_hit(&substring_hits, hint)? {
+            return Ok((provider, row.clone()));
+        }
+        Err(format!("no connected account matches '{hint}'"))
     }
 }
 
@@ -690,6 +921,132 @@ fn connection_has_secret(connection: &AccountConnection) -> bool {
     !connection.access_token.is_empty() || !connection.refresh_token.is_empty()
 }
 
+fn upsert_index(list: &[AccountConnection], next: &AccountConnection) -> Option<usize> {
+    if !next.id.is_empty() {
+        if let Some(index) = list.iter().position(|row| row.id == next.id) {
+            return Some(index);
+        }
+    }
+    let email = next
+        .account_email
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    list.iter().position(|row| {
+        let same_email = row
+            .account_email
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|existing| existing.eq_ignore_ascii_case(email));
+        let id_gap = row.id.is_empty() || next.id.is_empty();
+        same_email && id_gap
+    })
+}
+
+fn assign_active_after_upsert(
+    list: &[AccountConnection],
+    active: &mut Option<String>,
+    next_id: &str,
+) {
+    if next_id.is_empty() {
+        return;
+    }
+    let only_row = list.len() == 1;
+    let already = active.as_deref() == Some(next_id);
+    let dangling = active
+        .as_deref()
+        .is_some_and(|id| !list.iter().any(|row| row.id == id));
+    if only_row || already || dangling {
+        *active = Some(next_id.to_owned());
+    }
+}
+
+fn find_identity(list: &[AccountConnection], identity: &str) -> Result<usize, String> {
+    if let Some(index) = list.iter().position(|row| row.id == identity) {
+        return Ok(index);
+    }
+    let mut email_hit = None;
+    for (index, row) in list.iter().enumerate() {
+        let same = row
+            .account_email
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|email| email.eq_ignore_ascii_case(identity));
+        if !same {
+            continue;
+        }
+        if email_hit.is_some() {
+            return Err("use the connection id".to_owned());
+        }
+        email_hit = Some(index);
+    }
+    email_hit.ok_or_else(|| "no account matches that id or email".to_owned())
+}
+
+fn pick_usable<'a>(
+    list: &'a [AccountConnection],
+    active_id: Option<&str>,
+) -> Option<&'a AccountConnection> {
+    if let Some(id) = active_id.filter(|value| !value.is_empty()) {
+        if let Some(found) = list
+            .iter()
+            .find(|row| row.id == id && connection_has_secret(row))
+        {
+            return Some(found);
+        }
+    }
+    list.iter().find(|row| connection_has_secret(row))
+}
+
+fn email_matches(connection: &AccountConnection, hint: &str, exact: bool) -> bool {
+    let Some(email) = connection
+        .account_email
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    if exact {
+        email.eq_ignore_ascii_case(hint)
+    } else {
+        email
+            .to_ascii_lowercase()
+            .contains(&hint.to_ascii_lowercase())
+    }
+}
+
+fn only_hit<'a>(
+    hits: &[(AccountProvider, &'a AccountConnection)],
+    hint: &str,
+) -> Result<Option<(AccountProvider, &'a AccountConnection)>, String> {
+    match hits {
+        [] => Ok(None),
+        [one] => Ok(Some(*one)),
+        many => Err(ambiguous_account(hint, many)),
+    }
+}
+
+fn ambiguous_account(hint: &str, hits: &[(AccountProvider, &AccountConnection)]) -> String {
+    let emails: Vec<&str> = hits
+        .iter()
+        .filter_map(|(_, row)| {
+            row.account_email
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .collect();
+    if emails.is_empty() {
+        format!("account '{hint}' matches more than one connection; pass the connection id")
+    } else {
+        format!(
+            "account '{hint}' matches more than one connection; pass the connection id ({})",
+            emails.join(", ")
+        )
+    }
+}
+
 /// Keyring item body. No version and no backend fields.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct SecretPayload {
@@ -711,6 +1068,10 @@ pub(crate) struct SecretPayload {
     pub(crate) google_connections: Vec<AccountConnection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) microsoft_connections: Vec<AccountConnection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) active_google_connection_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) active_microsoft_connection_id: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) mcp_secrets: BTreeMap<String, String>,
 }
@@ -726,6 +1087,8 @@ pub(crate) fn encode_payload(bag: &SecretBag) -> Result<String, SecretStoreError
         xai_oauth: bag.xai_oauth.clone(),
         google_connections: bag.google_connections.clone(),
         microsoft_connections: bag.microsoft_connections.clone(),
+        active_google_connection_id: bag.active_google_connection_id.clone(),
+        active_microsoft_connection_id: bag.active_microsoft_connection_id.clone(),
         mcp_secrets: bag.mcp_secrets.clone(),
     };
     serde_json::to_string(&payload).map_err(|_| SecretStoreError::Keyring)
@@ -756,6 +1119,8 @@ pub(crate) fn decode_payload(path: &Path, json: &str) -> Result<SecretBag, Secre
         telegram_bot_token: payload.telegram_bot_token,
         google_connections: payload.google_connections,
         microsoft_connections: payload.microsoft_connections,
+        active_google_connection_id: payload.active_google_connection_id,
+        active_microsoft_connection_id: payload.active_microsoft_connection_id,
         mcp_secrets: payload.mcp_secrets,
     })
 }

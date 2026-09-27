@@ -939,7 +939,7 @@ fn email_send_waits_for_confirm_and_then_appends_once() {
         Duration::ZERO,
     );
     assert!(pending.lines.iter().any(|line| {
-        line == "pending 1: email_send — Email tool: draft or send one message (to, subject, body)."
+        line == "pending 1: email_send — Email tool: draft or send one message (to, subject, body). Optional account selects a connected mailbox (connection id or email substring)."
     }));
     assert!(
         pending

@@ -117,4 +117,15 @@ Reconnect is required only when the stored `scope` lacks `gmail.send` (Google)
 or `Mail.Send` (Microsoft). Enabling the Gmail API stays required, same 403
 class as inbox. Token refresh does not enlarge the grant.
 
+## Amendment — multiple Email accounts (2026-09-27)
+
+Inbox, calendar, Drive, and confirmed `email_send` choose an account with
+`resolve_account` ([ADR-0033](ADR-0033-multi-account-oauth.md)). With no
+`account` argument, one usable account is that account. If more than one
+account is usable and any Google account is usable, tools use the active Google
+account (the first Google row when none is marked). Otherwise they use the
+active Microsoft account. `account` (connection id or email substring) selects
+a different row, including Microsoft when Google is also connected. Refresh
+updates that row in place.
+
 The SMTP client, calendar writes, and Drive upload/trash stay out of scope.

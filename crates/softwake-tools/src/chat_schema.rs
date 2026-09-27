@@ -79,7 +79,11 @@ fn parameters_for(name: &str) -> Value {
             "properties": {
                 "to": { "type": "string", "description": "Recipient." },
                 "subject": { "type": "string", "description": "Subject line." },
-                "body": { "type": "string", "description": "Body text." }
+                "body": { "type": "string", "description": "Body text." },
+                "account": {
+                    "type": "string",
+                    "description": "Optional connected account: connection id or email substring. Omit to use the only account, or the active Google account when several are connected."
+                }
             },
             "required": ["to", "subject", "body"]
         }),
@@ -89,6 +93,10 @@ fn parameters_for(name: &str) -> Value {
                 "max_results": {
                     "type": "integer",
                     "description": "Max messages to return (default 10, max 50)."
+                },
+                "account": {
+                    "type": "string",
+                    "description": "Optional connected account: connection id or email substring. Omit to use the only account, or the active Google account when several are connected."
                 }
             }
         }),
@@ -102,6 +110,10 @@ fn parameters_for(name: &str) -> Value {
                 "max_results": {
                     "type": "integer",
                     "description": "Max messages (default 10, max 50)."
+                },
+                "account": {
+                    "type": "string",
+                    "description": "Optional connected account: connection id or email substring. Omit to use the only account, or the active Google account when several are connected."
                 }
             },
             "required": ["query"]
@@ -109,7 +121,11 @@ fn parameters_for(name: &str) -> Value {
         EMAIL_GET_TOOL => json!({
             "type": "object",
             "properties": {
-                "id": { "type": "string", "description": "Message id from email_list or email_search." }
+                "id": { "type": "string", "description": "Message id from email_list or email_search." },
+                "account": {
+                    "type": "string",
+                    "description": "Optional connected account: connection id or email substring. Omit to use the only account, or the active Google account when several are connected."
+                }
             },
             "required": ["id"]
         }),
@@ -123,13 +139,21 @@ fn parameters_for(name: &str) -> Value {
                 "max_results": {
                     "type": "integer",
                     "description": "Max events (default 20, max 50)."
+                },
+                "account": {
+                    "type": "string",
+                    "description": "Optional connected account: connection id or email substring. Omit to use the only account, or the active Google account when several are connected."
                 }
             }
         }),
         CALENDAR_GET_TOOL => json!({
             "type": "object",
             "properties": {
-                "id": { "type": "string", "description": "Event id from calendar_list." }
+                "id": { "type": "string", "description": "Event id from calendar_list." },
+                "account": {
+                    "type": "string",
+                    "description": "Optional connected account: connection id or email substring. Omit to use the only account, or the active Google account when several are connected."
+                }
             },
             "required": ["id"]
         }),
@@ -139,6 +163,10 @@ fn parameters_for(name: &str) -> Value {
                 "max_results": {
                     "type": "integer",
                     "description": "Max files (default 20, max 50). Scope-limited to drive.file / AppFolder."
+                },
+                "account": {
+                    "type": "string",
+                    "description": "Optional connected account: connection id or email substring. Omit to use the only account, or the active Google account when several are connected."
                 }
             }
         }),
@@ -149,6 +177,10 @@ fn parameters_for(name: &str) -> Value {
                 "max_results": {
                     "type": "integer",
                     "description": "Max files (default 20, max 50)."
+                },
+                "account": {
+                    "type": "string",
+                    "description": "Optional connected account: connection id or email substring. Omit to use the only account, or the active Google account when several are connected."
                 }
             },
             "required": ["query"]
@@ -160,6 +192,10 @@ fn parameters_for(name: &str) -> Value {
                 "read_text": {
                     "type": "boolean",
                     "description": "When true, include cheap text body for text/* or Google Docs."
+                },
+                "account": {
+                    "type": "string",
+                    "description": "Optional connected account: connection id or email substring. Omit to use the only account, or the active Google account when several are connected."
                 }
             },
             "required": ["id"]
@@ -309,13 +345,16 @@ pub fn tool_args_from_json(name: &str, arguments: &str) -> Result<Vec<String>, S
                 .ok_or_else(|| "email_send needs subject".to_owned())?;
             let body =
                 string_field(obj, "body").ok_or_else(|| "email_send needs body".to_owned())?;
-            Ok(vec![to, subject, body])
+            let mut args = vec![to, subject, body];
+            push_account(&mut args, obj);
+            Ok(args)
         }
         EMAIL_LIST_TOOL | DRIVE_LIST_TOOL => {
             let mut args = Vec::new();
             if let Some(max) = int_field(obj, "max_results") {
                 args.push(max);
             }
+            push_account(&mut args, obj);
             Ok(args)
         }
         EMAIL_SEARCH_TOOL => {
@@ -325,11 +364,14 @@ pub fn tool_args_from_json(name: &str, arguments: &str) -> Result<Vec<String>, S
             if let Some(max) = int_field(obj, "max_results") {
                 args.push(max);
             }
+            push_account(&mut args, obj);
             Ok(args)
         }
         EMAIL_GET_TOOL => {
             let id = string_field(obj, "id").ok_or_else(|| "email_get needs id".to_owned())?;
-            Ok(vec![id])
+            let mut args = vec![id];
+            push_account(&mut args, obj);
+            Ok(args)
         }
         CALENDAR_LIST_TOOL => {
             let mut args = Vec::new();
@@ -342,11 +384,14 @@ pub fn tool_args_from_json(name: &str, arguments: &str) -> Result<Vec<String>, S
                 args.push("7".to_owned());
                 args.push(max);
             }
+            push_account(&mut args, obj);
             Ok(args)
         }
         CALENDAR_GET_TOOL => {
             let id = string_field(obj, "id").ok_or_else(|| "calendar_get needs id".to_owned())?;
-            Ok(vec![id])
+            let mut args = vec![id];
+            push_account(&mut args, obj);
+            Ok(args)
         }
         DRIVE_SEARCH_TOOL => {
             let query =
@@ -355,6 +400,7 @@ pub fn tool_args_from_json(name: &str, arguments: &str) -> Result<Vec<String>, S
             if let Some(max) = int_field(obj, "max_results") {
                 args.push(max);
             }
+            push_account(&mut args, obj);
             Ok(args)
         }
         DRIVE_GET_TOOL => {
@@ -363,6 +409,7 @@ pub fn tool_args_from_json(name: &str, arguments: &str) -> Result<Vec<String>, S
             if obj.get("read_text").and_then(Value::as_bool) == Some(true) {
                 args.push("text".to_owned());
             }
+            push_account(&mut args, obj);
             Ok(args)
         }
         SKILL_LIST_TOOL
@@ -431,6 +478,16 @@ pub fn tool_args_from_json(name: &str, arguments: &str) -> Result<Vec<String>, S
             Ok(vec![mode])
         }
         other => Err(format!("unknown tool for API args: {other}")),
+    }
+}
+
+fn push_account(args: &mut Vec<String>, obj: &serde_json::Map<String, Value>) {
+    let Some(account) = string_field(obj, "account") else {
+        return;
+    };
+    let trimmed = account.trim();
+    if !trimmed.is_empty() {
+        args.push(format!("account={trimmed}"));
     }
 }
 
@@ -521,8 +578,8 @@ mod tests {
     use super::{advertise_chat_tools, tool_args_from_json};
     use crate::settings::{ToolPermission, ToolsSettings};
     use crate::{
-        ECHO_TOOL, EMAIL_SEND_TOOL, NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_SAVE_TOOL,
-        ToolRegistry,
+        CALENDAR_LIST_TOOL, DRIVE_GET_TOOL, ECHO_TOOL, EMAIL_LIST_TOOL, EMAIL_SEND_TOOL,
+        NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_SAVE_TOOL, ToolRegistry,
     };
 
     #[test]
@@ -612,6 +669,41 @@ mod tests {
             )
             .expect("email"),
             vec!["a@b.c".to_owned(), "s".to_owned(), "hello world".to_owned()]
+        );
+        assert_eq!(
+            tool_args_from_json(
+                EMAIL_SEND_TOOL,
+                r#"{"to":"a@b.c","subject":"s","body":"hello world","account":"ada@example.com"}"#
+            )
+            .expect("email account"),
+            vec![
+                "a@b.c".to_owned(),
+                "s".to_owned(),
+                "hello world".to_owned(),
+                "account=ada@example.com".to_owned()
+            ]
+        );
+        assert_eq!(
+            tool_args_from_json(EMAIL_LIST_TOOL, r#"{"account":"ada@example.com"}"#)
+                .expect("list account"),
+            vec!["account=ada@example.com".to_owned()]
+        );
+        assert_eq!(
+            tool_args_from_json(CALENDAR_LIST_TOOL, r#"{"days":3,"account":"id-9"}"#)
+                .expect("calendar account"),
+            vec!["3".to_owned(), "account=id-9".to_owned()]
+        );
+        assert_eq!(
+            tool_args_from_json(
+                DRIVE_GET_TOOL,
+                r#"{"id":"f1","read_text":true,"account":"bob@example.com"}"#
+            )
+            .expect("drive account"),
+            vec![
+                "f1".to_owned(),
+                "text".to_owned(),
+                "account=bob@example.com".to_owned()
+            ]
         );
         assert_eq!(
             tool_args_from_json(

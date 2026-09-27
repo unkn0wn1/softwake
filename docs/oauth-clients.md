@@ -88,9 +88,11 @@ reconnect).
   `email_list`. No reconnect is required if the stored token already lists
   `gmail.readonly` / `gmail.send`. Sally does **not** need `/refresh` for OAuth
   tokens; Softwake reads the live secret bag on each tool call.
-- **Consent scopes newly added:** Settings → Email → **Disconnect** Google, then
+- **Consent scopes newly added:** Settings → Email → **Remove** that Google account, then
   **Connect** again so the authorize URL re-requests the full Softwake set
-  (`prompt=consent`). Token refresh alone does not enlarge the grant.
+  (`prompt=consent`). Token refresh alone does not enlarge the grant. The same
+  desktop client holds every grant; a second account is another consent, not a
+  new client id ([ADR-0033](ADR-0033-multi-account-oauth.md)).
 - **Confirmed `email_send`:** with Email OAuth connected and the daemon built
   with `live-http`, Google uses `users.messages.send` and Microsoft Graph uses
   `POST /me/sendMail` (HTTP 202, empty body, no message id). The Gmail API must
@@ -98,7 +100,7 @@ reconnect).
 - **Send scope already granted:** stored `scope` includes `gmail.send` (Google)
   or `Mail.Send` (Microsoft) → no Disconnect/Connect for send.
 - **Send scope missing** (connected before those send scopes were on the token):
-  Settings → Email → Disconnect that provider → Connect. Token refresh does not
+  Settings → Email → Remove that account → Connect. Token refresh does not
   enlarge the grant.
 
 ## Microsoft Entra
@@ -120,7 +122,7 @@ reconnect).
 | ----- | ----- |
 | Publisher client ids | Process env or `oauth-clients.env` (not Settings UI) |
 | Google client secret | Same, when set |
-| Refresh and access tokens + granted `scope` | Secret bag / OS keyring (`google_connections` / `microsoft_connections`, one account each) |
+| Refresh and access tokens + granted `scope` | Secret bag / OS keyring (`google_connections` / `microsoft_connections`, every connected account; `active_google_connection_id` / `active_microsoft_connection_id` pick the row tools use for that provider) |
 
 Constants: `GOOGLE_EMAIL_SCOPES` / `MICROSOFT_EMAIL_SCOPES` in
 `crates/softwake-providers/src/account_oauth.rs`.

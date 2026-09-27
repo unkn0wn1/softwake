@@ -36,7 +36,7 @@ Cargo workspace on stable Rust (edition 2024). Default builds stay offline and m
 ### Connectors, memory, and policy
 
 - Phase 3 wires the connector boundary to the tool bus ([ADR 0008](docs/ADR-0008-connector-boundary.md)):
-  - `email_send` waits for confirmation. With Google or Microsoft connected, confirming delivers through that account (Google preferred; daemon `live-http`). Without OAuth, confirming appends one message to an in-memory outbox (or a local draft when live email is opted in and draft-only). SMTP send is still unwired.
+  - `email_send` waits for confirmation. With Google or Microsoft connected, confirming delivers through the active account (the only account when just one is connected; the active Google account when several are connected and any Google account is usable; optional `account=` picks another). Daemon `live-http` is required for that post. Without OAuth, confirming appends one message to an in-memory outbox (or a local draft when live email is opted in and draft-only). SMTP send is still unwired.
   - `MockDrive` / `MockCalendar` list files and events on that value.
   - In the connector registry, `drive` / `list` and `calendar` / `list` are confirm; delete actions are denied.
   - Those list mocks are not tools on the bus. The default build has no live cloud client.
@@ -500,11 +500,12 @@ Reload reads `soul.md`, `user.md`, `rules.md`, and `glossary.md`; new text appli
 
 **General** edits `soul.md`, `user.md`, `rules.md`, and `glossary.md` in the resolved soul directory (`SOFTWAKE_SOUL_DIR`, or the XDG default). Save writes the four files. Reload soul applies a valid pack on the next awake.
 
-**Email** can Connect / Disconnect Google or Microsoft ([ADR 0023](docs/ADR-0023-email-oauth.md)):
+**Email** can connect more than one Google account and more than one Microsoft account ([ADR 0023](docs/ADR-0023-email-oauth.md), [ADR 0033](docs/ADR-0033-multi-account-oauth.md)):
 
-- PKCE loopback; tokens in the secret bag / keyring; scopes for mail + calendar + drive. Status shows the connected account.
+- PKCE loopback; tokens in the secret bag / keyring; scopes for mail + calendar + drive. Accounts lists every mailbox. **Add account** runs Connect again and keeps the accounts already stored. **Set active** chooses which account of that provider tools use. **Remove** drops one row.
+- With no `account` argument, tools use the only connected account if there is exactly one. If more than one account is connected and any Google account is usable, they use the active Google account (the first Google account when none is marked). Otherwise they use the active Microsoft account. Pass `account` (connection id or email substring) to pick a different account, including Microsoft when Google is also connected.
 - Live inbox/calendar/Drive read tools (`email_list` / `email_search` / `email_get`, `calendar_list` / `calendar_get`, `drive_list` / `drive_search` / `drive_get`) use those tokens under daemon `live-http` ([ADR 0030](docs/ADR-0030-inbox-calendar-drive-tools.md)).
-- Confirmed `email_send` with Google or Microsoft connected delivers through that account (Google preferred when both are connected; daemon `live-http`). Without OAuth, it uses the in-memory outbox or a local draft. SMTP send is still unwired. Optional SMTP fields and password remain for non-OAuth setups.
+- Confirmed `email_send` uses that same choice when the daemon is built with `live-http`. Without OAuth, it uses the in-memory outbox or a local draft. SMTP send is still unwired. Optional SMTP fields and password remain for non-OAuth setups.
 - Publisher client ids are env-only (`SOFTWAKE_GOOGLE_CLIENT_ID`, optional `SOFTWAKE_GOOGLE_CLIENT_SECRET`, `SOFTWAKE_MICROSOFT_CLIENT_ID`).
 - The pane does not send mail by itself; confirm-gated `email_send` still owns delivery after awake confirm.
 
@@ -607,5 +608,6 @@ cargo test -p softwake-daemon --features pipewire-capture
 | [docs/ADR-0015-tray-hud.md](docs/ADR-0015-tray-hud.md) | System tray and always-on-top HUD |
 | [docs/ADR-0016-capture-level-hud.md](docs/ADR-0016-capture-level-hud.md) | Capture level on Status → HUD particles |
 | [docs/ADR-0023-email-oauth.md](docs/ADR-0023-email-oauth.md) | Email OAuth: Google / Microsoft Connect on Settings → Email; PKCE + secret bag |
+| [docs/ADR-0033-multi-account-oauth.md](docs/ADR-0033-multi-account-oauth.md) | Multiple Google and Microsoft Email accounts; active id; optional `account` |
 | [docs/ADR-0024-timers-cron.md](docs/ADR-0024-timers-cron.md) | Per-profile timers / cron; confirm-gated `schedule`; Settings → Timers |
 | [docs/ADR-0029-messengers-telegram.md](docs/ADR-0029-messengers-telegram.md) | Expandable Settings nav; Messengers + Telegram; shared HUD history; dual-login TTS |

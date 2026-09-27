@@ -60,6 +60,7 @@
     "allow-email-oauth-connect",
     "allow-email-oauth-disconnect",
     "allow-email-oauth-cancel",
+    "allow-email-oauth-set-active",
     "allow-profiles-snapshot",
     "allow-profile-create",
     "allow-profile-rename",

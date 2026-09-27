@@ -4,6 +4,7 @@
 //! token exchange on a background thread. The Email snapshot exposes pending
 //! status and connected account emails. Tokens stay in the secret bag.
 
+use serde::Serialize;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -65,13 +66,26 @@ fn open_secrets() -> Result<Box<dyn SecretStore + Send>, String> {
     softwake_providers::open_store(&path).map_err(|error| error.to_string())
 }
 
+/// One connected mailbox shown in Settings. No tokens.
+#[derive(Debug, Clone, Serialize)]
+pub struct EmailAccountRow {
+    /// Provider user id.
+    pub id: String,
+    /// Account email, or empty when the profile had none.
+    pub email: String,
+    /// Effective active row for this provider.
+    pub active: bool,
+}
+
 /// Public OAuth fields for the Email snapshot (no tokens).
 #[derive(Debug, Clone)]
 pub struct EmailOauthView {
     pub google_connected: bool,
     pub google_email: String,
+    pub google_accounts: Vec<EmailAccountRow>,
     pub microsoft_connected: bool,
     pub microsoft_email: String,
+    pub microsoft_accounts: Vec<EmailAccountRow>,
     pub oauth_pending: String,
     pub oauth_message: String,
     pub oauth_authorize_url: String,
@@ -81,23 +95,52 @@ pub struct EmailOauthView {
 impl EmailOauthView {
     pub fn from_bag(bag: &softwake_providers::SecretBag) -> Self {
         let (pending, message, url, error) = read_pending();
-        let google = bag.google_connections.first();
-        let microsoft = bag.microsoft_connections.first();
+        let google = bag.effective_account(AccountProvider::Google);
+        let microsoft = bag.effective_account(AccountProvider::Microsoft);
         Self {
-            google_connected: google.is_some(),
+            google_connected: !bag.google_connections.is_empty(),
             google_email: google
-                .and_then(|c| c.account_email.clone())
+                .and_then(|connection| connection.account_email.clone())
                 .unwrap_or_default(),
-            microsoft_connected: microsoft.is_some(),
+            google_accounts: account_rows(
+                &bag.google_connections,
+                bag.active_google_connection_id.as_deref(),
+            ),
+            microsoft_connected: !bag.microsoft_connections.is_empty(),
             microsoft_email: microsoft
-                .and_then(|c| c.account_email.clone())
+                .and_then(|connection| connection.account_email.clone())
                 .unwrap_or_default(),
+            microsoft_accounts: account_rows(
+                &bag.microsoft_connections,
+                bag.active_microsoft_connection_id.as_deref(),
+            ),
             oauth_pending: pending,
             oauth_message: message,
             oauth_authorize_url: url,
             oauth_error: error,
         }
     }
+}
+
+fn account_rows(
+    list: &[softwake_providers::AccountConnection],
+    active_id: Option<&str>,
+) -> Vec<EmailAccountRow> {
+    if list.is_empty() {
+        return Vec::new();
+    }
+    let effective = active_id
+        .filter(|id| !id.is_empty())
+        .and_then(|id| list.iter().position(|row| row.id == id))
+        .unwrap_or(0);
+    list.iter()
+        .enumerate()
+        .map(|(index, row)| EmailAccountRow {
+            id: row.id.clone(),
+            email: row.account_email.clone().unwrap_or_default(),
+            active: index == effective,
+        })
+        .collect()
 }
 
 fn read_pending() -> (String, String, String, String) {
@@ -302,13 +345,8 @@ fn finish_pending(
     match outcome {
         Ok(connection) => {
             if let Ok(secrets) = open_secrets() {
-                let save = update_bag(&*secrets, |bag| match provider {
-                    AccountProvider::Google => {
-                        bag.google_connections = vec![connection];
-                    }
-                    AccountProvider::Microsoft => {
-                        bag.microsoft_connections = vec![connection];
-                    }
+                let save = update_bag(&*secrets, |bag| {
+                    bag.upsert_account(provider, connection);
                 });
                 if let Err(error) = save {
                     guard.last_error = error.to_string();
@@ -466,32 +504,93 @@ pub fn email_oauth_cancel() -> Result<crate::email::EmailSnapshot, String> {
     crate::email::email_snapshot()
 }
 
-/// Disconnect Google or Microsoft and drop tokens from the bag.
+/// Remove one Google or Microsoft account. Omit `account` only when that provider has a single row.
 #[tauri::command]
 #[allow(
     clippy::needless_pass_by_value,
     reason = "Tauri deserializes command arguments as owned values"
 )]
-pub fn email_oauth_disconnect(provider: String) -> Result<crate::email::EmailSnapshot, String> {
+pub fn email_oauth_disconnect(
+    provider: String,
+    account: Option<String>,
+) -> Result<crate::email::EmailSnapshot, String> {
     let provider = AccountProvider::parse(&provider)?;
     let secrets = open_secrets()?;
     let bag = secrets.load().map_err(|e| e.to_string())?;
-    if provider == AccountProvider::Google {
-        if let Some(connection) = bag.google_connections.first() {
-            if !connection.refresh_token.is_empty() {
-                #[cfg(feature = "live-http")]
-                {
-                    let transport = LiveTransport::new();
-                    revoke_google_refresh(&transport, &connection.refresh_token);
-                }
+    let list: &[softwake_providers::AccountConnection] = match provider {
+        AccountProvider::Google => &bag.google_connections,
+        AccountProvider::Microsoft => &bag.microsoft_connections,
+    };
+    let identity = match account
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => value.to_owned(),
+        None if list.is_empty() => {
+            update_bag(&*secrets, |stored| match provider {
+                AccountProvider::Google => stored.active_google_connection_id = None,
+                AccountProvider::Microsoft => stored.active_microsoft_connection_id = None,
+            })
+            .map_err(|e| e.to_string())?;
+            if let Ok(mut guard) = OAUTH.lock() {
+                guard.last_error.clear();
+            }
+            return crate::email::email_snapshot();
+        }
+        None if list.len() == 1 => {
+            let row = &list[0];
+            if row.id.is_empty() {
+                row.account_email.clone().unwrap_or_default()
+            } else {
+                row.id.clone()
             }
         }
+        None => return Err("name the account to remove".to_owned()),
+    };
+    if identity.is_empty() {
+        return Err("no account matches that id or email".to_owned());
     }
-    update_bag(&*secrets, |bag| match provider {
-        AccountProvider::Google => bag.google_connections.clear(),
-        AccountProvider::Microsoft => bag.microsoft_connections.clear(),
+    let removed = bag.clone().remove_account(provider, &identity)?;
+    if provider == AccountProvider::Google && !removed.refresh_token.is_empty() {
+        #[cfg(feature = "live-http")]
+        {
+            let transport = LiveTransport::new();
+            revoke_google_refresh(&transport, &removed.refresh_token);
+        }
+    }
+    update_bag(&*secrets, |stored| {
+        let _ = stored.remove_account(provider, &identity);
     })
     .map_err(|e| e.to_string())?;
+    if let Ok(mut guard) = OAUTH.lock() {
+        guard.last_error.clear();
+    }
+    crate::email::email_snapshot()
+}
+
+/// Mark one stored account active for its provider.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri deserializes command arguments as owned values"
+)]
+pub fn email_oauth_set_active(
+    provider: String,
+    account: String,
+) -> Result<crate::email::EmailSnapshot, String> {
+    let provider = AccountProvider::parse(&provider)?;
+    let secrets = open_secrets()?;
+    let mut failure = None;
+    update_bag(&*secrets, |bag| {
+        if let Err(error) = bag.set_active_account(provider, &account) {
+            failure = Some(error);
+        }
+    })
+    .map_err(|e| e.to_string())?;
+    if let Some(error) = failure {
+        return Err(error);
+    }
     if let Ok(mut guard) = OAUTH.lock() {
         guard.last_error.clear();
     }
@@ -529,5 +628,43 @@ mod tests {
         let _ = client.read_to_string(&mut response);
         assert!(response.contains("200 OK"));
         assert_eq!(server.join().expect("join"), Some("the-code".to_owned()));
+    }
+
+    fn connection(id: &str, email: &str) -> softwake_providers::AccountConnection {
+        softwake_providers::AccountConnection {
+            id: id.to_owned(),
+            access_token: "access".to_owned(),
+            refresh_token: "refresh".to_owned(),
+            expires_at_ms: 1,
+            token_type: "Bearer".to_owned(),
+            scope: String::new(),
+            account_email: Some(email.to_owned()),
+        }
+    }
+
+    #[test]
+    fn from_bag_marks_the_active_or_first_row() {
+        use super::EmailOauthView;
+        let mut bag = softwake_providers::SecretBag::empty();
+        bag.google_connections = vec![
+            connection("g1", "a@example.com"),
+            connection("g2", "b@example.com"),
+        ];
+        bag.active_google_connection_id = Some("g2".to_owned());
+        let view = EmailOauthView::from_bag(&bag);
+        assert!(view.google_connected);
+        assert_eq!(view.google_email, "b@example.com");
+        assert_eq!(view.google_accounts.len(), 2);
+        assert!(!view.google_accounts[0].active);
+        assert!(view.google_accounts[1].active);
+        assert_eq!(view.google_accounts[1].id, "g2");
+        assert_eq!(view.google_accounts[1].email, "b@example.com");
+
+        let mut legacy = softwake_providers::SecretBag::empty();
+        legacy.google_connections = vec![connection("g1", "a@example.com")];
+        let legacy_view = EmailOauthView::from_bag(&legacy);
+        assert!(legacy_view.google_accounts[0].active);
+        assert_eq!(legacy_view.google_email, "a@example.com");
+        assert!(legacy_view.google_connected);
     }
 }

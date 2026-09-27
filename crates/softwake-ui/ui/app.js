@@ -61,17 +61,15 @@ const toolsStatus = document.querySelector("#tools-status");
 const toolsError = document.querySelector("#tools-error");
 const emailClearPasswordBtn = document.querySelector("#email-clear-password");
 const emailTestBtn = document.querySelector("#email-test");
-const emailGoogleStatus = document.querySelector("#email-google-status");
-const emailMicrosoftStatus = document.querySelector("#email-microsoft-status");
 const emailOauthPending = document.querySelector("#email-oauth-pending");
 const emailOauthUrlLine = document.querySelector("#email-oauth-url-line");
 const emailOauthLink = document.querySelector("#email-oauth-link");
 const emailOauthCancelBtn = document.querySelector("#email-oauth-cancel");
 const emailOauthError = document.querySelector("#email-oauth-error");
+const emailGoogleAccounts = document.querySelector("#email-google-accounts");
+const emailMicrosoftAccounts = document.querySelector("#email-microsoft-accounts");
 const emailGoogleConnectBtn = document.querySelector("#email-google-connect");
-const emailGoogleDisconnectBtn = document.querySelector("#email-google-disconnect");
 const emailMicrosoftConnectBtn = document.querySelector("#email-microsoft-connect");
-const emailMicrosoftDisconnectBtn = document.querySelector("#email-microsoft-disconnect");
 const plaintextWarning = document.querySelector("#plaintext-warning");
 const usePlaintextBtn = document.querySelector("#use-plaintext-file");
 
@@ -827,15 +825,17 @@ function renderEmail(snap) {
     emailTestStatus.textContent = "Test: not run";
   }
   emailStorage.textContent = snap.storage_message || "";
-  if (emailGoogleStatus) {
-    emailGoogleStatus.textContent = snap.google_connected
-      ? "Connected as " + (snap.google_email || "(no email)")
-      : "Not connected";
+  renderAccountList(emailGoogleAccounts, "google", snap.google_accounts || [], snap);
+  renderAccountList(emailMicrosoftAccounts, "microsoft", snap.microsoft_accounts || [], snap);
+  if (emailGoogleConnectBtn) {
+    emailGoogleConnectBtn.textContent = (snap.google_accounts || []).length
+      ? "Add account"
+      : "Connect";
   }
-  if (emailMicrosoftStatus) {
-    emailMicrosoftStatus.textContent = snap.microsoft_connected
-      ? "Connected as " + (snap.microsoft_email || "(no email)")
-      : "Not connected";
+  if (emailMicrosoftConnectBtn) {
+    emailMicrosoftConnectBtn.textContent = (snap.microsoft_accounts || []).length
+      ? "Add account"
+      : "Connect";
   }
   const pending = snap.oauth_pending || "none";
   if (emailOauthPending) {
@@ -926,24 +926,75 @@ function ensureEmailOauthPoll() {
     refreshEmail().catch(() => {});
   }, 1000);
 }
+function renderAccountList(container, provider, accounts, snap) {
+  if (!container) return;
+  container.replaceChildren();
+  const busy = (snap.oauth_pending || "none") !== "none";
+  for (const account of accounts) {
+    const row = document.createElement("div");
+    row.className = "row account-row";
+    const title = document.createElement("strong");
+    title.textContent = provider === "google" ? "Google" : "Microsoft";
+    const email = document.createElement("span");
+    email.className = "meta";
+    email.textContent = account.email || "(no email)";
+    if (account.id) email.title = account.id;
+    row.append(title, email);
+    if (account.active) {
+      const badge = document.createElement("span");
+      badge.className = "account-badge";
+      badge.textContent = "Active";
+      row.append(badge);
+    }
+    const identity = account.id || account.email || "";
+    const activate = document.createElement("button");
+    activate.type = "button";
+    activate.className = "btn-compact";
+    activate.textContent = "Set active";
+    activate.disabled = busy || !!account.active || !identity;
+    activate.dataset.provider = provider;
+    activate.dataset.id = identity;
+    activate.dataset.action = "active";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "btn-compact";
+    remove.textContent = "Remove";
+    remove.disabled = busy || !identity;
+    remove.dataset.provider = provider;
+    remove.dataset.id = identity;
+    remove.dataset.action = "remove";
+    row.append(activate, remove);
+    container.append(row);
+  }
+}
+
+function onAccountClick(event) {
+  const button = event.target.closest("button[data-action]");
+  if (!button || button.disabled) return;
+  const provider = button.dataset.provider;
+  const account = button.dataset.id;
+  if (!provider || !account) return;
+  if (button.dataset.action === "remove") {
+    emailAction("email_oauth_disconnect", { provider, account });
+  } else if (button.dataset.action === "active") {
+    emailAction("email_oauth_set_active", { provider, account });
+  }
+}
+
+if (emailGoogleAccounts) {
+  emailGoogleAccounts.addEventListener("click", onAccountClick);
+}
+if (emailMicrosoftAccounts) {
+  emailMicrosoftAccounts.addEventListener("click", onAccountClick);
+}
 if (emailGoogleConnectBtn) {
   emailGoogleConnectBtn.addEventListener("click", () => {
     emailAction("email_oauth_connect", { provider: "google" });
   });
 }
-if (emailGoogleDisconnectBtn) {
-  emailGoogleDisconnectBtn.addEventListener("click", () => {
-    emailAction("email_oauth_disconnect", { provider: "google" });
-  });
-}
 if (emailMicrosoftConnectBtn) {
   emailMicrosoftConnectBtn.addEventListener("click", () => {
     emailAction("email_oauth_connect", { provider: "microsoft" });
-  });
-}
-if (emailMicrosoftDisconnectBtn) {
-  emailMicrosoftDisconnectBtn.addEventListener("click", () => {
-    emailAction("email_oauth_disconnect", { provider: "microsoft" });
   });
 }
 if (emailOauthCancelBtn) {

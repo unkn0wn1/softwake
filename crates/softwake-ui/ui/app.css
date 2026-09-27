@@ -483,6 +483,22 @@ button.btn-primary.btn-compact {
   white-space: nowrap;
 }
 
+.account-badge {
+  display: inline-block;
+  padding: 0 0.4rem;
+  border: 1px solid oklch(0.78 0.13 200 / 0.55);
+  border-radius: 999px;
+  color: var(--cyan);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.account-row {
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .nav-sub-list .profile-chip-warn {
   font-size: 0.65rem;
   opacity: 0.7;

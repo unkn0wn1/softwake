@@ -558,26 +558,28 @@
             Connect Google or Microsoft for mail, calendar, and drive. Softwake requests Gmail
             read/send (plus calendar.readonly and drive.file) — more than MeetRec’s calendar/Drive
             Connect. Tokens stay in the secret bag (OS keyring when available). After publisher
-            scope changes, Disconnect and Connect again so consent re-runs. Publisher Google Cloud
+            scope changes, Remove that account and Connect again so consent re-runs. Publisher Google Cloud
             must enable the <strong>Gmail API</strong> (and Calendar/Drive); otherwise inbox tools
             return HTTP 403 while calendar/Drive still work. Confirmed email_send delivers
-            through the connected account (Google preferred) when the daemon is built with
+            through the active account when the daemon is built with
             live-http; SMTP send stays a local draft. This pane never sends mail. SMTP below
             is optional for non-OAuth setups.
           </p>
           <h3 class="section-title">Accounts</h3>
+          <p class="meta">
+            Add account runs the same Connect flow again and keeps accounts you already
+            added. Set active chooses which account of that provider tools use. When both
+            Google and Microsoft are connected, tools use the active Google account unless
+            the tool passes account (an email or connection id).
+          </p>
           <div class="stack" id="email-oauth-accounts">
-            <div class="row" style="align-items:center;gap:0.75rem;flex-wrap:wrap">
-              <strong>Google</strong>
-              <span id="email-google-status" class="meta">Not connected</span>
+            <div class="stack" id="email-google-accounts"></div>
+            <div class="row">
               <button type="button" class="btn-primary" id="email-google-connect">Connect</button>
-              <button type="button" id="email-google-disconnect">Disconnect</button>
             </div>
-            <div class="row" style="align-items:center;gap:0.75rem;flex-wrap:wrap">
-              <strong>Microsoft</strong>
-              <span id="email-microsoft-status" class="meta">Not connected</span>
+            <div class="stack" id="email-microsoft-accounts"></div>
+            <div class="row">
               <button type="button" class="btn-primary" id="email-microsoft-connect">Connect</button>
-              <button type="button" id="email-microsoft-disconnect">Disconnect</button>
             </div>
             <p id="email-oauth-pending" class="meta" role="status"></p>
             <p id="email-oauth-url-line" class="detail hidden">

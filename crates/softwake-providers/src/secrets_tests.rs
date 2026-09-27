@@ -10,8 +10,9 @@ use super::{
     StorageReport, UNSUPPORTED_BACKEND_MESSAGE, UnavailableSecretStore, decode_payload,
     open_store_with, opt_in_plaintext, pref_from_str, resolve_backend, resolve_secrets_file_from,
 };
+use crate::account_oauth::{AccountConnection, AccountProvider};
 use crate::oauth::OAuthTokenSet;
-use crate::secrets::SecretBag;
+use crate::secrets::{NO_CONNECTED_EMAIL_ACCOUNT, SecretBag};
 
 const SENTINEL: &str = "sentinel-secret-7c1e";
 
@@ -288,6 +289,7 @@ fn debug_redacts_secret_strings_and_omits_lengths() {
             expires_at_ms: 44,
             token_type: "Bearer".to_owned(),
         }),
+        google_connections: vec![account_fixture("g1", "ada@example.com", SENTINEL)],
         ..SecretBag::empty()
     };
     let text = format!("{bag:?}");
@@ -504,4 +506,223 @@ fn storage_backend_names_match_the_three_reports() {
         StorageReport::unavailable().message,
         PLAINTEXT_OPT_IN_MESSAGE
     );
+}
+
+fn account_fixture(id: &str, email: &str, token: &str) -> AccountConnection {
+    AccountConnection {
+        id: id.to_owned(),
+        access_token: token.to_owned(),
+        refresh_token: token.to_owned(),
+        expires_at_ms: 1,
+        token_type: "Bearer".to_owned(),
+        scope: String::new(),
+        account_email: Some(email.to_owned()),
+    }
+}
+
+#[test]
+fn legacy_bag_without_active_ids_keeps_the_connection() {
+    let json = r#"{"version":2,"plaintext":true,"google_connections":[{"id":"g1","access_token":"a","refresh_token":"r","expires_at_ms":1,"token_type":"Bearer","scope":"s","account_email":"ada@example.com"}]}"#;
+    let bag: SecretBag = serde_json::from_str(json).expect("bag");
+    assert!(bag.active_google_connection_id.is_none());
+    assert!(bag.active_microsoft_connection_id.is_none());
+    assert_eq!(bag.google_connections.len(), 1);
+    assert_eq!(bag.google_connections[0].id, "g1");
+    assert_eq!(
+        bag.google_connections[0].account_email.as_deref(),
+        Some("ada@example.com")
+    );
+}
+
+#[test]
+fn pointer_omits_account_vecs_and_active_ids() {
+    let dir = TempDir::new();
+    let path = dir.path.join("secrets.json");
+    crate::secrets_file::write_pointer(&path).expect("pointer");
+    let text = std::fs::read_to_string(&path).expect("read");
+    assert!(!text.contains("active_google_connection_id"));
+    assert!(!text.contains("active_microsoft_connection_id"));
+    assert!(!text.contains("google_connections"));
+    assert!(!text.contains("microsoft_connections"));
+}
+
+#[test]
+fn plaintext_round_trip_keeps_the_second_google_active_id() {
+    let dir = TempDir::new();
+    let path = dir.path.join("secrets.json");
+    let store = crate::secrets_file::FileSecretStore::new(&path).expect("store");
+    let mut bag = SecretBag::empty();
+    bag.google_connections = vec![
+        account_fixture("g1", "a@example.com", "tok-a"),
+        account_fixture("g2", "b@example.com", "tok-b"),
+    ];
+    bag.active_google_connection_id = Some("g2".to_owned());
+    store.save(&bag).expect("save");
+    let loaded = store.load().expect("load");
+    assert_eq!(loaded.active_google_connection_id.as_deref(), Some("g2"));
+    assert_eq!(loaded.google_connections.len(), 2);
+    assert_eq!(loaded.google_connections[1].id, "g2");
+    assert_eq!(loaded.google_connections[1].access_token, "tok-b");
+    assert_eq!(loaded.google_connections[0].refresh_token, "tok-a");
+}
+
+#[test]
+fn payload_round_trip_keeps_active_ids() {
+    let dir = TempDir::new();
+    let path = dir.path.join("secrets.json");
+    let mut bag = SecretBag::keyring_empty();
+    bag.microsoft_connections = vec![account_fixture("m1", "c@example.com", "tok-m")];
+    bag.active_microsoft_connection_id = Some("m1".to_owned());
+    let json = super::encode_payload(&bag).expect("encode");
+    let loaded = decode_payload(&path, &json).expect("decode");
+    assert_eq!(loaded.active_microsoft_connection_id.as_deref(), Some("m1"));
+    assert!(loaded.active_google_connection_id.is_none());
+    assert_eq!(
+        loaded.microsoft_connections[0].account_email.as_deref(),
+        Some("c@example.com")
+    );
+}
+
+#[test]
+fn upsert_replaces_same_id_and_appends_a_new_id() {
+    let mut bag = SecretBag::empty();
+    bag.upsert_account(
+        AccountProvider::Google,
+        account_fixture("g1", "a@example.com", "old"),
+    );
+    assert_eq!(bag.active_google_connection_id.as_deref(), Some("g1"));
+    bag.upsert_account(
+        AccountProvider::Google,
+        account_fixture("g2", "b@example.com", "two"),
+    );
+    assert_eq!(bag.google_connections.len(), 2);
+    assert_eq!(bag.active_google_connection_id.as_deref(), Some("g1"));
+    bag.upsert_account(
+        AccountProvider::Google,
+        account_fixture("g1", "a@example.com", "new"),
+    );
+    assert_eq!(bag.google_connections.len(), 2);
+    assert_eq!(bag.google_connections[0].access_token, "new");
+    assert_eq!(bag.google_connections[1].access_token, "two");
+    assert_eq!(bag.google_connections[0].id, "g1");
+}
+
+#[test]
+fn upsert_by_email_replaces_only_when_an_id_is_empty() {
+    let mut bag = SecretBag::empty();
+    let mut blank = account_fixture("", "a@example.com", "old");
+    blank.id.clear();
+    bag.upsert_account(AccountProvider::Google, blank);
+    assert!(bag.active_google_connection_id.is_none());
+    bag.upsert_account(
+        AccountProvider::Google,
+        account_fixture("g1", "A@example.com", "fresh"),
+    );
+    assert_eq!(bag.google_connections.len(), 1);
+    assert_eq!(bag.google_connections[0].id, "g1");
+    assert_eq!(bag.google_connections[0].access_token, "fresh");
+    assert_eq!(bag.active_google_connection_id.as_deref(), Some("g1"));
+
+    bag.upsert_account(
+        AccountProvider::Google,
+        account_fixture("g2", "a@example.com", "other"),
+    );
+    assert_eq!(bag.google_connections.len(), 2);
+    assert_eq!(bag.google_connections[0].id, "g1");
+    assert_eq!(bag.active_google_connection_id.as_deref(), Some("g1"));
+}
+
+#[test]
+fn remove_promotes_active_and_keeps_a_survivor() {
+    let mut bag = SecretBag::empty();
+    bag.upsert_account(
+        AccountProvider::Google,
+        account_fixture("g1", "a@example.com", "one"),
+    );
+    bag.upsert_account(
+        AccountProvider::Google,
+        account_fixture("g2", "b@example.com", "two"),
+    );
+    bag.upsert_account(
+        AccountProvider::Google,
+        account_fixture("g3", "c@example.com", "three"),
+    );
+    bag.set_active_account(AccountProvider::Google, "g2")
+        .expect("active");
+    let removed = bag
+        .remove_account(AccountProvider::Google, "g1")
+        .expect("remove other");
+    assert_eq!(removed.id, "g1");
+    assert_eq!(bag.active_google_connection_id.as_deref(), Some("g2"));
+    assert_eq!(bag.google_connections.len(), 2);
+    bag.remove_account(AccountProvider::Google, "b@example.com")
+        .expect("remove active by email");
+    assert_eq!(bag.active_google_connection_id.as_deref(), Some("g3"));
+    bag.remove_account(AccountProvider::Google, "g3")
+        .expect("last");
+    assert!(bag.google_connections.is_empty());
+    assert!(bag.active_google_connection_id.is_none());
+}
+
+#[test]
+fn resolve_account_covers_default_and_hints() {
+    let mut bag = SecretBag::empty();
+    assert_eq!(
+        bag.resolve_account(None).expect_err("none").as_str(),
+        NO_CONNECTED_EMAIL_ACCOUNT
+    );
+
+    bag.upsert_account(
+        AccountProvider::Microsoft,
+        account_fixture("m1", "ms@example.com", "ms"),
+    );
+    let (provider, connection) = bag.resolve_account(None).expect("only microsoft");
+    assert_eq!(provider, AccountProvider::Microsoft);
+    assert_eq!(connection.id, "m1");
+
+    bag.upsert_account(
+        AccountProvider::Google,
+        account_fixture("g1", "ada@example.com", "g"),
+    );
+    bag.upsert_account(
+        AccountProvider::Google,
+        account_fixture("g2", "bob@example.com", "g2"),
+    );
+    let (_, first) = bag.resolve_account(None).expect("google preferred");
+    assert_eq!(first.id, "g1");
+    bag.set_active_account(AccountProvider::Google, "g2")
+        .expect("set");
+    let (_, active) = bag.resolve_account(None).expect("active google");
+    assert_eq!(active.id, "g2");
+
+    let (_, hinted) = bag
+        .resolve_account(Some("m1"))
+        .expect("microsoft id wins over google preference");
+    assert_eq!(hinted.id, "m1");
+    let (_, by_email) = bag.resolve_account(Some("bob@example.com")).expect("exact");
+    assert_eq!(by_email.id, "g2");
+    let (_, by_sub) = bag.resolve_account(Some("ADA@")).expect("substring");
+    assert_eq!(by_sub.id, "g1");
+
+    let ambiguous = bag
+        .resolve_account(Some("example.com"))
+        .expect_err("ambiguous");
+    assert!(ambiguous.contains("pass the connection id"));
+    assert!(ambiguous.contains("ada@example.com"));
+    assert!(!ambiguous.contains("tok"));
+    assert_eq!(
+        bag.resolve_account(Some("nobody@example.com"))
+            .expect_err("miss"),
+        "no connected account matches 'nobody@example.com'"
+    );
+}
+
+#[test]
+fn bag_has_secret_ignores_a_bare_active_id() {
+    let mut bag = SecretBag::empty();
+    bag.active_google_connection_id = Some("g1".to_owned());
+    assert!(!super::bag_has_secret(&bag));
+    bag.google_connections
+        .push(account_fixture("g1", "a@example.com", "tok"));
+    assert!(super::bag_has_secret(&bag));
 }

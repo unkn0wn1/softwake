@@ -26,6 +26,9 @@ client secrets into the window.
 4. **Tokens:** Stored in the existing secret bag / OS keyring as
    `google_connections` / `microsoft_connections` (one account each for this
    pane). Never logged, never shown in the window script.
+   **Superseded for multiple accounts (2026-09-27):** [ADR-0033](ADR-0033-multi-account-oauth.md)
+   keeps the same vecs and adds a per-provider active connection id. Connect
+   upserts by account id instead of replacing the vec.
 5. **Scopes (one Connect):**
 
    | Provider | Scopes |
@@ -112,7 +115,9 @@ with `live-http`:
   (HTTP 202, empty body, no message id). Detail is `sent graph`.
 
 Google is preferred when both providers are connected, same as inbox. There is
-no account picker. A build without `live-http`, or with no usable account,
+no account picker in this amendment. **Multiple accounts (2026-09-27):**
+[ADR-0033](ADR-0033-multi-account-oauth.md) adds per-provider active ids and an
+optional `account` tool argument. A build without `live-http`, or with no usable account,
 keeps the mock outbox, live draft, or SMTP `TransportNotWired` path. An error
 after an account is selected (refresh, HTTP 403, network) is returned and does
 not fall through to SMTP.

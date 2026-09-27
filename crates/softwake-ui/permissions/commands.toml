@@ -311,13 +311,18 @@ commands.allow = ["email_oauth_connect"]
 
 [[permission]]
 identifier = "allow-email-oauth-disconnect"
-description = "Disconnect Google or Microsoft Email OAuth."
+description = "Remove one Google or Microsoft Email account by id or email."
 commands.allow = ["email_oauth_disconnect"]
 
 [[permission]]
 identifier = "allow-email-oauth-cancel"
 description = "Cancel an in-flight Email OAuth connect."
 commands.allow = ["email_oauth_cancel"]
+
+[[permission]]
+identifier = "allow-email-oauth-set-active"
+description = "Mark one Google or Microsoft Email account active."
+commands.allow = ["email_oauth_set_active"]
 
 [[permission]]
 identifier = "allow-timers-snapshot"

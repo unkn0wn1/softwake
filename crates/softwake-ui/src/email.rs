@@ -41,12 +41,16 @@ pub struct EmailSnapshot {
     pub storage_message: String,
     /// Whether a Google account is connected.
     pub google_connected: bool,
-    /// Connected Google account email (empty when disconnected).
+    /// Active-or-first Google account email (empty when disconnected).
     pub google_email: String,
+    /// Every connected Google account. No tokens.
+    pub google_accounts: Vec<crate::email_oauth::EmailAccountRow>,
     /// Whether a Microsoft account is connected.
     pub microsoft_connected: bool,
-    /// Connected Microsoft account email (empty when disconnected).
+    /// Active-or-first Microsoft account email (empty when disconnected).
     pub microsoft_email: String,
+    /// Every connected Microsoft account. No tokens.
+    pub microsoft_accounts: Vec<crate::email_oauth::EmailAccountRow>,
     /// `none`, `google`, or `microsoft` while Connect is in flight.
     pub oauth_pending: String,
     /// Operator-facing pending status. Never a token.
@@ -94,8 +98,10 @@ fn snapshot_from(
         storage_message: message.to_owned(),
         google_connected: oauth.google_connected,
         google_email: oauth.google_email,
+        google_accounts: oauth.google_accounts,
         microsoft_connected: oauth.microsoft_connected,
         microsoft_email: oauth.microsoft_email,
+        microsoft_accounts: oauth.microsoft_accounts,
         oauth_pending: oauth.oauth_pending,
         oauth_message: oauth.oauth_message,
         oauth_authorize_url: oauth.oauth_authorize_url,
