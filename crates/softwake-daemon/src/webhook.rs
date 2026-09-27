@@ -29,10 +29,10 @@ const PATH: &str = "/v1/wake";
 pub(crate) fn spawn(shared: Arc<Shared>) {
     let _ = thread::Builder::new()
         .name("softwake-webhook".to_owned())
-        .spawn(move || serve_loop(shared));
+        .spawn(move || serve_loop(&shared));
 }
 
-fn serve_loop(shared: Arc<Shared>) {
+fn serve_loop(shared: &Arc<Shared>) {
     let mut bound_port: Option<u16> = None;
     let mut listener: Option<TcpListener> = None;
     loop {
@@ -70,7 +70,7 @@ fn serve_loop(shared: Arc<Shared>) {
         let accepted = listener.as_ref().map(TcpListener::accept);
         match accepted {
             Some(Ok((stream, _))) => {
-                let shared = Arc::clone(&shared);
+                let shared = Arc::clone(shared);
                 let secret = secret_now;
                 let _ = thread::Builder::new()
                     .name("softwake-webhook-conn".to_owned())
@@ -134,16 +134,13 @@ fn load_webhook_secret() -> Option<String> {
 fn handle_connection(mut stream: TcpStream, shared: &Shared, expected_secret: &str) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
-    let request = match read_http_request(&mut stream) {
-        Ok(request) => request,
-        Err(_) => {
-            let _ = write_response(
-                &mut stream,
-                400,
-                &json!({"ok":false,"detail":"bad request"}),
-            );
-            return;
-        }
+    let Ok(request) = read_http_request(&mut stream) else {
+        let _ = write_response(
+            &mut stream,
+            400,
+            &json!({"ok":false,"detail":"bad request"}),
+        );
+        return;
     };
     if request.method != "POST" {
         let _ = write_response(

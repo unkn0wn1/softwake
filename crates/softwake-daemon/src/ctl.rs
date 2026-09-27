@@ -79,11 +79,11 @@ pub(crate) enum CtlAction {
 pub(crate) enum WebhookCtl {
     /// Print enabled / secret configured / bind.
     Status,
-    /// Set webhook_enabled true.
+    /// Set `webhook_enabled` true.
     Enable,
-    /// Set webhook_enabled false.
+    /// Set `webhook_enabled` false.
     Disable,
-    /// Set webhook_port.
+    /// Set `webhook_port`.
     Port {
         /// 1..=65535
         port: u16,
@@ -265,7 +265,6 @@ pub(crate) fn call_cancel(path: &Path, pending_id: &str) -> Result<Status, CallE
 }
 
 /// Human-readable status. The string ends with a newline.
-#[must_use]
 pub(crate) fn run_webhook_ctl(action: &WebhookCtl) -> Result<String, String> {
     let xdg = std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from);
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);

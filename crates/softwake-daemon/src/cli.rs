@@ -467,6 +467,10 @@ fn parse_ctl(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
     Ok(Mode::Ctl { socket, command })
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "ctl subcommand table stays one match"
+)]
 fn ctl_command(positional: &[String]) -> Result<CtlAction, String> {
     match positional {
         [] => Err(
