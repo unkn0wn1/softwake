@@ -728,6 +728,26 @@ function replyNote(detail, text) {
   return note;
 }
 
+function syncLastBubbleNote(note) {
+  const article = logEl && logEl.lastElementChild;
+  if (!article || !article.classList.contains("assistant")) {
+    return;
+  }
+  let noteEl = article.querySelector(".note");
+  if (!note) {
+    if (noteEl) {
+      noteEl.remove();
+    }
+    return;
+  }
+  if (!noteEl) {
+    noteEl = document.createElement("p");
+    noteEl.className = "note";
+    article.append(noteEl);
+  }
+  noteEl.textContent = note;
+}
+
 function pushAssistant(text, detail, isError) {
   const clean = String(text || "").trim();
   if (!clean) {
@@ -737,15 +757,24 @@ function pushAssistant(text, detail, isError) {
     dropTrailingError();
   }
   const last = turns[turns.length - 1];
-  // Command result and the next status poll can deliver the same reply twice.
-  // A later turn that happens to repeat the words still gets its own bubble.
+  // Pre-TTS status poll (#101 reply-before-speak) and post-TTS ask/talk settle
+  // deliver the same reply seconds apart. Dedupe consecutive identical assistant
+  // text until a user turn intervenes — do not time-gate (TTS often exceeds 2s).
+  // A later turn that repeats the words after the user speaks still gets its own bubble.
   if (
     last &&
     last.role === "assistant" &&
     last.text === clean &&
-    !!last.error === !!isError &&
-    Date.now() - last.ts < 2000
+    !!last.error === !!isError
   ) {
+    if (!isError) {
+      const note = replyNote(detail, clean);
+      if (note && note !== (last.note || "")) {
+        last.note = note;
+        syncLastBubbleNote(note);
+        scheduleChatSave();
+      }
+    }
     return;
   }
   pushTurn({
