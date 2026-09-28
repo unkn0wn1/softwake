@@ -46,3 +46,10 @@ Operators (e.g. a laptop Softwake plus an always-on Proxmox CT on a VPS/OVH-styl
 
 - [remote-agent-pairing.md](remote-agent-pairing.md)
 - [ADR-0039](ADR-0039-remote-agent.md)
+
+## Amendment — OAuth mirror (ADR-0045)
+
+OAuth mirror shipped in [ADR-0045](ADR-0045-oauth-mirror.md). The installer builds
+`softwake-node` with `--features live-http`, preserves allowlisted publisher /
+xAI env keys on reinstall, and does not ship client secrets inside the binary.
+

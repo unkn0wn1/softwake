@@ -130,7 +130,7 @@ fn handle_inbound(state: &NodeState, token: &str, message: TgMessage) {
     // while companion owns the poll (Default / Receive-all / Voice flags apply to
     // laptop-side fan-out; TTS is skipped on the node).
     let _messengers = state.load_messengers(&profile_id);
-    let reply = companion_ask(state, &text);
+    let reply = companion_ask(state, &profile_id, &text);
     let _ = send_message(token, &chat_id, &reply);
     // Voice/TTS skipped on node (ADR-0042).
     let summary = format!(
@@ -173,7 +173,16 @@ pub fn maybe_fanout_timer(state: &NodeState, profile_id: &str, text: &str) {
     let _ = send_message(&token, &chat_id, text);
 }
 
-fn companion_ask(state: &NodeState, text: &str) -> String {
+fn companion_ask(state: &NodeState, profile_id: &str, text: &str) -> String {
+    if state.load_oauth_document().has_usable_connection() {
+        return match crate::agent::run_agent_turn(state, profile_id, text) {
+            Ok(reply) if !reply.trim().is_empty() => reply,
+            Ok(_) | Err(_) => {
+                "Softwake companion here (laptop away). I could not finish that agent turn just now."
+                    .to_owned()
+            }
+        };
+    }
     let Some(key) = state.xai_api_key() else {
         return "Softwake companion here (laptop away). Full agent replies when the laptop is back."
             .to_owned();

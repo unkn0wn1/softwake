@@ -47,6 +47,7 @@ pub struct RemoteAgentSnapshot {
     pub role_telegram_owner: bool,
     pub conflict_policy: String,
     pub enabled: bool,
+    pub oauth_mirror: bool,
     pub test_status: String,
 }
 
@@ -64,6 +65,7 @@ pub struct RemoteAgentSaveArgs {
     pub role_telegram_owner: bool,
     pub conflict_policy: String,
     pub enabled: bool,
+    pub oauth_mirror: bool,
     /// Empty = leave secret unchanged.
     pub secret: Option<String>,
     pub clear_secret: bool,
@@ -131,6 +133,7 @@ fn snapshot_for(
             |a| a.conflict_policy.as_str().to_owned(),
         ),
         enabled: row.is_some_and(|a| a.enabled),
+        oauth_mirror: row.is_some_and(|a| a.oauth_mirror),
         test_status: test_status.to_owned(),
     }
 }
@@ -171,6 +174,7 @@ pub fn remote_agent_add() -> Result<RemoteAgentSnapshot, String> {
         roles: RemoteAgentRoles::default(),
         conflict_policy: RemoteConflictPolicy::PreferLocal,
         enabled: false,
+        oauth_mirror: false,
         created_ms: None,
         updated_ms: None,
     };
@@ -218,6 +222,7 @@ pub fn remote_agent_save(args: RemoteAgentSaveArgs) -> Result<RemoteAgentSnapsho
         },
         conflict_policy,
         enabled: args.enabled,
+        oauth_mirror: args.oauth_mirror,
         created_ms: None,
         updated_ms: None,
     };

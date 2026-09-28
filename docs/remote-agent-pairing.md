@@ -2,7 +2,7 @@
 
 Softwake's **Remote Agent** is an always-on **companion** on a Proxmox CT. The laptop Softwake stays primary. Pairing and traffic use **Tailscale only** (MagicDNS or `100.x`). No public IP, WAN SSH, or public ingress.
 
-Remote work is **per-profile**: schedules, outbox items, and mirrored pack files are keyed by `profile_id`. OAuth tokens stay laptop-local.
+Remote work is **per-profile**: schedules, outbox items, and mirrored pack files are keyed by `profile_id`. OAuth tokens stay laptop-local unless that companion’s **Mirror OAuth tokens** checkbox is on (ADR-0045).
 
 See [ADR-0039](ADR-0039-remote-agent.md) and [ADR-0040](ADR-0040-remote-agent-presence-outbox.md).
 
@@ -20,7 +20,7 @@ See [ADR-0039](ADR-0039-remote-agent.md) and [ADR-0040](ADR-0040-remote-agent-pr
 | Node LLM key (`SOFTWAKE_NODE_XAI_API_KEY` or mirrored xAI key) | **Required for real agent_task / Telegram LLM**; honest stub without it |
 | Test on Tailnet button / SSH installer | **Live** (ADR-0044) |
 | Telegram sticky ownership (laptop present / companion away) | **Live** (ADR-0042) |
-| OAuth mirror | **Out** (opt-in later) |
+| OAuth mirror | **Live, default off** (ADR-0045) |
 | HUD left-rail profiles | **Live** (ADR-0041) |
 
 ## Pairing flow
@@ -82,5 +82,21 @@ curl -s -H "Authorization: Bearer $SOFTWAKE_NODE_PAIRING_SECRET" \
 | Soul pack (4 md) | `PUT /v1/profiles/{id}/soul` | ADR-0043 |
 | Tools permissions | `PUT /v1/tools` | ADR-0043 |
 | Skills catalog | `PUT /v1/skills` | ADR-0043 |
-| OAuth tokens | — | **Not mirrored** |
+| OAuth tokens (opt-in) | `PUT /v1/vault/oauth` | **Live, default off** (ADR-0045); flag off clears `vault/oauth.json` |
 
+
+## Enable OAuth mirror (ADR-0045)
+
+1. Connect Google/Microsoft on the laptop (Settings → Email).
+2. Settings → Remote Agent: Enabled, check **Mirror OAuth tokens to companion**, Save.
+3. softwaked must be running (~45s mirror tick).
+4. On the CT, set publisher client ids for refresh (`SOFTWAKE_GOOGLE_CLIENT_ID` / Microsoft twin, or `oauth-clients.env` under the softwake home).
+5. Verify with `GET /v1/vault/oauth` (Bearer) — counts and emails only, never paste `oauth.json`.
+
+## Revoke OAuth mirror
+
+1. Uncheck Mirror OAuth tokens, Save; leave softwaked running until the clear PUT lands.
+2. Rotate the pairing secret and reinstall so `/etc/softwake-node.env` matches.
+3. If a clear PUT cannot land, SSH and delete `/var/lib/softwake-node/vault/oauth.json`.
+
+Security: Tailscale encrypts transit; pairing secret authenticates; vault files are mode `0600`. Do not bind a public interface.

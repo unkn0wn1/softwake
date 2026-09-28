@@ -30,3 +30,11 @@ Softwake **Remote Agent** companion binary (ADR-0039 / ADR-0040 / ADR-0042 / ADR
 ## Companion `agent_task`
 
 When a mirrored schedule with `action: agent_task` and `run_on: companion|auto` fires while the laptop is away, the node loads that profile’s mirrored soul + tools + skills and runs a bounded tool loop (max 6 rounds). Ask tools become pending text (never silent Always-allow). OAuth tools refuse. Results go to the outbox and Telegram when messengers want timer push. See ADR-0043.
+
+## OAuth vault (ADR-0045)
+
+- `PUT /v1/vault/oauth` — replace mirrored Google/Microsoft connections (Bearer). Empty body clears `vault/oauth.json` (0600).
+- `GET /v1/vault/oauth` — counts and emails only (no tokens).
+- Feature `live-http` is default; without it, tools with a non-empty vault return that live-http is required.
+- Publisher client ids for refresh: process env or `oauth-clients.env` under the softwake home.
+- Empty vault: email/calendar/Drive tools return an enable-hint to turn on Mirror OAuth tokens in Settings.

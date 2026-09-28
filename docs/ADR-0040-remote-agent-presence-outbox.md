@@ -60,3 +60,10 @@ Mutating / outbox / presence / lease / schedule endpoints require `Authorization
 - Timers with `run_on=companion|auto` finally dispatch for real.  
 - Operators must set the same pairing secret on laptop Settings and `SOFTWAKE_NODE_PAIRING_SECRET`.  
 - Companion `agent_task` summaries were honest stubs until [ADR-0043](ADR-0043-companion-agent-task-llm.md).
+
+## Amendment — OAuth mirror (ADR-0045)
+
+OAuth tokens are not mirrored by default. Opt-in vault sync is
+[ADR-0045](ADR-0045-oauth-mirror.md). “OAuth token mirror” is no longer an open
+out-of-scope item for later slices.
+

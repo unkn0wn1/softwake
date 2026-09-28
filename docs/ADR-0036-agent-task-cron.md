@@ -52,3 +52,9 @@ gateway into Softwake.
 ## Companion node
 
 When `run_on` is `companion` or `auto` (laptop away), softwake-node runs the same family of bounded turn using mirrored soul / skills / tools ([ADR-0043](ADR-0043-companion-agent-task-llm.md)). Ask still never silently elevates; OAuth stays laptop-local.
+
+## Amendment — OAuth mirror (ADR-0045)
+
+OAuth stays laptop-local unless the operator enabled OAuth mirror
+([ADR-0045](ADR-0045-oauth-mirror.md)).
+

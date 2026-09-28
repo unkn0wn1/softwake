@@ -56,3 +56,11 @@ Slice 2 (#95) fired `run_on=companion|auto` schedules on softwake-node but recor
 ## See also
 
 - [remote-agent-pairing.md](remote-agent-pairing.md)
+
+## Amendment — OAuth mirror (ADR-0045)
+
+OAuth-backed tools run on the companion when the opt-in vault has a usable
+connection and the tool is AlwaysAllow. Empty vault returns an enable hint.
+Ask permissions are unchanged. Mirror is default off
+([ADR-0045](ADR-0045-oauth-mirror.md)).
+

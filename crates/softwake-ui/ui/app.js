@@ -2045,6 +2045,7 @@ const remoteAgentConflict = document.querySelector("#remote-agent-conflict");
 const remoteAgentSecret = document.querySelector("#remote-agent-secret");
 const remoteAgentSecretStatus = document.querySelector("#remote-agent-secret-status");
 const remoteAgentEnabled = document.querySelector("#remote-agent-enabled");
+const remoteAgentOauthMirror = document.querySelector("#remote-agent-oauth-mirror");
 const remoteAgentSave = document.querySelector("#remote-agent-save");
 const remoteAgentTest = document.querySelector("#remote-agent-test");
 const remoteAgentInstall = document.querySelector("#remote-agent-install");
@@ -2081,6 +2082,7 @@ function applyRemoteAgentSnapshot(snap, statusText) {
     remoteAgentSecretStatus.textContent = snap.hasSecret ? "Secret: saved" : "Secret: not set";
   }
   if (remoteAgentEnabled) remoteAgentEnabled.checked = !!snap.enabled;
+  if (remoteAgentOauthMirror) remoteAgentOauthMirror.checked = !!snap.oauthMirror;
   applyTimersRunOnAvailability(!!snap.hasEnabledCompanion);
   renderRemoteAgentSubnav(snap);
 }
@@ -2129,6 +2131,7 @@ async function saveRemoteAgent() {
       roleTelegramOwner: false,
       conflictPolicy: remoteAgentConflict ? remoteAgentConflict.value : "prefer_local",
       enabled: remoteAgentEnabled ? !!remoteAgentEnabled.checked : false,
+      oauthMirror: !!(remoteAgentOauthMirror && remoteAgentOauthMirror.checked),
       secret: remoteAgentSecret && remoteAgentSecret.value ? remoteAgentSecret.value : null,
       clearSecret: false,
     };

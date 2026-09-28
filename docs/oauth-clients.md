@@ -149,3 +149,16 @@ lacks `drive.readonly` (Google) or `Files.Read` (Microsoft):
 3. **Connect** / Add account again and finish consent
 
 Reconnect is not required when those scopes are already present on the token.
+
+## Companion refresh (ADR-0045)
+
+When Mirror OAuth tokens is enabled, softwake-node refreshes access tokens while
+the laptop is away. Place the same publisher client ids on the CT:
+
+- `SOFTWAKE_GOOGLE_CLIENT_ID` (optional `SOFTWAKE_GOOGLE_CLIENT_SECRET`)
+- `SOFTWAKE_MICROSOFT_CLIENT_ID`
+- Or `oauth-clients.env` under the softwake user’s home (typically
+  `/var/lib/softwake-node/.config/softwake/oauth-clients.env`, mode 0600)
+
+Refresh does not add scopes. Missing client id when a refresh is required fails
+closed with `This build has no OAuth client configured`.

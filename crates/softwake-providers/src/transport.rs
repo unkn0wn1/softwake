@@ -98,6 +98,47 @@ pub trait Transport {
         file_content_type: &str,
     ) -> Result<HttpResponse, TransportError>;
 
+    /// GET with bearer and extra headers. Default ignores headers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError`] when the request cannot complete.
+    fn get_bearer_with_headers(
+        &self,
+        url: &str,
+        bearer: &str,
+        _headers: &[(&str, &str)],
+    ) -> Result<HttpResponse, TransportError> {
+        self.get_bearer(url, bearer)
+    }
+
+    /// PATCH JSON with a bearer token. Default is not implemented.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError`] when the request cannot complete.
+    fn patch_json_bearer(
+        &self,
+        _url: &str,
+        _bearer: &str,
+        _body: &str,
+    ) -> Result<HttpResponse, TransportError> {
+        Err(TransportError::Failed {
+            message: "patch is not implemented".into(),
+        })
+    }
+
+    /// DELETE with a bearer token. Default is not implemented.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError`] when the request cannot complete.
+    fn delete_bearer(&self, _url: &str, _bearer: &str) -> Result<HttpResponse, TransportError> {
+        Err(TransportError::Failed {
+            message: "delete is not implemented".into(),
+        })
+    }
+
     /// POST JSON with a bearer token and return the raw body bytes.
     ///
     /// Used for TTS, which answers with audio rather than JSON text.
@@ -119,6 +160,8 @@ pub struct MockTransport {
     forms: HashMap<String, HttpResponse>,
     gets: HashMap<String, HttpResponse>,
     posts: HashMap<String, HttpResponse>,
+    patches: HashMap<String, HttpResponse>,
+    deletes: HashMap<String, HttpResponse>,
     multiparts: HashMap<String, HttpResponse>,
     byte_posts: HashMap<String, HttpBytes>,
     /// Last multipart call, for tests that assert request shape.
@@ -184,6 +227,20 @@ impl MockTransport {
         self
     }
 
+    /// Register a bearer JSON PATCH response for `url`.
+    #[must_use]
+    pub fn with_patch_json(mut self, url: impl Into<String>, response: HttpResponse) -> Self {
+        self.patches.insert(url.into(), response);
+        self
+    }
+
+    /// Register a bearer DELETE response for `url`.
+    #[must_use]
+    pub fn with_delete(mut self, url: impl Into<String>, response: HttpResponse) -> Self {
+        self.deletes.insert(url.into(), response);
+        self
+    }
+
     /// Register a multipart POST response for `url`.
     #[must_use]
     pub fn with_multipart(mut self, url: impl Into<String>, response: HttpResponse) -> Self {
@@ -243,6 +300,40 @@ impl Transport for MockTransport {
             .cloned()
             .ok_or_else(|| TransportError::NoRoute {
                 method: "POST".to_owned(),
+                url: url.to_owned(),
+            })
+    }
+
+    fn get_bearer_with_headers(
+        &self,
+        url: &str,
+        bearer: &str,
+        _headers: &[(&str, &str)],
+    ) -> Result<HttpResponse, TransportError> {
+        self.get_bearer(url, bearer)
+    }
+
+    fn patch_json_bearer(
+        &self,
+        url: &str,
+        _bearer: &str,
+        _body: &str,
+    ) -> Result<HttpResponse, TransportError> {
+        self.patches
+            .get(url)
+            .cloned()
+            .ok_or_else(|| TransportError::NoRoute {
+                method: "PATCH".to_owned(),
+                url: url.to_owned(),
+            })
+    }
+
+    fn delete_bearer(&self, url: &str, _bearer: &str) -> Result<HttpResponse, TransportError> {
+        self.deletes
+            .get(url)
+            .cloned()
+            .ok_or_else(|| TransportError::NoRoute {
+                method: "DELETE".to_owned(),
                 url: url.to_owned(),
             })
     }

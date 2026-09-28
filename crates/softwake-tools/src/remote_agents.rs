@@ -129,6 +129,9 @@ pub struct RemoteAgentConfig {
     /// Master switch.
     #[serde(default)]
     pub enabled: bool,
+    /// When true, laptop mirrors Email OAuth connections to this companion (ADR-0045).
+    #[serde(default)]
+    pub oauth_mirror: bool,
     /// Created unix ms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_ms: Option<u64>,
@@ -514,6 +517,7 @@ mod tests {
                 roles: RemoteAgentRoles::default(),
                 conflict_policy: RemoteConflictPolicy::PreferLocal,
                 enabled: true,
+                oauth_mirror: false,
                 created_ms: None,
                 updated_ms: None,
             },
@@ -541,6 +545,7 @@ mod tests {
             roles: RemoteAgentRoles::default(),
             conflict_policy: RemoteConflictPolicy::PreferLocal,
             enabled: true,
+            oauth_mirror: false,
             created_ms: None,
             updated_ms: None,
         };
@@ -560,6 +565,7 @@ mod tests {
                 roles: RemoteAgentRoles::default(),
                 conflict_policy: RemoteConflictPolicy::PreferLocal,
                 enabled: false,
+                oauth_mirror: false,
                 created_ms: None,
                 updated_ms: None,
             },
@@ -594,6 +600,7 @@ mod tests {
                 roles: RemoteAgentRoles::default(),
                 conflict_policy: RemoteConflictPolicy::PreferLocal,
                 enabled: true,
+                oauth_mirror: false,
                 created_ms: None,
                 updated_ms: None,
             })
@@ -610,5 +617,17 @@ mod tests {
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).expect("tmpdir");
         path
+    }
+    #[test]
+    fn oauth_mirror_defaults_false_and_round_trips() {
+        let json = r#"{"version":1,"agents":[{"id":"c","tailscale_hostname":"100.64.1.2","ssh_user":"root","enabled":true}]}"#;
+        let file: RemoteAgentsFile = serde_json::from_str(json).expect("parse");
+        assert!(!file.agents[0].oauth_mirror);
+        let mut file = file;
+        file.agents[0].oauth_mirror = true;
+        let out = serde_json::to_string(&file).expect("ser");
+        let again: RemoteAgentsFile = serde_json::from_str(&out).expect("parse2");
+        assert!(again.agents[0].oauth_mirror);
+        assert_eq!(again.version, 1);
     }
 }

@@ -3973,8 +3973,11 @@ dependencies = [
 name = "softwake-node"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
+ "softwake-connectors",
+ "softwake-providers",
  "softwake-skills",
  "softwake-soul",
  "softwake-tools",
