@@ -94,3 +94,7 @@ A pending tool auto-expands the panel. `idleBlocked` includes that pending id, a
 - The chat composer is a **multiline** textarea with larger type. Enter sends; Shift+Enter inserts a newline.
 - The chat log keeps bottom padding so the last bubble clears the **thinking…** live status line.
 
+## Amendment (2026-09-28) — expanded profile rail
+
+While expanded, a narrow left rail lists profiles; click sets active and runs `/refresh` effects, then loads that profile’s HUD history ([ADR-0041](ADR-0041-hud-profile-rail.md)). Collapsed bloom is unchanged.
+

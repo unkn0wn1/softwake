@@ -121,6 +121,10 @@ applies a fresh session for the new profile; `refresh` afterward repeats the
 full reload + clear + HUD reseed cycle for whatever profile is now active
 (useful after editing that profile’s soul files or MCP/Tools Settings).
 
+**HUD left rail ([ADR-0041](ADR-0041-hud-profile-rail.md)):** clicking a profile
+sets `active_profile` on disk then invokes this same `/refresh` path (no second
+pipeline).
+
 ### 5. Slash surface
 
 Add `/refresh` (and clear-typed `refresh` when unambiguous). Help text lists it.

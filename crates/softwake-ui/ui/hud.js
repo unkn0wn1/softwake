@@ -36,6 +36,8 @@ const chatToolbar = document.querySelector("#chat-toolbar");
 const selectToggle = document.querySelector("#select-toggle");
 const deleteSelectedBtn = document.querySelector("#delete-selected");
 const selectCountEl = document.querySelector("#select-count");
+const profileRail = document.querySelector("#profile-rail");
+const profileRailList = document.querySelector("#profile-rail-list");
 
 const IDLE_MIN_MS = 1000;
 const IDLE_MAX_MS = 30000;
@@ -77,6 +79,8 @@ let sessionHudSeeded = false;
 let selecting = false;
 /** Indices into `turns` currently selected for delete. */
 const selectedIdx = new Set();
+/** True while a left-rail profile switch is in flight. */
+let profileSwitchBusy = false;
 
 function invoke(command, args) {
   const core = window.__TAURI__ && window.__TAURI__.core;
@@ -288,6 +292,7 @@ function setExpanded(next) {
     }
     input.focus();
     markActivity();
+    void refreshProfileName(true);
   } else {
     strip.hidden = true;
     liveEl.hidden = true;
@@ -825,6 +830,97 @@ window.addEventListener("pointerup", () => {
   });
 });
 
+function profileChipLabel(row) {
+  const name = row && row.name ? String(row.name).trim() : "";
+  const id = row && row.id ? String(row.id) : "";
+  return name || id || "?";
+}
+
+function renderProfileRail(snap) {
+  if (!profileRailList) {
+    return;
+  }
+  const rows = (snap && snap.profiles) || [];
+  const activeId =
+    (snap && snap.active_id && String(snap.active_id)) ||
+    profileId ||
+    "";
+  profileRailList.innerHTML = "";
+  for (const row of rows) {
+    if (!row || !row.id) {
+      continue;
+    }
+    const id = String(row.id);
+    const li = document.createElement("li");
+    li.setAttribute("role", "presentation");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "profile-rail-item";
+    btn.setAttribute("role", "option");
+    btn.dataset.profileId = id;
+    const selected = id === activeId;
+    btn.setAttribute("aria-selected", selected ? "true" : "false");
+    btn.title = profileChipLabel(row) + " [" + id + "]";
+    btn.textContent = profileChipLabel(row);
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void switchHudProfile(id);
+    });
+    li.appendChild(btn);
+    profileRailList.appendChild(li);
+  }
+  if (profileRail) {
+    profileRail.hidden = rows.length === 0;
+  }
+}
+
+async function switchHudProfile(nextId) {
+  const id = String(nextId || "").trim();
+  if (!id || profileSwitchBusy) {
+    return;
+  }
+  if (id === profileId) {
+    return;
+  }
+  profileSwitchBusy = true;
+  markActivity();
+  try {
+    if (vaultUnlocked) {
+      await persistChat();
+    }
+    const result = await invoke("hud_switch_profile", { id });
+    const snap = result && result.snapshot ? result.snapshot : result;
+    const rows = (snap && snap.profiles) || [];
+    const active = rows.find((row) => row && row.active) || null;
+    profileId = (snap && snap.active_id && String(snap.active_id)) || id;
+    const name =
+      (active && active.name && String(active.name).trim()) ||
+      (snap && snap.selected_name && String(snap.selected_name).trim()) ||
+      "";
+    profileName = name || profileId || "Softwake";
+    capsule.dataset.profile = profileName;
+    profilePollAt = Date.now();
+    renderProfileRail(snap);
+    chatPersistReady = false;
+    replaceTurns([]);
+    if (vaultUnlocked) {
+      await loadChatForActiveProfile();
+    }
+    const msg =
+      (result && result.refresh_message && String(result.refresh_message)) ||
+      "Switched profile";
+    const failed = result && result.refresh_ok === false;
+    setLive(msg, !!failed);
+    sessionHudSeeded = false;
+  } catch (error) {
+    setLive(errorText(error, "profile switch failed"), true);
+  } finally {
+    profileSwitchBusy = false;
+    markActivity();
+  }
+}
+
 async function refreshProfileName(force) {
   const now = Date.now();
   if (!force && now - profilePollAt < 5000) {
@@ -839,6 +935,7 @@ async function refreshProfileName(force) {
     const nextId = active && active.id ? String(active.id) : "";
     profileName = name || "Softwake";
     capsule.dataset.profile = profileName;
+    renderProfileRail(snap);
     if (nextId && nextId !== profileId) {
       const previous = profileId;
       profileId = nextId;
@@ -1274,7 +1371,7 @@ function isInteractiveTarget(target) {
     return false;
   }
   return !!target.closest(
-    "#ask-form, #talk, #ask-send, #ask-input, #log, #live, #hud-pending, #hud-allow, #pin, #resize-grip, #chat-toolbar, button, input, textarea, a, .bubble",
+    "#ask-form, #talk, #ask-send, #ask-input, #log, #live, #hud-pending, #hud-allow, #pin, #resize-grip, #chat-toolbar, #profile-rail, #vault-gate, button, input, textarea, a, .bubble",
   );
 }
 
@@ -1331,7 +1428,9 @@ capsule.addEventListener("click", (event) => {
     event.target.closest("#hud-pending") ||
     event.target.closest("#hud-allow") ||
     event.target.closest("#pin") ||
-    event.target.closest("#resize-grip")
+    event.target.closest("#resize-grip") ||
+    event.target.closest("#profile-rail") ||
+    event.target.closest("#vault-gate")
   ) {
     return;
   }
