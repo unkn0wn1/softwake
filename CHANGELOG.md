@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Remote Agent (slice 2):** presence heartbeats (90s grace), `run_on` dispatch with fire leases, per-profile schedule mirror + softwake-node tick, durable outbox → HUD “While you were away” (ADR-0040). Companion `agent_task` is a summary stub; Telegram sticky / SSH install / OAuth mirror / HUD profile rail remain later.
+
+## Unreleased
+
 ### Added
 
 - **Remote Agent (slice 1):** always-on Tailscale companion pairing — ADR-0039, Settings → Remote Agent (name / MagicDNS / SSH user / roles / conflict policy stub / pairing secret), `remote-agents.json` + bag secrets, per-timer `run_on` (`local`\|`companion`\|`auto`, default local; fire still local), and a minimal `softwake-node` health + empty outbox stub. Presence, outbox→HUD, Telegram sticky owner deferred. See [ADR-0039](docs/ADR-0039-remote-agent.md) and [pairing docs](docs/remote-agent-pairing.md).

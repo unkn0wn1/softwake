@@ -301,8 +301,14 @@ impl Runtime {
     /// Serve does not open a microphone. This method does not call
     /// [`Self::drain_pcm`]. The typed demo applies the same [`LoadedSoul`]
     /// gate on its own machine.
+    /// Voice state for Remote Agent heartbeats.
+    pub(crate) fn voice_state_for_remote(&self) -> softwake_state::VoiceState {
+        self.machine.state()
+    }
+
     pub(crate) fn wake_phrase(&mut self) -> Outcome {
         self.tick();
+        crate::remote_agent::pull_outbox_into_hud();
         if let Some(reason) = self.soul.refusal() {
             return Self::rejected(IpcError::protocol(reason));
         }

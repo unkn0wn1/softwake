@@ -1236,8 +1236,8 @@ function applyTimersRunOnAvailability(hasCompanion) {
   }
   if (timersRunOnHint) {
     timersRunOnHint.textContent = remoteAgentCompanionEnabled
-      ? "Companion enabled. Slice 1 still fires locally; companion/auto dispatch is slice 2."
-      : "Companion options unlock when a Remote Agent is enabled. Slice 1 still fires locally.";
+      ? "Companion enabled. run_on=local fires here; companion/auto use presence + fire leases (slice 2)."
+      : "Companion options unlock when a Remote Agent is enabled. Dispatch follows run_on + presence.";
   }
 }
 

@@ -1,16 +1,19 @@
-# softwake-node (Remote Agent companion)
+# softwake-node
 
-Always-on companion stub for Softwake ([ADR-0039](../../docs/ADR-0039-remote-agent.md)).
+Softwake **Remote Agent** companion binary (ADR-0039 / ADR-0040).
 
-## Slice 1
+## Endpoints
 
-- `GET /health` → `{"ok":true,"role":"companion","version":"..."}`
-- `GET /v1/outbox` → `{"items":[]}` (empty; real outbox is slice 2+)
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| GET | `/health` | no | `{ok,role,version,presence_grace_ms}` |
+| GET/POST | `/v1/presence` | Bearer | Heartbeat + effective state (90s grace → offline) |
+| POST | `/v1/leases` | Bearer | Fire lease claim (409 if held) |
+| GET/POST | `/v1/outbox` | Bearer | Durable per-profile away results |
+| PUT | `/v1/schedules/{profile_id}` | Bearer | Mirror companion/auto rows |
 
-Listen address: env `SOFTWAKE_NODE_LISTEN` (default `127.0.0.1:8790`).
+## Env
 
-**Production:** bind the node's **Tailscale IP** (or MagicDNS-reachable interface) only. Do not expose on a public WAN IP. Pairing uses Tailscale SSH from the laptop Softwake Settings → Remote Agent page — see [remote-agent-pairing.md](../../docs/remote-agent-pairing.md).
-
-```bash
-SOFTWAKE_NODE_LISTEN=100.x.y.z:8790 softwake-node
-```
+- `SOFTWAKE_NODE_LISTEN` — default `127.0.0.1:8790` (use Tailscale IP in production)
+- `SOFTWAKE_NODE_PAIRING_SECRET` — required for auth endpoints
+- `SOFTWAKE_NODE_DATA` / `XDG_DATA_HOME/softwake-node` — durable outbox/leases/schedules

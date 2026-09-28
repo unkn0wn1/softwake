@@ -1,0 +1,379 @@
+//! Laptop-side Remote Agent client (presence, schedule mirror, outbox pull).
+//!
+//! Uses raw TCP HTTP so offline CI does not need `live-http` / ureq.
+
+use std::fmt::Write as FmtWrite;
+use std::io::{Read, Write};
+use std::net::TcpStream;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
+use softwake_providers::{open_store, resolve_secrets_file};
+use softwake_soul::resolve_config_dir;
+use softwake_state::VoiceState;
+use softwake_tools::{
+    DEFAULT_NODE_PORT, ScheduleRunOn, first_enabled_agent, list_profile_ids, load_remote_agents,
+    load_schedules, node_base_url, resolve_remote_agents_file, resolve_schedules_file,
+};
+
+use crate::hud_chat_write;
+
+const HEARTBEAT_SECS: u64 = 30;
+const OUTBOX_SYNC_SECS: u64 = 60;
+const MIRROR_SECS: u64 = 45;
+const HTTP_TIMEOUT: Duration = Duration::from_secs(3);
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct OutboxCursor {
+    #[serde(default)]
+    last_ts_ms: u64,
+    #[serde(default)]
+    last_id: String,
+    #[serde(default)]
+    agent_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OutboxResponse {
+    #[serde(default)]
+    items: Vec<OutboxWire>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OutboxWire {
+    id: String,
+    profile_id: String,
+    #[serde(default)]
+    kind: String,
+    ts_ms: u64,
+    summary: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PresenceResponse {
+    state: String,
+}
+
+/// Map Softwake voice state → companion presence spelling.
+#[must_use]
+pub(crate) fn presence_from_voice(state: VoiceState) -> &'static str {
+    match state {
+        VoiceState::Awake => "present",
+        VoiceState::Sleep => "sleeping",
+        VoiceState::Hibernate => "hibernated",
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+struct CompanionTarget {
+    agent_id: String,
+    base_url: String,
+    secret: String,
+}
+
+fn resolve_target() -> Option<CompanionTarget> {
+    let path = resolve_remote_agents_file().ok()?;
+    let file = load_remote_agents(&path).ok()?;
+    let agent = first_enabled_agent(&file)?;
+    let port = std::env::var("SOFTWAKE_NODE_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_NODE_PORT);
+    let base_url = node_base_url(agent, port);
+    let secrets_path = resolve_secrets_file().ok()?;
+    let store = open_store(&secrets_path).ok()?;
+    let bag = store.load().ok()?;
+    let secret = bag
+        .remote_agent_pairing_secrets
+        .get(&agent.id)
+        .cloned()
+        .unwrap_or_default();
+    if secret.is_empty() {
+        return None;
+    }
+    Some(CompanionTarget {
+        agent_id: agent.id.clone(),
+        base_url,
+        secret,
+    })
+}
+
+fn host_port(base_url: &str) -> Option<(String, u16)> {
+    let rest = base_url.strip_prefix("http://")?;
+    let (host, port_s) = rest.split_once(':')?;
+    let port: u16 = port_s.parse().ok()?;
+    Some((host.to_owned(), port))
+}
+
+fn http_json(
+    base_url: &str,
+    method: &str,
+    path: &str,
+    body: &str,
+    secret: &str,
+    extra_headers: &[(&str, &str)],
+) -> Result<String, String> {
+    let (host, port) = host_port(base_url).ok_or_else(|| "bad companion url".to_owned())?;
+    let mut stream = TcpStream::connect((host.as_str(), port)).map_err(|e| e.to_string())?;
+    let _ = stream.set_read_timeout(Some(HTTP_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(HTTP_TIMEOUT));
+    let mut headers = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {secret}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
+        body.len()
+    );
+    for (k, v) in extra_headers {
+        let _ = write!(headers, "{k}: {v}\r\n");
+    }
+    headers.push_str("\r\n");
+    stream
+        .write_all(headers.as_bytes())
+        .map_err(|e| e.to_string())?;
+    if !body.is_empty() {
+        stream
+            .write_all(body.as_bytes())
+            .map_err(|e| e.to_string())?;
+    }
+    let mut buf = String::new();
+    stream.read_to_string(&mut buf).map_err(|e| e.to_string())?;
+    Ok(buf)
+}
+
+fn response_body(raw: &str) -> &str {
+    raw.split("\r\n\r\n").nth(1).unwrap_or("")
+}
+
+fn status_ok(raw: &str) -> bool {
+    raw.starts_with("HTTP/1.1 200") || raw.starts_with("HTTP/1.0 200")
+}
+
+/// Post presence heartbeat for current voice state.
+pub(crate) fn heartbeat(voice: VoiceState) {
+    let Some(target) = resolve_target() else {
+        return;
+    };
+    let body = serde_json::json!({
+        "state": presence_from_voice(voice),
+        "ts_ms": now_ms(),
+    })
+    .to_string();
+    let _ = http_json(
+        &target.base_url,
+        "POST",
+        "/v1/presence",
+        &body,
+        &target.secret,
+        &[],
+    );
+}
+
+/// Query companion effective presence (`present` / … / `offline`).
+pub(crate) fn fetch_presence_state() -> Option<String> {
+    let target = resolve_target()?;
+    let raw = http_json(
+        &target.base_url,
+        "GET",
+        "/v1/presence",
+        "",
+        &target.secret,
+        &[],
+    )
+    .ok()?;
+    if !status_ok(&raw) {
+        return Some("offline".into());
+    }
+    let body = response_body(&raw);
+    let parsed: PresenceResponse = serde_json::from_str(body).ok()?;
+    Some(parsed.state)
+}
+
+/// True when companion reports laptop `present` (fallback: assume present if unreachable so local auto still fires).
+pub(crate) fn companion_says_present() -> bool {
+    match fetch_presence_state().as_deref() {
+        // No companion / unreachable → prefer local for auto.
+        Some("present") | None => true,
+        Some(_) => false,
+    }
+}
+
+/// Claim a fire lease on the companion. Ok(true)=won, Ok(false)=lost, Err=transport.
+pub(crate) fn claim_lease(
+    profile_id: &str,
+    schedule_id: &str,
+    fire_ms: u64,
+    claimer: &str,
+) -> Result<bool, String> {
+    let target = resolve_target().ok_or_else(|| "no companion".to_owned())?;
+    let body = serde_json::json!({
+        "profile_id": profile_id,
+        "schedule_id": schedule_id,
+        "fire_ms": fire_ms,
+        "claimer": claimer,
+        "ttl_ms": 120_000_u64,
+    })
+    .to_string();
+    let raw = http_json(
+        &target.base_url,
+        "POST",
+        "/v1/leases",
+        &body,
+        &target.secret,
+        &[],
+    )?;
+    if status_ok(&raw) {
+        return Ok(true);
+    }
+    if raw.contains(" 409 ") {
+        return Ok(false);
+    }
+    Err(format!("lease http: {}", raw.lines().next().unwrap_or("")))
+}
+
+/// Mirror companion/auto schedules for every profile to the node.
+pub(crate) fn mirror_schedules() {
+    let Some(target) = resolve_target() else {
+        return;
+    };
+    let Ok(profiles) = list_profile_ids() else {
+        return;
+    };
+    for profile_id in profiles {
+        let Ok(path) = resolve_schedules_file(&profile_id) else {
+            continue;
+        };
+        let Ok(mut file) = load_schedules(&path) else {
+            continue;
+        };
+        file.entries.retain(|e| {
+            e.enabled && matches!(e.run_on, ScheduleRunOn::Companion | ScheduleRunOn::Auto)
+        });
+        let body = serde_json::to_string(&file).unwrap_or_else(|_| "{}".into());
+        let path = format!("/v1/schedules/{profile_id}");
+        let _ = http_json(&target.base_url, "PUT", &path, &body, &target.secret, &[]);
+    }
+}
+
+fn cursor_path() -> Option<PathBuf> {
+    let xdg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let config = resolve_config_dir(xdg.as_deref(), home.as_deref()).ok()?;
+    Some(config.join("remote-outbox-cursor.json"))
+}
+
+fn load_cursor(path: &Path) -> OutboxCursor {
+    let Ok(bytes) = std::fs::read(path) else {
+        return OutboxCursor::default();
+    };
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+fn save_cursor(path: &Path, cursor: &OutboxCursor) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(cursor) {
+        let _ = std::fs::write(path, format!("{json}\n"));
+    }
+}
+
+/// Pull new outbox items and append while-away notices per profile.
+pub(crate) fn pull_outbox_into_hud() {
+    let Some(target) = resolve_target() else {
+        return;
+    };
+    let Some(path) = cursor_path() else {
+        return;
+    };
+    let mut cursor = load_cursor(&path);
+    let raw = http_json(
+        &target.base_url,
+        "GET",
+        "/v1/outbox",
+        "",
+        &target.secret,
+        &[
+            ("X-Softwake-Since-Ts", &cursor.last_ts_ms.to_string()),
+            ("X-Softwake-Since-Id", &cursor.last_id),
+        ],
+    );
+    let Ok(raw) = raw else {
+        return;
+    };
+    if !status_ok(&raw) {
+        return;
+    }
+    let body = response_body(&raw);
+    let Ok(parsed) = serde_json::from_str::<OutboxResponse>(body) else {
+        return;
+    };
+    for item in parsed.items {
+        let text = if item.summary.starts_with("While you were away:") {
+            item.summary.clone()
+        } else {
+            format!("While you were away: {}", item.summary)
+        };
+        hud_chat_write::append_assistant_notice(&item.profile_id, &text);
+        if item.ts_ms > cursor.last_ts_ms
+            || (item.ts_ms == cursor.last_ts_ms && item.id > cursor.last_id)
+        {
+            cursor.last_ts_ms = item.ts_ms;
+            cursor.last_id = item.id;
+        }
+        cursor.agent_id.clone_from(&target.agent_id);
+        let _ = item.kind;
+    }
+    save_cursor(&path, &cursor);
+}
+
+/// Background loops: heartbeat, schedule mirror, outbox pull.
+pub(crate) fn spawn_background(shared: &std::sync::Arc<crate::serve::Shared>) {
+    let shared_hb = std::sync::Arc::clone(shared);
+    let _ = std::thread::Builder::new()
+        .name("softwake-ra-heartbeat".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(HEARTBEAT_SECS));
+                let Ok(runtime) = shared_hb.runtime.try_lock() else {
+                    continue;
+                };
+                let voice = runtime.voice_state_for_remote();
+                drop(runtime);
+                heartbeat(voice);
+            }
+        });
+
+    let _ = std::thread::Builder::new()
+        .name("softwake-ra-mirror".into())
+        .spawn(|| {
+            loop {
+                std::thread::sleep(Duration::from_secs(MIRROR_SECS));
+                mirror_schedules();
+            }
+        });
+
+    let _ = std::thread::Builder::new()
+        .name("softwake-ra-outbox".into())
+        .spawn(|| {
+            loop {
+                std::thread::sleep(Duration::from_secs(OUTBOX_SYNC_SECS));
+                pull_outbox_into_hud();
+            }
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn presence_mapping() {
+        assert_eq!(presence_from_voice(VoiceState::Awake), "present");
+        assert_eq!(presence_from_voice(VoiceState::Sleep), "sleeping");
+        assert_eq!(presence_from_voice(VoiceState::Hibernate), "hibernated");
+    }
+}

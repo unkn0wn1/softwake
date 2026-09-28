@@ -102,6 +102,7 @@ pub(crate) fn spawn(
     spawn_schedule_tick(Arc::clone(&shared));
     spawn_telegram_poll(Arc::clone(&shared));
     crate::webhook::spawn(Arc::clone(&shared));
+    crate::remote_agent::spawn_background(&shared);
     let listener = Listener::bind(&path)?;
     if listener.replaced_stale() {
         eprintln!("softwaked: removed stale socket {}", path.display());

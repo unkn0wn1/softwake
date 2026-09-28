@@ -419,6 +419,22 @@ fn now_ms() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
+/// Default softwake-node HTTP port.
+pub const DEFAULT_NODE_PORT: u16 = 8790;
+
+/// Build `http://{hostname}:{port}` for a companion (no trailing slash).
+#[must_use]
+pub fn node_base_url(agent: &RemoteAgentConfig, port: u16) -> String {
+    let host = agent.tailscale_hostname.trim().trim_end_matches('/');
+    format!("http://{host}:{port}")
+}
+
+/// First enabled agent, if any.
+#[must_use]
+pub fn first_enabled_agent(file: &RemoteAgentsFile) -> Option<&RemoteAgentConfig> {
+    file.agents.iter().find(|a| a.enabled)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
