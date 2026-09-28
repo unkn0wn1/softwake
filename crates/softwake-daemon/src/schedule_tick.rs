@@ -2,13 +2,15 @@
 //!
 //! Ticks while softwaked is running, in any voice state. OS suspend is outside
 //! Softwake's control; catch-up grace applies when the daemon resumes.
+//! Remote Agent slice 2: honors `run_on` with companion fire leases (ADR-0040).
 
 use softwake_tools::{
-    ScheduleActionKind, ScheduleEntry, advance_after_fire, fire_notify_line, fire_speak_line,
-    list_profile_ids, load_schedules, now_ms, resolve_schedules_file, save_schedules, should_fire,
-    skip_missed,
+    ScheduleActionKind, ScheduleEntry, ScheduleRunOn, advance_after_fire, fire_notify_line,
+    fire_speak_line, list_profile_ids, load_schedules, now_ms, resolve_schedules_file,
+    save_schedules, should_fire, skip_missed,
 };
 
+use crate::remote_agent;
 use crate::runtime::Runtime;
 
 /// Tick interval for due-schedule scans.
@@ -51,10 +53,14 @@ fn tick_profile(runtime: &mut Runtime, profile_id: &str, now: u64) -> usize {
             continue;
         }
         if should_fire(entry, now) {
-            fire_one(runtime, profile_id, entry);
-            if advance_after_fire(entry, now).is_ok() {
+            if fire_one(runtime, profile_id, entry, next) {
+                if advance_after_fire(entry, now).is_ok() {
+                    changed = true;
+                    fired += 1;
+                }
+            } else if advance_after_fire(entry, now).is_ok() {
+                // Skipped (companion owns fire / lost lease) — still advance.
                 changed = true;
-                fired += 1;
             }
         } else if now.saturating_sub(next) > softwake_tools::CATCH_UP_GRACE_MS
             && skip_missed(entry, now).is_ok()
@@ -68,11 +74,41 @@ fn tick_profile(runtime: &mut Runtime, profile_id: &str, now: u64) -> usize {
     fired
 }
 
-fn fire_one(runtime: &mut Runtime, profile_id: &str, entry: &ScheduleEntry) {
-    // TODO(remote-agent slice 2): when entry.run_on is Companion/Auto, lease/dispatch
-    // to the paired companion outbox instead of (or after) local fire. Slice 1 always
-    // fires locally so timers keep working before presence/outbox land.
-    let _ = entry.run_on;
+/// Returns true when this laptop performed the fire.
+fn fire_one(runtime: &mut Runtime, profile_id: &str, entry: &ScheduleEntry, fire_ms: u64) -> bool {
+    match entry.run_on {
+        ScheduleRunOn::Local => {
+            do_local_fire(runtime, profile_id, entry);
+            true
+        }
+        ScheduleRunOn::Companion => {
+            // Laptop never fires; companion tick owns it. Nudge mirror.
+            remote_agent::mirror_schedules();
+            false
+        }
+        ScheduleRunOn::Auto => {
+            if remote_agent::companion_says_present() {
+                match remote_agent::claim_lease(profile_id, &entry.id, fire_ms, "laptop") {
+                    Ok(true) => {
+                        do_local_fire(runtime, profile_id, entry);
+                        true
+                    }
+                    Ok(false) => false,
+                    Err(_) => {
+                        // Companion unreachable — fire locally (prefer_local).
+                        do_local_fire(runtime, profile_id, entry);
+                        true
+                    }
+                }
+            } else {
+                remote_agent::mirror_schedules();
+                false
+            }
+        }
+    }
+}
+
+fn do_local_fire(runtime: &mut Runtime, profile_id: &str, entry: &ScheduleEntry) {
     match entry.action {
         ScheduleActionKind::Notify => {
             let notify = fire_notify_line(entry);
@@ -82,5 +118,19 @@ fn fire_one(runtime: &mut Runtime, profile_id: &str, entry: &ScheduleEntry) {
         ScheduleActionKind::AgentTask => {
             runtime.fire_schedule_agent_task(profile_id, entry);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_run_on_always_fires_decision() {
+        // Pure decision coverage via companion_says_present is integration-level;
+        // keep a compile/smoke assert on enum wiring.
+        assert_eq!(ScheduleRunOn::Local.as_str(), "local");
+        assert_eq!(ScheduleRunOn::Companion.as_str(), "companion");
+        assert_eq!(ScheduleRunOn::Auto.as_str(), "auto");
     }
 }

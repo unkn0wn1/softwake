@@ -100,6 +100,26 @@ pub(crate) fn append_assistant(profile_id: &str, name: &str, text: &str) {
     );
 }
 
+/// Append a single assistant notice (e.g. while-you-were-away) for `profile_id`.
+pub(crate) fn append_assistant_notice(profile_id: &str, text: &str) {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    let ts = now_ms();
+    append_turns(
+        profile_id,
+        &[InboxTurn {
+            role: "assistant".into(),
+            name: "Softwake".into(),
+            text: trimmed.to_owned(),
+            ts,
+            error: false,
+            note: "while_away".into(),
+        }],
+    );
+}
+
 fn append_turns(profile_id: &str, turns: &[InboxTurn]) {
     let Some(path) = profile_hud_path(profile_id) else {
         return;

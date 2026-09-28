@@ -18,6 +18,7 @@ Operators want Softwake reachable while the laptop sleeps or is away, without tu
 | Timers | Per-row `run_on`: `local` \| `companion` \| `auto` (prefer laptop if present). Default `local` |
 | Outbox | Shared outbox on companion: fire leases + away results; laptop pulls into HUD on wake |
 | Chat | **No** full dual chat sync; outbox → HUD seed only |
+| Scope | **Per-profile** (`profile_id` on schedules/outbox/mirrored pack); OAuth stay laptop-local |
 | Telegram | Sticky single owner — laptop if present, else companion when Tailscale laptop down (grace) |
 | OAuth | Tokens stay laptop-local by default (mirror profiles/skills/timers/memory; not raw OAuth unless later explicit) |
 | Webhook | May target companion on Tailnet later (bearer/HMAC); loopback-only bind on the node's Tailscale IP (see ADR-0038 note) |
@@ -31,9 +32,10 @@ Operators want Softwake reachable while the laptop sleeps or is away, without tu
 | Pairing secret in bag | Live (storage) | Used by installer / mutual auth |
 | Test on Tailnet | Stub status string | `tailscale ping` / SSH BatchMode probe |
 | Conflict policy | Persisted stub enum | Runtime resolver |
-| `run_on` field + Timers UI | Live field; fire still **local** | Companion / auto dispatch + leases |
-| `softwake-node` health + empty outbox | Live stub binary | Real outbox, leases, presence |
-| Outbox → HUD, Telegram sticky owner, OAuth mirror | Docs only | Implement |
+| `run_on` field + Timers UI | Live field; fire still **local** | **Slice 2 (ADR-0040):** honor run_on + leases |
+| `softwake-node` health + empty outbox | Live stub binary | **Slice 2:** presence, leases, durable outbox, schedule mirror |
+| Outbox → HUD | Docs only | **Slice 2:** pull → per-profile HUD while-away |
+| Telegram sticky owner, OAuth mirror, SSH install, HUD profile rail | Docs only | Slice 3+ |
 
 ### Config
 

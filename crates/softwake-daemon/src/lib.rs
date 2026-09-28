@@ -37,6 +37,7 @@ mod mode_confirm;
 mod mode_intent;
 mod pcm;
 mod playback_timeout;
+mod remote_agent;
 mod reply_latch;
 mod runtime;
 mod schedule_intent;

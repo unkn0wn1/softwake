@@ -48,10 +48,11 @@ pub use messengers::{
     save_messengers, take_hud_inbox, wants_ask_fanout, wants_timer_push,
 };
 pub use remote_agents::{
-    MAX_REMOTE_AGENTS, REMOTE_AGENTS_FILE_NAME, RemoteAgentConfig, RemoteAgentRoles,
-    RemoteAgentsError, RemoteAgentsFile, RemoteConflictPolicy, delete_agent, load_remote_agents,
-    parse_conflict_policy, resolve_remote_agents_file, sanitize_remote_agent_id,
-    save_remote_agents, upsert_agent, validate_agent,
+    DEFAULT_NODE_PORT, MAX_REMOTE_AGENTS, REMOTE_AGENTS_FILE_NAME, RemoteAgentConfig,
+    RemoteAgentRoles, RemoteAgentsError, RemoteAgentsFile, RemoteConflictPolicy, delete_agent,
+    first_enabled_agent, load_remote_agents, node_base_url, parse_conflict_policy,
+    resolve_remote_agents_file, sanitize_remote_agent_id, save_remote_agents, upsert_agent,
+    validate_agent,
 };
 pub use schedule::{
     AGENT_TASK_SPEAK_MAX, CATCH_UP_GRACE_MS, CronExpr, MAX_ENTRIES, SCHEDULES_FILE_NAME,

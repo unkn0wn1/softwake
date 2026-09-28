@@ -377,7 +377,7 @@ Default workspace tests do not call the network. Live HTTPS is the `live-http` f
 
 ### Remote Agent (companion)
 
-Always-on Tailscale **companion** on a CT (not a remote core). Settings → **Remote Agent** stores pairing; timers get `run_on`. Slice 1 ships config + UI + `softwake-node` health/outbox stub — see [ADR 0039](docs/ADR-0039-remote-agent.md) and [pairing](docs/remote-agent-pairing.md).
+Always-on Tailscale **companion** on a CT (not a remote core). Settings → **Remote Agent** stores pairing; timers get `run_on` (`local` / `companion` / `auto`). Slice 2 (ADR-0040): laptop heartbeats presence (90s grace → offline), fire leases avoid double-fire, softwake-node mirrors per-profile companion/auto schedules and ticks while the laptop sleeps, and outbox pulls land as HUD “While you were away” notices. OAuth stays laptop-local. See [docs/remote-agent-pairing.md](docs/remote-agent-pairing.md).
 
 ### Webhook wake
 
