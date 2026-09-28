@@ -375,9 +375,9 @@ cargo test -p softwake-providers
 Default workspace tests do not call the network. Live HTTPS is the `live-http` feature.
 
 
-### Remote Agent (companion)
+### Remote Agent (Tailscale installer ADR-0044) (companion)
 
-Always-on Tailscale **companion** on a CT (not a remote core). Settings → **Remote Agent** stores pairing; timers get `run_on` (`local` / `companion` / `auto`). Slice 2 (ADR-0040): presence (90s grace), fire leases, schedule mirror + node tick, outbox → HUD while-away. **Telegram sticky ownership (ADR-0042):** laptop owns the long-poll while present; companion may own when away if the bot token is mirrored to the node vault. **Companion `agent_task` LLM (ADR-0043):** mirrored soul/skills/tools + bounded tool loop (`SOFTWAKE_NODE_XAI_API_KEY` or mirrored vault llm). OAuth stays laptop-local. See [docs/remote-agent-pairing.md](docs/remote-agent-pairing.md).
+Always-on Tailscale **companion** on a CT (not a remote core). Settings → **Remote Agent** stores pairing; **Test on Tailnet** + **Install companion** (ADR-0044) ship `softwake-node` over Tailscale SSH only. Timers get `run_on` (`local` / `companion` / `auto`). Presence / leases / outbox (ADR-0040), Telegram sticky ownership (ADR-0042), companion `agent_task` LLM (ADR-0043). OAuth stays laptop-local. See [docs/remote-agent-pairing.md](docs/remote-agent-pairing.md).
 
 ### Webhook wake
 

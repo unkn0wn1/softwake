@@ -348,6 +348,69 @@ pub fn sanitize_remote_agent_id(raw: &str) -> String {
     out
 }
 
+/// True when `host` is a Tailscale `MagicDNS` name or CGNAT `100.64/10` address.
+///
+/// Rejects URL schemes, non-CGNAT IPv4 literals (public / RFC1918 / loopback), and empty.
+#[must_use]
+pub fn is_tailscale_host(host: &str) -> bool {
+    let host = host.trim().trim_end_matches('/');
+    if host.is_empty() {
+        return false;
+    }
+    let lower = host.to_ascii_lowercase();
+    if lower.contains("://") {
+        return false;
+    }
+    if let Some((a, b, c, d)) = parse_ipv4_octets(host) {
+        return is_tailscale_cgnat_v4(a, b, c, d);
+    }
+    // MagicDNS / DNS label — not an IPv4 literal.
+    true
+}
+
+fn parse_ipv4_octets(host: &str) -> Option<(u8, u8, u8, u8)> {
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    let mut out = [0_u8; 4];
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() || !part.chars().all(|ch| ch.is_ascii_digit()) {
+            return None;
+        }
+        let Ok(v) = part.parse::<u8>() else {
+            return None;
+        };
+        out[i] = v;
+    }
+    Some((out[0], out[1], out[2], out[3]))
+}
+
+fn is_tailscale_cgnat_v4(a: u8, b: u8, _c: u8, _d: u8) -> bool {
+    a == 100 && (64..=127).contains(&b)
+}
+
+/// Validate Tailscale-only host spelling.
+///
+/// # Errors
+///
+/// Empty or non-Tailscale host.
+pub fn assert_tailscale_host(host: &str) -> Result<(), RemoteAgentsError> {
+    let host = host.trim().trim_end_matches('/');
+    if host.is_empty() {
+        return Err(RemoteAgentsError::Invalid(
+            "tailscale_hostname is required (MagicDNS or 100.x)".to_owned(),
+        ));
+    }
+    if !is_tailscale_host(host) {
+        return Err(RemoteAgentsError::Invalid(
+            "tailscale_hostname must be MagicDNS or 100.64.0.0/10 (no public/WAN IP or URL)"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 /// Validate hostname / ssh user fields on an agent.
 ///
 /// # Errors
@@ -359,18 +422,7 @@ pub fn validate_agent(agent: &RemoteAgentConfig) -> Result<(), RemoteAgentsError
             "remote agent id is required".to_owned(),
         ));
     }
-    let host = agent.tailscale_hostname.trim();
-    if host.is_empty() {
-        return Err(RemoteAgentsError::Invalid(
-            "tailscale_hostname is required (MagicDNS or 100.x)".to_owned(),
-        ));
-    }
-    let lower = host.to_ascii_lowercase();
-    if lower.starts_with("http://") || lower.starts_with("https://") || lower.contains("://") {
-        return Err(RemoteAgentsError::Invalid(
-            "tailscale_hostname must be MagicDNS or 100.x (no URL scheme)".to_owned(),
-        ));
-    }
+    assert_tailscale_host(&agent.tailscale_hostname)?;
     if agent.ssh_user.trim().is_empty() || agent.ssh_user.chars().any(char::is_whitespace) {
         return Err(RemoteAgentsError::Invalid(
             "ssh_user is required and must not contain whitespace".to_owned(),
@@ -513,6 +565,40 @@ mod tests {
             },
         );
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn tailscale_host_accepts_cgnat_and_magicdns() {
+        assert!(is_tailscale_host("100.64.1.2"));
+        assert!(is_tailscale_host("100.127.255.255"));
+        assert!(is_tailscale_host("softwake-ct"));
+        assert!(is_tailscale_host("softwake-ct.tail1234.ts.net"));
+    }
+
+    #[test]
+    fn tailscale_host_rejects_public_and_urls() {
+        assert!(!is_tailscale_host(""));
+        assert!(!is_tailscale_host("8.8.8.8"));
+        assert!(!is_tailscale_host("1.2.3.4"));
+        assert!(!is_tailscale_host("10.0.0.1"));
+        assert!(!is_tailscale_host("192.168.1.1"));
+        assert!(!is_tailscale_host("127.0.0.1"));
+        assert!(!is_tailscale_host("https://example.com"));
+        assert!(!is_tailscale_host("http://100.64.1.2"));
+        assert!(
+            validate_agent(&RemoteAgentConfig {
+                id: "n1".into(),
+                name: String::new(),
+                tailscale_hostname: "8.8.8.8".into(),
+                ssh_user: "root".into(),
+                roles: RemoteAgentRoles::default(),
+                conflict_policy: RemoteConflictPolicy::PreferLocal,
+                enabled: true,
+                created_ms: None,
+                updated_ms: None,
+            })
+            .is_err()
+        );
     }
 
     fn tempfile_dir() -> PathBuf {

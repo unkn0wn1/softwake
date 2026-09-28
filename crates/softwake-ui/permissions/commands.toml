@@ -470,5 +470,11 @@ commands.allow = ["remote_agent_clear_secret"]
 
 [[permission]]
 identifier = "allow-remote-agent-test"
-description = "Run the slice-1 Tailnet probe stub for a Remote Agent."
+description = "Run the Tailnet probe (ping/SSH/health) for a Remote Agent."
 commands.allow = ["remote_agent_test"]
+
+[[permission]]
+identifier = "allow-remote-agent-install"
+description = "SSH-install softwake-node on a Tailscale companion (ADR-0044)."
+commands.allow = ["remote_agent_install"]
+

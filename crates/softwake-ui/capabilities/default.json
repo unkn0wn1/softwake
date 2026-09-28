@@ -54,6 +54,7 @@
     "allow-mcp-add-server",
     "allow-mcp-snapshot",
     "allow-remote-agent-test",
+    "allow-remote-agent-install",
     "allow-remote-agent-clear-secret",
     "allow-remote-agent-delete",
     "allow-remote-agent-save",

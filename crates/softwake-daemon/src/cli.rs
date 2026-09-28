@@ -16,7 +16,7 @@ use softwake_state::{CooldownConfig, Machine};
 use softwake_wake::PhraseTable;
 
 use crate::capture::{self, CaptureKind};
-use crate::ctl::{CtlAction, WebhookCtl, WebhookSecretCtl};
+use crate::ctl::{CtlAction, RemoteAgentCtl, WebhookCtl, WebhookSecretCtl};
 use crate::demo::Demo;
 use crate::{ctl, serve};
 
@@ -209,6 +209,10 @@ Usage:
                             local webhook wake config (no daemon socket)
   softwaked ctl webhook-secret set TOKEN | generate | clear
                             store/rotate webhook bearer secret in the secret bag
+  softwaked ctl remote-agent test [id]
+                            Tailnet probe (ping/SSH/health) for a Remote Agent
+  softwaked ctl remote-agent install [id]
+                            SSH-install softwake-node on the companion (Tailscale only)
   softwaked --help          print this help
 
 The demo reads typed commands only and prints "> " before each line.
@@ -474,7 +478,7 @@ fn parse_ctl(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
 fn ctl_command(positional: &[String]) -> Result<CtlAction, String> {
     match positional {
         [] => Err(
-            "ctl needs a command: status, hibernate, resume, wake, sleep, reload-soul, reload-kws, reload-utterance, reload-playback, voice-test, tool, confirm-tool, cancel-tool, ask, chat, webhook, webhook-secret"
+            "ctl needs a command: status, hibernate, resume, wake, sleep, reload-soul, reload-kws, reload-utterance, reload-playback, voice-test, tool, confirm-tool, cancel-tool, ask, chat, webhook, webhook-secret, remote-agent"
                 .to_owned(),
         ),
         [name] if name == "tool" => Err("ctl tool needs a tool name".to_owned()),
@@ -580,6 +584,38 @@ fn ctl_command(positional: &[String]) -> Result<CtlAction, String> {
         [name, _, _, extra, ..] if name == "webhook-secret" => Err(format!(
             "ctl webhook-secret generate|clear take no extra args (got {extra})"
         )),
+        [name] if name == "remote-agent" => Err(
+            "ctl remote-agent needs test or install".to_owned(),
+        ),
+        [name, sub] if name == "remote-agent" => match sub.as_str() {
+            "test" => Ok(CtlAction::RemoteAgent {
+                action: RemoteAgentCtl::Test { id: None },
+            }),
+            "install" => Ok(CtlAction::RemoteAgent {
+                action: RemoteAgentCtl::Install { id: None },
+            }),
+            other => Err(format!(
+                "ctl remote-agent expects test or install (got {other})"
+            )),
+        },
+        [name, sub, id] if name == "remote-agent" => match sub.as_str() {
+            "test" => Ok(CtlAction::RemoteAgent {
+                action: RemoteAgentCtl::Test {
+                    id: Some(id.clone()),
+                },
+            }),
+            "install" => Ok(CtlAction::RemoteAgent {
+                action: RemoteAgentCtl::Install {
+                    id: Some(id.clone()),
+                },
+            }),
+            other => Err(format!(
+                "ctl remote-agent expects test or install (got {other})"
+            )),
+        },
+        [name, _, _, extra, ..] if name == "remote-agent" => Err(format!(
+            "ctl remote-agent takes at most one id (got extra {extra})"
+        )),
         [name] => CtlAction::parse(name).ok_or_else(|| format!("unknown ctl argument {name}")),
         [first, second, ..] => {
             if CtlAction::parse(first).is_none() {
@@ -621,7 +657,7 @@ mod tests {
         Mode, debug_log_requested, help_text, merge_serve_verbosity, parse_args, status_line,
         strip_line_ending,
     };
-    use crate::ctl::{CtlAction, WebhookCtl, WebhookSecretCtl};
+    use crate::ctl::{CtlAction, RemoteAgentCtl, WebhookCtl, WebhookSecretCtl};
 
     #[test]
     fn no_args_is_the_status_mode() {
@@ -1114,6 +1150,39 @@ mod tests {
                 socket: None,
                 command: CtlAction::WebhookSecret {
                     action: WebhookSecretCtl::Generate,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn remote_agent_ctl_parses_test_and_install() {
+        assert_eq!(
+            parse_args([
+                "ctl".to_owned(),
+                "remote-agent".to_owned(),
+                "test".to_owned()
+            ]),
+            Ok(Mode::Ctl {
+                socket: None,
+                command: CtlAction::RemoteAgent {
+                    action: RemoteAgentCtl::Test { id: None },
+                },
+            })
+        );
+        assert_eq!(
+            parse_args([
+                "ctl".to_owned(),
+                "remote-agent".to_owned(),
+                "install".to_owned(),
+                "companion".to_owned()
+            ]),
+            Ok(Mode::Ctl {
+                socket: None,
+                command: CtlAction::RemoteAgent {
+                    action: RemoteAgentCtl::Install {
+                        id: Some("companion".into()),
+                    },
                 },
             })
         );
