@@ -1,4 +1,4 @@
-//! Laptop-side Remote Agent client (presence, schedule mirror, outbox pull).
+//! Laptop-side Remote Agent client (presence, schedule/vault mirror, outbox pull).
 //!
 //! Uses raw TCP HTTP so offline CI does not need `live-http` / ureq.
 
@@ -13,8 +13,9 @@ use softwake_providers::{open_store, resolve_secrets_file};
 use softwake_soul::resolve_config_dir;
 use softwake_state::VoiceState;
 use softwake_tools::{
-    DEFAULT_NODE_PORT, ScheduleRunOn, first_enabled_agent, list_profile_ids, load_remote_agents,
-    load_schedules, node_base_url, resolve_remote_agents_file, resolve_schedules_file,
+    DEFAULT_NODE_PORT, ScheduleRunOn, first_enabled_agent, list_profile_ids, load_messengers,
+    load_remote_agents, load_schedules, node_base_url, resolve_messengers_file,
+    resolve_remote_agents_file, resolve_schedules_file,
 };
 
 use crate::hud_chat_write;
@@ -152,6 +153,18 @@ fn status_ok(raw: &str) -> bool {
     raw.starts_with("HTTP/1.1 200") || raw.starts_with("HTTP/1.0 200")
 }
 
+/// True when an enabled companion is configured (pairing may still be missing).
+#[must_use]
+pub(crate) fn companion_enabled() -> bool {
+    let Ok(path) = resolve_remote_agents_file() else {
+        return false;
+    };
+    let Ok(file) = load_remote_agents(&path) else {
+        return false;
+    };
+    file.has_enabled_companion()
+}
+
 /// Post presence heartbeat for current voice state.
 pub(crate) fn heartbeat(voice: VoiceState) {
     let Some(target) = resolve_target() else {
@@ -232,6 +245,74 @@ pub(crate) fn claim_lease(
         return Ok(false);
     }
     Err(format!("lease http: {}", raw.lines().next().unwrap_or("")))
+}
+
+/// Mirror Telegram bot token, optional xAI key, and per-profile messengers to the node vault.
+pub(crate) fn mirror_telegram_vault() {
+    let Some(target) = resolve_target() else {
+        return;
+    };
+    let Ok(secrets_path) = resolve_secrets_file() else {
+        return;
+    };
+    let Ok(store) = open_store(&secrets_path) else {
+        return;
+    };
+    let Ok(bag) = store.load() else {
+        return;
+    };
+    let token = bag
+        .telegram_bot_token
+        .as_ref()
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty());
+    let body = match token {
+        Some(t) => serde_json::json!({"telegram_bot_token": t}).to_string(),
+        None => serde_json::json!({"telegram_bot_token": null}).to_string(),
+    };
+    let _ = http_json(
+        &target.base_url,
+        "PUT",
+        "/v1/vault/telegram",
+        &body,
+        &target.secret,
+        &[],
+    );
+    let xai = bag
+        .xai_api_key
+        .as_ref()
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty());
+    let llm_body = match xai {
+        Some(k) => serde_json::json!({"xai_api_key": k}).to_string(),
+        None => serde_json::json!({"xai_api_key": null}).to_string(),
+    };
+    let _ = http_json(
+        &target.base_url,
+        "PUT",
+        "/v1/vault/llm",
+        &llm_body,
+        &target.secret,
+        &[],
+    );
+    let Ok(profiles) = list_profile_ids() else {
+        return;
+    };
+    for profile_id in profiles {
+        let Ok(path) = resolve_messengers_file(&profile_id) else {
+            continue;
+        };
+        let Ok(file) = load_messengers(&path) else {
+            continue;
+        };
+        let Ok(body) = serde_json::to_string(&file) else {
+            continue;
+        };
+        let api = format!("/v1/profiles/{profile_id}/messengers");
+        let _ = http_json(&target.base_url, "PUT", &api, &body, &target.secret, &[]);
+    }
+    // Best-effort ownership claim when Awake so node releases promptly.
+    // Presence heartbeat is the primary signal; this is a nudge.
 }
 
 /// Mirror companion/auto schedules for every profile to the node.
@@ -353,6 +434,7 @@ pub(crate) fn spawn_background(shared: &std::sync::Arc<crate::serve::Shared>) {
             loop {
                 std::thread::sleep(Duration::from_secs(MIRROR_SECS));
                 mirror_schedules();
+                mirror_telegram_vault();
             }
         });
 

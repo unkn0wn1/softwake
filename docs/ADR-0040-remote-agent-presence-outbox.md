@@ -49,7 +49,7 @@ Mutating / outbox / presence / lease / schedule endpoints require `Authorization
 
 ## Out of scope (slice 3+)
 
-- Full Telegram sticky ownership takeover  
+- Full Telegram sticky ownership takeover — **done in ADR-0042**  
 - SSH installer of softwake-node  
 - OAuth token mirror / vault bidirectional sync  
 - HUD left-rail profile list (click → switch active profile + `/refresh`) — UI slice later  

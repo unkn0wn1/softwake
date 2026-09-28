@@ -636,6 +636,20 @@ fn spawn_telegram_poll(shared: Arc<Shared>) {
                     thread::sleep(std::time::Duration::from_secs(5));
                     continue;
                 }
+                // Sticky ownership (ADR-0042): when a companion is enabled, laptop
+                // only long-polls while Awake (presence=present). Sleep/Hibernate
+                // relinquish so softwake-node can own the poll.
+                let companion_enabled = crate::remote_agent::companion_enabled();
+                let Ok(runtime) = shared.runtime.try_lock() else {
+                    thread::sleep(std::time::Duration::from_millis(200));
+                    continue;
+                };
+                let voice = runtime.voice_state_for_remote();
+                drop(runtime);
+                if !crate::telegram::laptop_should_own_telegram(companion_enabled, voice) {
+                    thread::sleep(std::time::Duration::from_secs(1));
+                    continue;
+                }
                 // Hold the runtime lock only while answering; getUpdates blocks outside.
                 let updates = {
                     // poll_once calls ask synchronously; lock inside ask closure.

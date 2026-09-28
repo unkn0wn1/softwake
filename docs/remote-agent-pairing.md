@@ -15,9 +15,13 @@ See [ADR-0039](ADR-0039-remote-agent.md) and [ADR-0040](ADR-0040-remote-agent-pr
 | `run_on` local / companion / auto + fire leases | **Live** |
 | Schedule mirror + node tick (fires while laptop asleep) | **Live** |
 | Outbox → per-profile HUD “While you were away” | **Live** |
-| Companion `agent_task` full LLM | **Stub summary** (slice 3) |
+| Companion `agent_task` full LLM | **Stub summary** (later) |
+| Telegram bot token + messengers mirror to node vault | **Live** (required for companion Telegram) |
+| Node LLM key (`SOFTWAKE_NODE_XAI_API_KEY` or mirrored xAI key) | **Optional** (stub reply without it) |
 | Test on Tailnet button / SSH installer | **Stub** |
-| Telegram sticky owner / OAuth mirror / HUD left-rail profiles | **Slice 3+** |
+| Telegram sticky ownership (laptop present / companion away) | **Live** (ADR-0042) |
+| OAuth mirror | **Out** (opt-in later) |
+| HUD left-rail profiles | **Live** (ADR-0041) |
 
 ## Pairing flow
 
