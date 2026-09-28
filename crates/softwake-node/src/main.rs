@@ -336,9 +336,9 @@ fn route(
         }
         ("PUT", "/v1/vault/llm") => {
             let v: serde_json::Value = serde_json::from_str(&req.body).unwrap_or(json!({}));
-            let key =
-                v.get("xai_api_key")
-                    .and_then(|x| if x.is_null() { None } else { x.as_str() });
+            let key = v
+                .get("xai_api_key")
+                .and_then(|x| if x.is_null() { None } else { x.as_str() });
             state.set_xai_api_key(key);
             write_response(
                 stream,
