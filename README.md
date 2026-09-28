@@ -377,7 +377,7 @@ Default workspace tests do not call the network. Live HTTPS is the `live-http` f
 
 ### Remote Agent (companion)
 
-Always-on Tailscale **companion** on a CT (not a remote core). Settings → **Remote Agent** stores pairing; timers get `run_on` (`local` / `companion` / `auto`). Slice 2 (ADR-0040): laptop heartbeats presence (90s grace → offline), fire leases avoid double-fire, softwake-node mirrors per-profile companion/auto schedules and ticks while the laptop sleeps, and outbox pulls land as HUD “While you were away” notices. OAuth stays laptop-local. See [docs/remote-agent-pairing.md](docs/remote-agent-pairing.md).
+Always-on Tailscale **companion** on a CT (not a remote core). Settings → **Remote Agent** stores pairing; timers get `run_on` (`local` / `companion` / `auto`). Slice 2 (ADR-0040): presence (90s grace), fire leases, schedule mirror + node tick, outbox → HUD while-away. **Telegram sticky ownership (ADR-0042):** laptop owns the long-poll while present; companion may own when away if the bot token is mirrored to the node vault (optional `SOFTWAKE_NODE_XAI_API_KEY` for real away-replies; else stub). OAuth stays laptop-local. See [docs/remote-agent-pairing.md](docs/remote-agent-pairing.md).
 
 ### Webhook wake
 

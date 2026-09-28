@@ -1,13 +1,14 @@
-//! Softwake companion node (Remote Agent / ADR-0039 + ADR-0040).
+//! Softwake companion node (Remote Agent / ADR-0039 + ADR-0040 + ADR-0042).
 //!
 //! Slice 2: presence heartbeats, fire leases, durable outbox, per-profile
-//! schedule mirror + tick. Bind via `SOFTWAKE_NODE_LISTEN` (default
+//! schedule mirror + tick, Telegram sticky ownership. Bind via `SOFTWAKE_NODE_LISTEN` (default
 //! `127.0.0.1:8790`). Production binds the node's Tailscale IP only.
 //! Auth: `SOFTWAKE_NODE_PAIRING_SECRET` + Bearer / X-Softwake-Remote-Token.
 
 mod auth;
 mod http;
 mod state;
+mod telegram;
 
 use std::env;
 use std::net::TcpListener;
@@ -47,6 +48,7 @@ fn main() {
                 }
             });
     }
+    crate::telegram::spawn(Arc::clone(&state));
     let listener = TcpListener::bind(&listen).unwrap_or_else(|error| {
         eprintln!("softwake-node: bind {listen} failed: {error}");
         std::process::exit(1);
@@ -281,6 +283,92 @@ fn route(
             let body = json!({"ok": true, "id": id}).to_string();
             write_response(stream, 200, "application/json", &body)
         }
+
+        ("GET", "/v1/telegram/ownership") => {
+            let now = NodeState::now_ms();
+            let (owner, presence, has_token) = state.telegram_ownership_snapshot(now);
+            let body = json!({
+                "owner": owner.as_str(),
+                "presence": presence.state.as_str(),
+                "last_heartbeat_ms": presence.last_heartbeat_ms,
+                "has_token": has_token,
+                "grace_ms": PRESENCE_GRACE_MS,
+            })
+            .to_string();
+            write_response(stream, 200, "application/json", &body)
+        }
+        ("POST", "/v1/telegram/ownership") => {
+            let v: serde_json::Value = serde_json::from_str(&req.body).unwrap_or(json!({}));
+            let claimer = v
+                .get("claimer")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_owned();
+            let now = NodeState::now_ms();
+            match state.claim_telegram_owner(&claimer, now) {
+                Ok(owner) => {
+                    let body = json!({"ok": true, "owner": owner.as_str()}).to_string();
+                    write_response(stream, 200, "application/json", &body)
+                }
+                Err((owner, reason)) => {
+                    let body = json!({
+                        "ok": false,
+                        "owner": owner.as_str(),
+                        "reason": reason,
+                    })
+                    .to_string();
+                    write_response(stream, 409, "application/json", &body)
+                }
+            }
+        }
+        ("PUT", "/v1/vault/telegram") => {
+            let v: serde_json::Value = serde_json::from_str(&req.body).unwrap_or(json!({}));
+            let token = v
+                .get("telegram_bot_token")
+                .and_then(|x| if x.is_null() { None } else { x.as_str() });
+            state.set_telegram_bot_token(token);
+            write_response(
+                stream,
+                200,
+                "application/json",
+                &json!({"ok": true, "has_token": state.has_telegram_token()}).to_string(),
+            )
+        }
+        ("PUT", "/v1/vault/llm") => {
+            let v: serde_json::Value = serde_json::from_str(&req.body).unwrap_or(json!({}));
+            let key = v
+                .get("xai_api_key")
+                .and_then(|x| if x.is_null() { None } else { x.as_str() });
+            state.set_xai_api_key(key);
+            write_response(
+                stream,
+                200,
+                "application/json",
+                &json!({"ok": true, "has_key": state.xai_api_key().is_some()}).to_string(),
+            )
+        }
+        ("PUT", path) if path.starts_with("/v1/profiles/") && path.ends_with("/messengers") => {
+            let rest = path
+                .trim_start_matches("/v1/profiles/")
+                .trim_end_matches("/messengers")
+                .trim_end_matches('/');
+            if rest.is_empty() || rest.contains('/') {
+                return write_response(
+                    stream,
+                    400,
+                    "application/json",
+                    "{\"ok\":false,\"error\":\"bad profile_id\"}",
+                );
+            }
+            match state.put_messengers(rest, &req.body) {
+                Ok(()) => write_response(stream, 200, "application/json", "{\"ok\":true}"),
+                Err(error) => {
+                    let body = json!({"ok": false, "error": error}).to_string();
+                    write_response(stream, 400, "application/json", &body)
+                }
+            }
+        }
+
         _ => {
             if matches!(req.method.as_str(), "GET" | "POST" | "PUT") {
                 write_response(stream, 404, "text/plain", "not found\n")

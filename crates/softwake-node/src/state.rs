@@ -1,4 +1,5 @@
-//! Durable companion state: presence, leases, outbox, mirrored schedules.
+//! Durable companion state: presence, leases, outbox, mirrored schedules,
+//! Telegram sticky ownership + mirrored vault (bot token / optional LLM key).
 
 use std::collections::HashMap;
 use std::fs;
@@ -36,6 +37,25 @@ impl PresenceState {
             Self::Sleeping => "sleeping",
             Self::Hibernated => "hibernated",
             Self::Offline => "offline",
+        }
+    }
+}
+
+/// Who currently should own the Telegram long-poll.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TelegramOwner {
+    None,
+    Laptop,
+    Companion,
+}
+
+impl TelegramOwner {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Laptop => "laptop",
+            Self::Companion => "companion",
         }
     }
 }
@@ -89,6 +109,8 @@ pub struct NodeState {
     outbox: Mutex<Vec<OutboxItem>>,
     /// `profile_id` → schedules
     schedules: Mutex<HashMap<String, SchedulesFile>>,
+    /// Last claimed sticky owner (presence still wins for eligibility).
+    telegram_owner: Mutex<TelegramOwner>,
 }
 
 impl NodeState {
@@ -101,12 +123,14 @@ impl NodeState {
         let leases = load_leases(&data_dir);
         let outbox = load_outbox(&data_dir);
         let schedules = load_all_schedules(&data_dir);
+        let telegram_owner = load_telegram_owner(&data_dir);
         Self {
             data_dir,
             presence: Mutex::new(presence),
             leases: Mutex::new(leases),
             outbox: Mutex::new(outbox),
             schedules: Mutex::new(schedules),
+            telegram_owner: Mutex::new(telegram_owner),
         }
     }
 
@@ -317,6 +341,159 @@ impl NodeState {
         }
         fired
     }
+
+    /// Desired Telegram owner from presence + mirrored token.
+    pub fn desired_telegram_owner(&self, now: u64) -> TelegramOwner {
+        if !self.has_telegram_token() {
+            // Solo / no mirror: laptop will keep polling when awake; companion cannot.
+            if self.laptop_is_present(now) {
+                return TelegramOwner::Laptop;
+            }
+            return TelegramOwner::None;
+        }
+        if self.laptop_is_present(now) {
+            TelegramOwner::Laptop
+        } else {
+            TelegramOwner::Companion
+        }
+    }
+
+    pub fn telegram_ownership_snapshot(&self, now: u64) -> (TelegramOwner, PresenceRecord, bool) {
+        let desired = self.desired_telegram_owner(now);
+        let presence = self.effective_presence(now);
+        let has_token = self.has_telegram_token();
+        // Align stored owner with desired whenever queried.
+        {
+            let mut g = self.telegram_owner.lock().expect("tg owner");
+            if *g != desired {
+                *g = desired;
+                persist_telegram_owner(&self.data_dir, desired);
+            }
+        }
+        (desired, presence, has_token)
+    }
+
+    /// Claim sticky ownership. `Ok(owner)` or `Err((owner, reason))`.
+    pub fn claim_telegram_owner(
+        &self,
+        claimer: &str,
+        now: u64,
+    ) -> Result<TelegramOwner, (TelegramOwner, String)> {
+        let desired = self.desired_telegram_owner(now);
+        let want = match claimer {
+            "laptop" => TelegramOwner::Laptop,
+            "companion" => TelegramOwner::Companion,
+            _ => return Err((desired, "bad claimer".into())),
+        };
+        if want != desired {
+            return Err((desired, format!("desired owner is {}", desired.as_str())));
+        }
+        let mut g = self.telegram_owner.lock().expect("tg owner");
+        *g = want;
+        persist_telegram_owner(&self.data_dir, want);
+        Ok(want)
+    }
+
+    pub fn has_telegram_token(&self) -> bool {
+        read_vault_secret(&self.data_dir, "telegram_bot_token")
+            .is_some_and(|t| !t.trim().is_empty())
+    }
+
+    pub fn telegram_bot_token(&self) -> Option<String> {
+        read_vault_secret(&self.data_dir, "telegram_bot_token")
+            .map(|t| t.trim().to_owned())
+            .filter(|t| !t.is_empty())
+    }
+
+    pub fn set_telegram_bot_token(&self, token: Option<&str>) {
+        write_vault_secret(
+            &self.data_dir,
+            "telegram_bot_token",
+            token.map(str::trim).filter(|t| !t.is_empty()),
+        );
+        // Recompute owner after token change.
+        let now = Self::now_ms();
+        let _ = self.telegram_ownership_snapshot(now);
+    }
+
+    pub fn xai_api_key(&self) -> Option<String> {
+        if let Ok(env) = std::env::var("SOFTWAKE_NODE_XAI_API_KEY") {
+            let t = env.trim().to_owned();
+            if !t.is_empty() {
+                return Some(t);
+            }
+        }
+        read_vault_secret(&self.data_dir, "xai_api_key")
+            .map(|t| t.trim().to_owned())
+            .filter(|t| !t.is_empty())
+    }
+
+    pub fn set_xai_api_key(&self, key: Option<&str>) {
+        write_vault_secret(
+            &self.data_dir,
+            "xai_api_key",
+            key.map(str::trim).filter(|t| !t.is_empty()),
+        );
+    }
+
+    pub fn put_messengers(&self, profile_id: &str, body: &str) -> Result<(), String> {
+        let parsed: softwake_tools::MessengersFile =
+            serde_json::from_str(body).map_err(|e| e.to_string())?;
+        let path = profile_messengers_path(&self.data_dir, profile_id);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let json = serde_json::to_string_pretty(&parsed).map_err(|e| e.to_string())?;
+        write_mode_0600(&path, &format!("{json}\n")).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn load_messengers(&self, profile_id: &str) -> softwake_tools::MessengersFile {
+        let path = profile_messengers_path(&self.data_dir, profile_id);
+        let Ok(bytes) = fs::read(&path) else {
+            return softwake_tools::MessengersFile::default();
+        };
+        serde_json::from_slice(&bytes).unwrap_or_default()
+    }
+
+    pub fn find_profile_for_chat(&self, chat_id: &str) -> String {
+        let root = self.data_dir.join("profiles");
+        let Ok(entries) = fs::read_dir(&root) else {
+            return "default".into();
+        };
+        for entry in entries.flatten() {
+            if !matches!(entry.file_type().map(|t| t.is_dir()), Ok(true)) {
+                continue;
+            }
+            let profile_id = entry.file_name().to_string_lossy().into_owned();
+            let file = self.load_messengers(&profile_id);
+            if file
+                .telegram
+                .chat_id
+                .as_ref()
+                .is_some_and(|id| id.trim() == chat_id.trim())
+            {
+                return profile_id;
+            }
+        }
+        "default".into()
+    }
+
+    pub fn bind_chat_id(&self, profile_id: &str, chat_id: &str) {
+        let mut file = self.load_messengers(profile_id);
+        let needs = file
+            .telegram
+            .chat_id
+            .as_ref()
+            .is_none_or(|c| c.trim().is_empty());
+        if needs {
+            file.telegram.chat_id = Some(chat_id.to_owned());
+            file.telegram.enabled = true;
+            if let Ok(json) = serde_json::to_string_pretty(&file) {
+                let _ = self.put_messengers(profile_id, &json);
+            }
+        }
+    }
 }
 
 fn truncate(text: &str, max: usize) -> String {
@@ -376,6 +553,66 @@ fn persist_leases(dir: &Path, map: &HashMap<String, LeaseRecord>) {
         leases: map.values().cloned().collect(),
     };
     if let Ok(json) = serde_json::to_string_pretty(&file) {
+        let _ = fs::write(path, format!("{json}\n"));
+    }
+}
+
+fn profile_messengers_path(dir: &Path, profile_id: &str) -> PathBuf {
+    dir.join("profiles")
+        .join(profile_id)
+        .join("messengers.json")
+}
+
+fn vault_dir(dir: &Path) -> PathBuf {
+    dir.join("vault")
+}
+
+fn read_vault_secret(dir: &Path, name: &str) -> Option<String> {
+    let path = vault_dir(dir).join(name);
+    fs::read_to_string(path).ok()
+}
+
+fn write_vault_secret(dir: &Path, name: &str, value: Option<&str>) {
+    let root = vault_dir(dir);
+    let _ = fs::create_dir_all(&root);
+    let path = root.join(name);
+    match value {
+        Some(v) => {
+            let _ = write_mode_0600(&path, &format!("{v}\n"));
+        }
+        None => {
+            let _ = fs::remove_file(&path);
+        }
+    }
+}
+
+fn write_mode_0600(path: &Path, contents: &str) -> std::io::Result<()> {
+    fs::write(path, contents)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct TelegramOwnerFile {
+    owner: TelegramOwner,
+}
+
+fn load_telegram_owner(dir: &Path) -> TelegramOwner {
+    let path = data_file(dir, "telegram-ownership.json");
+    let Ok(bytes) = fs::read(&path) else {
+        return TelegramOwner::None;
+    };
+    serde_json::from_slice::<TelegramOwnerFile>(&bytes).map_or(TelegramOwner::None, |f| f.owner)
+}
+
+fn persist_telegram_owner(dir: &Path, owner: TelegramOwner) {
+    let path = data_file(dir, "telegram-ownership.json");
+    let body = serde_json::json!({"owner": owner});
+    if let Ok(json) = serde_json::to_string_pretty(&body) {
         let _ = fs::write(path, format!("{json}\n"));
     }
 }
@@ -509,5 +746,47 @@ mod tests {
         let items = state.outbox_since(0, None);
         assert!(!items.is_empty());
         assert!(items[0].summary.contains("timer"));
+    }
+
+    #[test]
+    fn telegram_owner_follows_presence_and_token() {
+        let dir = std::env::temp_dir().join(format!("sw-node-tg-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let _guard = DropDir(dir.clone());
+        let state = NodeState::open(dir);
+        let now = NodeState::now_ms();
+        // no token, offline → none
+        assert_eq!(state.desired_telegram_owner(now), TelegramOwner::None);
+        state.set_telegram_bot_token(Some("123:ABC"));
+        assert!(state.has_telegram_token());
+        // offline + token → companion
+        assert_eq!(state.desired_telegram_owner(now), TelegramOwner::Companion);
+        state.set_presence(PresenceState::Present, now);
+        assert_eq!(state.desired_telegram_owner(now), TelegramOwner::Laptop);
+        state.set_presence(PresenceState::Sleeping, now);
+        assert_eq!(state.desired_telegram_owner(now), TelegramOwner::Companion);
+        let claimed = state.claim_telegram_owner("companion", now).expect("claim");
+        assert_eq!(claimed, TelegramOwner::Companion);
+        let err = state
+            .claim_telegram_owner("laptop", now)
+            .expect_err("laptop blocked");
+        assert_eq!(err.0, TelegramOwner::Companion);
+        state.set_telegram_bot_token(None);
+        assert!(!state.has_telegram_token());
+    }
+
+    #[test]
+    fn messengers_mirror_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("sw-node-msg-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let _guard = DropDir(dir.clone());
+        let state = NodeState::open(dir);
+        let body = r#"{"version":1,"desktop":{"default":true,"receive_all":true,"voice":true},"telegram":{"enabled":true,"default":true,"receive_all":false,"voice":false,"chat_id":"42"}}"#;
+        state.put_messengers("default", body).unwrap();
+        let file = state.load_messengers("default");
+        assert_eq!(file.telegram.chat_id.as_deref(), Some("42"));
+        assert_eq!(state.find_profile_for_chat("42"), "default");
     }
 }

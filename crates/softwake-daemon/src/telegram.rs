@@ -15,6 +15,22 @@ const API_ROOT: &str = "https://api.telegram.org";
 /// Long-poll timeout passed to Telegram `getUpdates`.
 pub(crate) const POLL_TIMEOUT_SECS: u64 = 25;
 
+/// Pure decision: should the laptop long-poll Telegram right now?
+///
+/// - No token → false (caller also checks).
+/// - No enabled companion → true (solo laptop).
+/// - Companion enabled → only when voice is Awake (presence=present).
+#[must_use]
+pub(crate) fn laptop_should_own_telegram(
+    companion_enabled: bool,
+    voice: softwake_state::VoiceState,
+) -> bool {
+    if !companion_enabled {
+        return true;
+    }
+    matches!(voice, softwake_state::VoiceState::Awake)
+}
+
 /// Load the bot token from the secret bag (never logged).
 pub(crate) fn load_bot_token() -> Option<String> {
     let path = resolve_secrets_file().ok()?;
@@ -397,5 +413,20 @@ mod tests {
     #[test]
     fn clip_limits_chars() {
         assert_eq!(clip("abcd", 2), "ab");
+    }
+}
+
+#[cfg(test)]
+mod sticky_tests {
+    use super::laptop_should_own_telegram;
+    use softwake_state::VoiceState;
+
+    #[test]
+    fn laptop_should_own_matrix() {
+        assert!(laptop_should_own_telegram(false, VoiceState::Sleep));
+        assert!(laptop_should_own_telegram(false, VoiceState::Hibernate));
+        assert!(laptop_should_own_telegram(true, VoiceState::Awake));
+        assert!(!laptop_should_own_telegram(true, VoiceState::Sleep));
+        assert!(!laptop_should_own_telegram(true, VoiceState::Hibernate));
     }
 }

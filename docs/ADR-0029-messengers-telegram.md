@@ -128,3 +128,7 @@ When both the desktop HUD and Telegram are configured for the profile:
 - Operators create a Telegram bot via BotFather, paste the token in Messengers,
   message the bot once to bind `chat_id`, then set Default / Receive all / Voice.
 - Encrypted vaults rely on inbox merge; plaintext vaults get direct appends.
+
+## Remote Agent sticky ownership
+
+When a Remote Agent companion is enabled, only one surface long-polls Telegram at a time (laptop while present; companion while sleeping/hibernated/offline). See [ADR-0042](ADR-0042-telegram-sticky-ownership.md).
