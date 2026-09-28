@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Remote Agent (slice 1):** always-on Tailscale companion pairing — ADR-0039, Settings → Remote Agent (name / MagicDNS / SSH user / roles / conflict policy stub / pairing secret), `remote-agents.json` + bag secrets, per-timer `run_on` (`local`\|`companion`\|`auto`, default local; fire still local), and a minimal `softwake-node` health + empty outbox stub. Presence, outbox→HUD, Telegram sticky owner deferred. See [ADR-0039](docs/ADR-0039-remote-agent.md) and [pairing docs](docs/remote-agent-pairing.md).
+
 - **Authenticated webhook wake:** opt-in local `POST /v1/wake` on `127.0.0.1` (default port 8787) with Bearer / `X-Softwake-Webhook-Token` shared secret stored in the secret bag. Valid requests wake from sleep (same soul gate as `ctl wake`); optional JSON `message` runs a bounded inbound ask; hibernate returns HTTP 409 (no auto-resume). Configure with `softwaked ctl webhook` / `webhook-secret`. See [ADR-0038](docs/ADR-0038-webhook-wake.md).
 
 - **Memory write tools:** confirm-gated `remember` (default Always allow) and `forget` (default Ask, including `forget all`) so the agent can persist and remove long-term memory facts from voice/Telegram/HUD. First successful `remember` creates `memory.json` under the Softwake state directory; ask/chat budgeted recall then sees new facts. No Honcho / vector DB; store stays the simple disk file ([ADR 0009](docs/ADR-0009-long-term-memory.md)). See [ADR-0037](docs/ADR-0037-memory-write-tools.md).

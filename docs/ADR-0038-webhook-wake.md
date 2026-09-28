@@ -62,3 +62,8 @@ To expose Softwake beyond the machine, terminate TLS on a reverse proxy, require
 - External automations (n8n, cron elsewhere, email rules) can wake Softwake without the mic when the operator opts in.
 - Hibernate remains a hard “leave me alone” mode for webhooks as well as voice.
 - Skills and tool policy still apply to any message-driven turn ([ADR 0014](ADR-0014-skills-hub.md), [ADR 0010](ADR-0010-policy-engine.md)).
+
+## Amendment (2026-09-28) — companion Tailnet target
+
+A future Remote Agent companion may accept webhook wake on the node's **Tailscale IP** (still loopback-style / Tailnet-only bind — never public WAN). See [ADR-0039](ADR-0039-remote-agent.md). Slice 1 does not change the laptop `127.0.0.1` bind.
+

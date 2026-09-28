@@ -37,6 +37,11 @@
           <ul id="mcp-sub-list" class="nav-sub-list" role="listbox" aria-label="MCP servers"></ul>
           <button type="button" class="nav-sub-action btn-compact" id="mcp-sub-new" title="Add MCP server">+ New</button>
         </div>
+        <button type="button" class="nav" id="nav-remote-agent" data-pane="remote-agent">Remote Agent</button>
+        <div id="remote-agent-subnav" class="nav-sub hidden" hidden>
+          <ul id="remote-agent-sub-list" class="nav-sub-list" role="listbox" aria-label="Remote agents"></ul>
+          <button type="button" class="nav-sub-action btn-compact" id="remote-agent-sub-new" title="Add remote agent">+ New</button>
+        </div>
         <button type="button" class="nav" id="nav-email" data-pane="email">Email</button>
         <button type="button" class="nav" id="nav-status" data-pane="status" aria-current="page">Status</button>
       </nav>
@@ -356,6 +361,13 @@
               <option value="once">once</option>
               <option value="cron">cron</option>
             </select>
+            <label for="timers-run-on">Run on</label>
+            <select id="timers-run-on" title="Companion / auto dispatch is slice 2; fires still run locally in this build">
+              <option value="local">local (laptop)</option>
+              <option value="companion" disabled>companion (needs Remote Agent)</option>
+              <option value="auto" disabled>auto (prefer laptop)</option>
+            </select>
+            <p id="timers-run-on-hint" class="meta">Companion options unlock when a Remote Agent is enabled. Slice 1 still fires locally.</p>
           </div>
           <div class="field">
             <label for="timers-when">When</label>
@@ -555,6 +567,66 @@
           </div>
           <p id="mcp-status" class="meta" aria-live="polite"></p>
           <p id="mcp-error" class="error" role="alert"></p>
+        </section>
+
+        
+        <section id="pane-remote-agent" class="pane glass hidden" hidden aria-labelledby="remote-agent-title">
+          <h2 id="remote-agent-title">Remote Agent</h2>
+          <p class="lede">
+            Always-on <strong>companion</strong> on a Proxmox CT over <strong>Tailscale only</strong> (MagicDNS / 100.x).
+            Laptop softwaked + UI + KWS + keyring stay primary. Not a remote core or thin client.
+            See pairing docs / ADR-0039. Install of softwake-node is slice 2; this page stores pairing config now.
+          </p>
+          <p id="remote-agent-storage" class="meta">Storage: …</p>
+          <p class="meta">Pick an agent in the left sub-list.</p>
+          <div class="field">
+            <label for="remote-agent-id">Id</label>
+            <input id="remote-agent-id" type="text" maxlength="32" autocomplete="off" spellcheck="false" placeholder="companion" />
+          </div>
+          <div class="field">
+            <label for="remote-agent-name">Name</label>
+            <input id="remote-agent-name" type="text" maxlength="120" autocomplete="off" placeholder="Home CT" />
+          </div>
+          <div class="field">
+            <label for="remote-agent-hostname">Tailscale hostname</label>
+            <input id="remote-agent-hostname" type="text" maxlength="253" autocomplete="off" spellcheck="false" placeholder="softwake-ct or 100.x.y.z" />
+          </div>
+          <div class="field">
+            <label for="remote-agent-ssh-user">SSH user</label>
+            <input id="remote-agent-ssh-user" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="root" />
+          </div>
+          <fieldset class="field">
+            <legend>Roles</legend>
+            <label class="row"><input type="checkbox" id="remote-agent-role-timers" checked /> <span>Timers</span></label>
+            <label class="row"><input type="checkbox" id="remote-agent-role-outbox" checked /> <span>Outbox</span></label>
+            <label class="row"><input type="checkbox" id="remote-agent-role-webhook" /> <span>Webhook wake (Tailnet)</span></label>
+            <label class="row"><input type="checkbox" id="remote-agent-role-telegram" disabled /> <span>Telegram owner (slice 2)</span></label>
+          </fieldset>
+          <div class="field">
+            <label for="remote-agent-conflict">Conflict policy (stub)</label>
+            <select id="remote-agent-conflict">
+              <option value="prefer_local">Prefer local (laptop)</option>
+              <option value="prefer_companion">Prefer companion</option>
+              <option value="manual">Manual</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="remote-agent-secret">Pairing secret</label>
+            <input id="remote-agent-secret" type="password" autocomplete="new-password" placeholder="leave blank to keep" />
+            <p id="remote-agent-secret-status" class="meta">Secret: …</p>
+          </div>
+          <label class="row">
+            <input type="checkbox" id="remote-agent-enabled" />
+            <span>Enabled</span>
+          </label>
+          <div class="row gap">
+            <button type="button" class="btn" id="remote-agent-save">Save</button>
+            <button type="button" class="btn" id="remote-agent-test">Test on Tailnet</button>
+            <button type="button" class="btn" id="remote-agent-clear-secret">Clear secret</button>
+            <button type="button" class="btn" id="remote-agent-delete">Delete</button>
+          </div>
+          <p id="remote-agent-status" class="meta" aria-live="polite"></p>
+          <p id="remote-agent-error" class="error" role="alert"></p>
         </section>
 
         <section id="pane-email" class="pane glass hidden" hidden aria-labelledby="email-title">

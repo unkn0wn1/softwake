@@ -8,8 +8,9 @@
 use serde::{Deserialize, Serialize};
 use softwake_soul::{list_profiles, load_app_config, resolve_config_dir};
 use softwake_tools::{
-    ScheduleAction, ScheduleActionKind, ScheduleEntry, ScheduleKind, apply_action, load_schedules,
-    now_ms, refresh_next_fire, resolve_schedules_file, save_schedules, validate_entry,
+    ScheduleAction, ScheduleActionKind, ScheduleEntry, ScheduleKind, ScheduleRunOn, apply_action,
+    load_schedules, now_ms, refresh_next_fire, resolve_schedules_file, save_schedules,
+    validate_entry,
 };
 use std::path::PathBuf;
 
@@ -22,6 +23,7 @@ pub struct TimerRow {
     pub profile_name: String,
     pub kind: String,
     pub action: String,
+    pub run_on: String,
     pub title: String,
     pub message: String,
     pub enabled: bool,
@@ -66,6 +68,7 @@ fn rows_for_profile(profile_id: &str, profile_name: &str) -> Result<Vec<TimerRow
                 profile_name: profile_name.to_owned(),
                 kind: e.kind.as_str().to_owned(),
                 action: e.action.as_str().to_owned(),
+                run_on: e.run_on.as_str().to_owned(),
                 title: e.title,
                 message: e.message,
                 enabled: e.enabled,
@@ -110,6 +113,7 @@ pub fn timers_upsert(
     id: Option<String>,
     kind: String,
     action: Option<String>,
+    run_on: Option<String>,
     when: String,
     title: String,
     message: String,
@@ -137,6 +141,17 @@ pub fn timers_upsert(
         "agent_task" | "agent" | "task" => ScheduleActionKind::AgentTask,
         other => return Err(format!("unknown action: {other}")),
     };
+    let run_on_kind = match run_on
+        .as_deref()
+        .unwrap_or("local")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "local" | "laptop" | "" => ScheduleRunOn::Local,
+        "companion" | "remote" | "node" => ScheduleRunOn::Companion,
+        "auto" => ScheduleRunOn::Auto,
+        other => return Err(format!("unknown run_on: {other}")),
+    };
     let text = if message.trim().is_empty() {
         title.clone()
     } else {
@@ -147,6 +162,7 @@ pub fn timers_upsert(
             id: existing_id.clone(),
             kind: Some(kind),
             action: Some(action_kind),
+            run_on: Some(run_on_kind),
             when: Some(when),
             text: Some(text),
             enabled: Some(enabled),
@@ -157,6 +173,7 @@ pub fn timers_upsert(
                 entry.title = title;
             }
             entry.action = action_kind;
+            entry.run_on = run_on_kind;
             validate_entry(entry).map_err(|e| e.to_string())?;
             refresh_next_fire(entry, now).map_err(|e| e.to_string())?;
         }
@@ -164,6 +181,7 @@ pub fn timers_upsert(
         let create = ScheduleAction::Create {
             kind,
             action: action_kind,
+            run_on: run_on_kind,
             when,
             text,
         };
@@ -174,6 +192,7 @@ pub fn timers_upsert(
             }
             last.enabled = enabled;
             last.action = action_kind;
+            last.run_on = run_on_kind;
             validate_entry(last).map_err(|e| e.to_string())?;
             refresh_next_fire(last, now).map_err(|e| e.to_string())?;
         }

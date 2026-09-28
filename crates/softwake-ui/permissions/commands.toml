@@ -437,3 +437,33 @@ commands.allow = ["mcp_delete"]
 identifier = "allow-mcp-clear-secret"
 description = "Clear the auth secret for one MCP server."
 commands.allow = ["mcp_clear_secret"]
+
+[[permission]]
+identifier = "allow-remote-agent-snapshot"
+description = "Load Remote Agent pairing Settings (remote-agents.json + secret bag flags)."
+commands.allow = ["remote_agent_snapshot"]
+
+[[permission]]
+identifier = "allow-remote-agent-add"
+description = "Add a Remote Agent draft row in remote-agents.json."
+commands.allow = ["remote_agent_add"]
+
+[[permission]]
+identifier = "allow-remote-agent-save"
+description = "Save one Remote Agent row and optional pairing secret."
+commands.allow = ["remote_agent_save"]
+
+[[permission]]
+identifier = "allow-remote-agent-delete"
+description = "Delete a Remote Agent and its pairing secret."
+commands.allow = ["remote_agent_delete"]
+
+[[permission]]
+identifier = "allow-remote-agent-clear-secret"
+description = "Clear the pairing secret for one Remote Agent."
+commands.allow = ["remote_agent_clear_secret"]
+
+[[permission]]
+identifier = "allow-remote-agent-test"
+description = "Run the slice-1 Tailnet probe stub for a Remote Agent."
+commands.allow = ["remote_agent_test"]

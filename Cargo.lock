@@ -3970,6 +3970,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "softwake-node"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "softwake-policy"
 version = "0.1.0"
 dependencies = [
