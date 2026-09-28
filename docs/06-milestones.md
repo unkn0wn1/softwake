@@ -122,3 +122,5 @@ Linux and Windows x86_64 GitHub Releases (AppImage, tar.gz + systemd --user inst
 - [x] Expanded slash / clear-typed commands (`/help` `/status` `/model` `/voice` `/new` `/profile` `/sleep` `/hibernate` `/resume`)
 - [x] HUD multi-select delete + `hud-chat.json` persist + best-effort session trim
 - [x] Free-speech ambient reply latch → auto-sleep; NL self-sleep markers
+
+- [x] HUD UX: opacity, mic mute, off-thread Settings, reply-before-TTS phases ([ADR-0046](ADR-0046-hud-ux-thread.md))

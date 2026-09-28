@@ -805,6 +805,8 @@ mod tests {
                 capture: CaptureKind::Mock,
                 verbosity: 0,
                 voice_test: false,
+                mic_muted: false,
+                phase: None,
             })
         );
         assert_eq!(
@@ -821,6 +823,8 @@ mod tests {
                 capture: CaptureKind::Mock,
                 verbosity: 0,
                 voice_test: false,
+                mic_muted: false,
+                phase: None,
             })
         );
         assert_eq!(
@@ -915,6 +919,8 @@ mod tests {
                 capture: CaptureKind::Mock,
                 verbosity: 1,
                 voice_test: false,
+                mic_muted: false,
+                phase: None,
             })
         );
         assert_eq!(
@@ -925,6 +931,8 @@ mod tests {
                 capture: CaptureKind::Mock,
                 verbosity: 2,
                 voice_test: false,
+                mic_muted: false,
+                phase: None,
             })
         );
         assert_eq!(
@@ -935,6 +943,8 @@ mod tests {
                 capture: CaptureKind::Mock,
                 verbosity: 2,
                 voice_test: false,
+                mic_muted: false,
+                phase: None,
             })
         );
         assert_eq!(
@@ -945,6 +955,8 @@ mod tests {
                 capture: CaptureKind::Mock,
                 verbosity: 2,
                 voice_test: false,
+                mic_muted: false,
+                phase: None,
             })
         );
     }
@@ -959,6 +971,8 @@ mod tests {
                 capture: CaptureKind::Mock,
                 verbosity: 0,
                 voice_test: true,
+                mic_muted: false,
+                phase: None,
             })
         );
         assert!(

@@ -263,7 +263,20 @@ pub fn provider_select(provider_id: String) -> Result<ProviderSnapshot, String> 
     clippy::needless_pass_by_value,
     reason = "Tauri deserializes command arguments as owned values"
 )]
-pub fn provider_set_key(provider_id: String, key: String) -> Result<ProviderSnapshot, String> {
+pub async fn provider_set_key(
+    provider_id: String,
+    key: String,
+) -> Result<ProviderSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || provider_set_key_inner(provider_id, key))
+        .await
+        .map_err(|error| format!("provider save key task failed: {error}"))?
+}
+
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "owned Strings come from the async spawn_blocking move closure"
+)]
+fn provider_set_key_inner(provider_id: String, key: String) -> Result<ProviderSnapshot, String> {
     let id: ProviderId = ProviderId::from_str(&provider_id).map_err(|e| e.to_string())?;
     let trimmed = key.trim().to_owned();
     if trimmed.is_empty() {
@@ -419,7 +432,13 @@ pub fn provider_oauth_sign_out() -> Result<ProviderSnapshot, String> {
 
 /// Run Test for the selected provider. Fills the model list on success.
 #[tauri::command]
-pub fn provider_test() -> Result<ProviderSnapshot, String> {
+pub async fn provider_test() -> Result<ProviderSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(provider_test_inner)
+        .await
+        .map_err(|error| format!("provider test task failed: {error}"))?
+}
+
+fn provider_test_inner() -> Result<ProviderSnapshot, String> {
     #[cfg(not(feature = "live-http"))]
     {
         let _ = MockTransport::new();
@@ -488,7 +507,9 @@ pub fn provider_set_model(model_id: String) -> Result<ProviderSnapshot, String> 
     let mut settings = store.load().map_err(|e| e.to_string())?;
     let model = model_id.trim().to_owned();
     if model.is_empty() {
-        return Err("model id is empty".to_owned());
+        settings.selected_model.clear();
+        store.save(&settings).map_err(|e| e.to_string())?;
+        return load_snapshot();
     }
     if !settings
         .models_for(settings.selected_provider)
@@ -513,7 +534,9 @@ pub fn provider_set_voice_model(model_id: String) -> Result<ProviderSnapshot, St
     let mut settings = store.load().map_err(|e| e.to_string())?;
     let model = model_id.trim().to_owned();
     if model.is_empty() {
-        return Err("voice model id is empty".to_owned());
+        settings.selected_voice_model.clear();
+        store.save(&settings).map_err(|e| e.to_string())?;
+        return load_snapshot();
     }
     if !settings
         .voice_models_for(settings.selected_provider)

@@ -413,6 +413,16 @@ pub struct Status {
     /// Additive on protocol generation 1. Older peers omit it. Default off.
     #[serde(default, skip_serializing_if = "is_false")]
     pub voice_test: bool,
+    /// Operator muted the mic (HUD toggle). Text ask still works; KWS/PTT/free-speech off.
+    ///
+    /// Additive on protocol generation 1. Older peers omit it. Default off.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mic_muted: bool,
+    /// Live turn phase for HUD status: `listening`, `thinking`, `calling_tools`, `speaking`, `awaiting_approve`.
+    ///
+    /// Additive on protocol generation 1. Absent when idle. Reply text stays on `message`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
 }
 
 #[allow(
@@ -426,6 +436,10 @@ fn is_false(value: &bool) -> bool {
 /// Successful status or a structured error.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Ok carries full Status for the wire; boxing would churn every call site"
+)]
 pub enum ResponseBody {
     /// The command was applied, or status was read.
     Ok {
@@ -649,6 +663,15 @@ pub enum ClientMessage {
         /// `true` enables voice test mode.
         enabled: bool,
     },
+    /// Mute or unmute microphone listening (KWS / PTT / free-speech).
+    ///
+    /// Typed ask and slash stay available. Additive on protocol generation 1.
+    SetMicMute {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+        /// `true` mutes mic listening.
+        muted: bool,
+    },
     /// Re-read KWS thresholds from `softwake.json` (then env) and rebuild the
     /// keyword spotter without dropping the serve socket.
     ///
@@ -778,6 +801,8 @@ mod tests {
             context_compacted: false,
             context_compact_at: None,
             voice_test: false,
+            mic_muted: false,
+            phase: None,
         }
     }
 
@@ -1098,6 +1123,8 @@ mod tests {
             context_compacted: false,
             context_compact_at: None,
             voice_test: false,
+            mic_muted: false,
+            phase: None,
         };
         assert_round_trip(&with_pending);
         let pending_json = serde_json::to_string(&with_pending).expect("encode");
@@ -1151,6 +1178,8 @@ mod tests {
             context_compacted: false,
             context_compact_at: None,
             voice_test: false,
+            mic_muted: false,
+            phase: None,
         };
         assert_round_trip(&with_level);
         let json = serde_json::to_string(&with_level).expect("encode");
@@ -1173,6 +1202,8 @@ mod tests {
             context_compacted: false,
             context_compact_at: None,
             voice_test: false,
+            mic_muted: false,
+            phase: None,
         };
         let json = serde_json::to_string(&without).expect("encode");
         assert!(!json.contains("capture_level"));
@@ -1202,6 +1233,8 @@ mod tests {
             context_compacted: false,
             context_compact_at: None,
             voice_test: false,
+            mic_muted: false,
+            phase: None,
         };
         assert_round_trip(&missing);
 
@@ -1225,6 +1258,8 @@ mod tests {
             context_compacted: false,
             context_compact_at: None,
             voice_test: false,
+            mic_muted: false,
+            phase: None,
         };
         let json = serde_json::to_string(&ok).expect("encode");
         assert!(json.contains("\"soul\":{\"ok\":true}"));

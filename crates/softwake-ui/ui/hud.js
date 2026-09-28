@@ -31,6 +31,7 @@ const contextMeterFill = document.querySelector("#context-meter-fill");
 const contextMeterMark = document.querySelector("#context-meter-mark");
 const contextMeterLabel = document.querySelector("#context-meter-label");
 const pinBtn = document.querySelector("#pin");
+const micMuteBtn = document.querySelector("#mic-mute");
 const resizeGrip = document.querySelector("#resize-grip");
 const chatToolbar = document.querySelector("#chat-toolbar");
 const selectToggle = document.querySelector("#select-toggle");
@@ -62,6 +63,8 @@ let autoListening = false;
 let lastReplyKey = "";
 let refreshInFlight = false;
 let lastStatusMessage = "";
+let micMuted = false;
+let lastPhase = "";
 let profileName = "Softwake";
 let profilePollAt = 0;
 let pendingToolId = null;
@@ -264,6 +267,40 @@ function setConfiguredIdle(ms) {
   }
 }
 
+function applyHudOpacityPercent(percent) {
+  const n = Math.max(35, Math.min(100, Number(percent) || 55));
+  capsule.style.setProperty("--hud-bg-alpha", String(n / 100));
+}
+
+function applyMicMuted(next, syncDaemon) {
+  micMuted = !!next;
+  if (micMuteBtn) {
+    micMuteBtn.hidden = !expanded;
+    micMuteBtn.setAttribute("aria-pressed", micMuted ? "true" : "false");
+    micMuteBtn.setAttribute(
+      "aria-label",
+      micMuted ? "Unmute microphone" : "Mute microphone",
+    );
+    micMuteBtn.title = micMuted
+      ? "Mic muted — click to unmute (text ask still works)"
+      : "Mute microphone listening";
+  }
+  if (syncDaemon) {
+    void invoke("hud_set_mic_mute", { muted: micMuted })
+      .then((status) => {
+        if (status && typeof status.mic_muted === "boolean") {
+          micMuted = !!status.mic_muted;
+        }
+        if (micMuted) {
+          setLive("Mic muted — type to ask", false);
+        }
+      })
+      .catch((error) => {
+        setLive(errorText(error, "mic mute failed"), true);
+      });
+  }
+}
+
 function setExpanded(next) {
   if (!next && pendingToolId) {
     next = true;
@@ -287,6 +324,9 @@ function setExpanded(next) {
     if (pinBtn) {
       pinBtn.hidden = false;
     }
+    if (micMuteBtn) {
+      micMuteBtn.hidden = false;
+    }
     if (resizeGrip) {
       resizeGrip.hidden = false;
     }
@@ -302,6 +342,9 @@ function setExpanded(next) {
     setSelecting(false);
     if (pinBtn) {
       pinBtn.hidden = true;
+    }
+    if (micMuteBtn) {
+      micMuteBtn.hidden = true;
     }
     if (resizeGrip) {
       resizeGrip.hidden = true;
@@ -719,27 +762,91 @@ function isThinking(message) {
   return message === "thinking…" || message === "thinking...";
 }
 
-function considerStatus(message, detail) {
-  const text = message || "";
-  if (!text || holding) {
+function phaseLabel(phase, detail) {
+  switch (phase) {
+    case "listening":
+      return "Listening…";
+    case "thinking":
+      return detail && detail !== "thinking" && detail !== "ask" && detail !== "press to talk"
+        ? "Thinking… (" + detail + ")"
+        : "Thinking…";
+    case "calling_tools":
+      return detail && detail.indexOf("calling tools") === 0
+        ? detail.replace(/^calling tools/, "Calling tools")
+        : "Calling tools…";
+    case "speaking":
+      return "Speaking…";
+    case "awaiting_approve":
+      return "Waiting for approve…";
+    default:
+      return "";
+  }
+}
+
+function isPhaseToken(text) {
+  const t = (text || "").trim().toLowerCase();
+  return (
+    t === "listening" ||
+    t === "listening…" ||
+    t === "listening..." ||
+    isThinking(t) ||
+    t === "speaking" ||
+    t === "speaking…" ||
+    t.indexOf("calling tools") === 0 ||
+    t === "waiting for approve" ||
+    t === "mic muted — type to ask" ||
+    t === "mic unmuted"
+  );
+}
+
+function applyPhase(phase, message, detail) {
+  lastPhase = phase || "";
+  const label = phaseLabel(phase, detail);
+  if (label) {
+    setLive(label, false);
     return;
   }
-  const key = text + "\0" + (detail || "");
+  if (isThinking(message)) {
+    setLive(detail ? "Thinking… (" + detail + ")" : "Thinking…", false);
+  }
+}
+
+function considerStatus(message, detail, phase) {
+  const text = message || "";
+  if (holding) {
+    return;
+  }
+  if (phase) {
+    applyPhase(phase, text, detail);
+  }
+  if (!text) {
+    return;
+  }
+  const key = text + "\0" + (detail || "") + "\0" + (phase || "");
   if (key === lastReplyKey) {
     return;
   }
-  if (text === "listening" || text === "listening…") {
+  if (isPhaseToken(text) && phase !== "speaking") {
     lastReplyKey = key;
+    if (!phase) {
+      if (text === "listening" || text === "listening…") {
+        setLive("Listening…", false);
+      } else if (isThinking(text)) {
+        setLive(detail ? "Thinking… (" + detail + ")" : "Thinking…", false);
+        setExpanded(true);
+      }
+    }
     return;
   }
-  if (isThinking(text)) {
-    lastReplyKey = key;
-    setLive(detail ? "thinking… (" + detail + ")" : "thinking…", false);
-    setExpanded(true);
-    return;
-  }
+  // Real assistant reply (including while phase is speaking) — clear thinking and show bubble ASAP.
   lastReplyKey = key;
-  setLive("", false);
+  if (phase === "speaking") {
+    setLive("Speaking…", false);
+  } else if (phase === "awaiting_approve") {
+    setLive("Waiting for approve…", false);
+  } else {
+    setLive("", false);
+  }
   pushAssistant(text, detail, false);
   setExpanded(true);
 }
@@ -783,6 +890,19 @@ async function refreshHudPrefs() {
     if (snap && typeof snap.hud_pinned === "boolean") {
       applyPinned(snap.hud_pinned);
     }
+    if (snap && typeof snap.hud_opacity === "number") {
+      applyHudOpacityPercent(snap.hud_opacity);
+    }
+    if (snap && typeof snap.hud_mic_muted === "boolean" && snap.hud_mic_muted !== micMuted) {
+      // Restore daemon latch from prefs once (avoid loop).
+      void invoke("hud_set_mic_mute", { muted: !!snap.hud_mic_muted })
+        .then((status) => {
+          applyMicMuted(!!(status && status.mic_muted), false);
+        })
+        .catch(() => {
+          applyMicMuted(!!snap.hud_mic_muted, false);
+        });
+    }
   } catch (_error) {
     // Prefs are best-effort; keep defaults when the snapshot fails.
   }
@@ -799,6 +919,14 @@ if (pinBtn) {
     });
   });
 }
+
+if (micMuteBtn) {
+  micMuteBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    applyMicMuted(!micMuted, true);
+  });
+}
+
 
 async function startHudResize() {
   try {
@@ -1289,11 +1417,21 @@ function endTalk() {
         const detail = (status && status.detail) || "";
         lastReplyKey = message + "\0" + detail;
         lastStatusMessage = message;
-        if (isThinking(message) || message === "listening") {
-          setLive(message, false);
+        const phase = (status && status.phase) || "";
+        if (phase) {
+          applyPhase(phase, message, detail);
+        }
+        if (isThinking(message) || isPhaseToken(message)) {
+          if (!phase) {
+            setLive(isThinking(message) ? "Thinking…" : message, false);
+          }
           return;
         }
-        setLive("", false);
+        if (phase === "speaking") {
+          setLive("Speaking…", false);
+        } else {
+          setLive("", false);
+        }
         pushAssistant(message, detail, false);
       })
       .catch((error) => {
@@ -1512,11 +1650,24 @@ form.addEventListener("submit", (event) => {
       const detail = (status && status.detail) || "";
       lastReplyKey = message + "\0" + detail;
       lastStatusMessage = message;
-      if (isThinking(message)) {
-        setLive(message, false);
+      const phase = (status && status.phase) || "";
+      if (phase) {
+        applyPhase(phase, message, detail);
+      }
+      if (isThinking(message) || isPhaseToken(message)) {
+        // Prefer phase live line; never leave bare thinking if we have a real reply elsewhere.
+        if (!phase) {
+          setLive(isThinking(message) ? "Thinking…" : message, false);
+        }
         return;
       }
-      setLive("", false);
+      if (phase === "speaking") {
+        setLive("Speaking…", false);
+      } else if (phase === "awaiting_approve") {
+        setLive("Waiting for approve…", false);
+      } else {
+        setLive("", false);
+      }
       pushAssistant(message, detail, false);
     })
     .catch((error) => {

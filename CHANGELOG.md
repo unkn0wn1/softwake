@@ -3,6 +3,22 @@
 ## Unreleased
 
 ### Added
+
+- Settings General **HUD transparency** slider (`hud_opacity` in ui-prefs.json) for the expanded capsule.
+- HUD top-left **mic mute** toggle (text ask stays; wake/KWS/PTT/free-speech off); additive `SetMicMute` / `Status.mic_muted`.
+- HUD turn **phases** on `Status.phase` (Listening / Thinking / Calling tools… / Speaking / Waiting for approve).
+- ADR-0046 documenting HUD UX thread safety, phases, transparency, and mic mute.
+
+### Fixed
+
+- Long Settings actions (**Test on Tailnet**, **Install companion**, Providers Test/Save) run off the UI thread with immediate status (`Testing…` / `Starting…` / `Saving…`).
+- Assistant text appears as soon as the reply is ready (before TTS synthesize finishes); thinking no longer sticks when a turn rejects or Telegram lands.
+- Chat/voice model select shows **None** when unset instead of the first catalog entry; Test no longer auto-picks the first model.
+- Select/Delete chrome no longer overlaps the chat log (strip-main grid gives the log the `1fr` row).
+
+## Unreleased
+
+### Added
 - Opt-in OAuth mirror to the companion (ADR-0045): Settings checkbox (default off), `PUT /v1/vault/oauth`, companion email/calendar/Drive when mirrored.
 
 - Remote Agent **Test on Tailnet** (real ping/SSH/health) and **Install companion** / `softwaked ctl remote-agent install` — Tailscale-only SSH installer for softwake-node (ADR-0044).

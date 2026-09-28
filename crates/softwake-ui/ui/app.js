@@ -369,7 +369,15 @@ function renderProviders(snap) {
       modelSelect.appendChild(option);
     }
     modelSelect.disabled = false;
-    modelSelect.value = models.includes(snap.selected_model) ? snap.selected_model : models[0];
+    {
+      const none = document.createElement("option");
+      none.value = "";
+      none.textContent = "None";
+      modelSelect.insertBefore(none, modelSelect.firstChild);
+    }
+    // Distinguish unset vs first catalog entry — never auto-pick models[0] on load.
+    const selected = (snap.selected_model || "").trim();
+    modelSelect.value = models.includes(selected) ? selected : "";
   }
 
   const voiceModels = snap.voice_models || [];
@@ -381,6 +389,10 @@ function renderProviders(snap) {
     voiceModelSelect.appendChild(option);
     voiceModelSelect.disabled = true;
   } else {
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "None";
+    voiceModelSelect.appendChild(none);
     for (const id of voiceModels) {
       const option = document.createElement("option");
       option.value = id;
@@ -388,9 +400,8 @@ function renderProviders(snap) {
       voiceModelSelect.appendChild(option);
     }
     voiceModelSelect.disabled = false;
-    voiceModelSelect.value = voiceModels.includes(snap.selected_voice_model)
-      ? snap.selected_voice_model
-      : voiceModels[0];
+    const selectedVoice = (snap.selected_voice_model || "").trim();
+    voiceModelSelect.value = voiceModels.includes(selectedVoice) ? selectedVoice : "";
   }
 
   const ttsVoices = snap.tts_voices || [];
@@ -459,13 +470,55 @@ async function refreshProviders() {
 }
 
 async function providerAction(command, args) {
+  const busy =
+    command === "provider_test"
+      ? "Testing…"
+      : command === "provider_set_key" ||
+          command === "provider_set_base_url" ||
+          command === "provider_set_context_limit" ||
+          command === "provider_set_compact_at" ||
+          command === "provider_set_model" ||
+          command === "provider_set_voice_model" ||
+          command === "provider_set_tts_voice" ||
+          command === "provider_clear_cred" ||
+          command === "provider_opt_in_plaintext"
+        ? "Saving…"
+        : "";
+  if (busy && testStatus) {
+    testStatus.textContent = busy;
+  }
   try {
-    renderProviders(await invoke(command, args));
+    const snap = await invoke(command, args);
+    renderProviders(snap);
+    if (busy && testStatus && command !== "provider_test") {
+      if (command === "provider_set_key") {
+        testStatus.textContent = "Saved API key.";
+      } else if (command === "provider_set_base_url") {
+        testStatus.textContent = "Saved base URL.";
+      } else if (command === "provider_set_context_limit" || command === "provider_set_compact_at") {
+        testStatus.textContent = "Saved context settings.";
+      } else if (command === "provider_set_model") {
+        testStatus.textContent = snap.selected_model
+          ? "Chat model: " + snap.selected_model
+          : "Chat model: None (select after Test).";
+      } else if (command === "provider_set_voice_model") {
+        testStatus.textContent = snap.selected_voice_model
+          ? "Voice model: " + snap.selected_voice_model
+          : "Voice model: None.";
+      } else if (command === "provider_clear_cred") {
+        testStatus.textContent = "Cleared saved credential.";
+      } else {
+        testStatus.textContent = "Saved.";
+      }
+    }
   } catch (error) {
     showProviderError(error);
+    if (busy && testStatus) {
+      const msg = typeof error === "string" ? error : error && error.message ? error.message : "request failed";
+      testStatus.textContent = (busy === "Testing…" ? "Test failed: " : "Save failed: ") + msg;
+    }
     try {
       renderProviders(await invoke("provider_snapshot"));
-      showProviderError(error);
     } catch (snapError) {
       showProviderError(snapError);
     }
@@ -530,17 +583,11 @@ providerTestBtn.addEventListener("click", () => {
 });
 
 modelSelect.addEventListener("change", () => {
-  if (!modelSelect.value) {
-    return;
-  }
-  providerAction("provider_set_model", { modelId: modelSelect.value });
+  providerAction("provider_set_model", { modelId: modelSelect.value || "" });
 });
 
 voiceModelSelect.addEventListener("change", () => {
-  if (!voiceModelSelect.value) {
-    return;
-  }
-  providerAction("provider_set_voice_model", { modelId: voiceModelSelect.value });
+  providerAction("provider_set_voice_model", { modelId: voiceModelSelect.value || "" });
 });
 
 ttsVoiceSelect.addEventListener("change", () => {
@@ -1482,6 +1529,9 @@ const hudIdleRange = document.querySelector("#hud-idle-range");
 const hudIdleNumber = document.querySelector("#hud-idle-seconds");
 const hudIdleStatus = document.querySelector("#hud-idle-status");
 const hudIdleError = document.querySelector("#hud-idle-error");
+const hudOpacityRange = document.querySelector("#hud-opacity-range");
+const hudOpacityNumber = document.querySelector("#hud-opacity-percent");
+const hudOpacityStatus = document.querySelector("#hud-opacity-status");
 const voiceTestBox = document.querySelector("#voice-test");
 let voiceTestEditing = false;
 let hudIdleDirty = false;
@@ -1569,12 +1619,16 @@ async function refreshUiPrefs() {
     applyHudIdleMs(
       typeof snap.hud_idle_collapse_ms === "number" ? snap.hud_idle_collapse_ms : 3000,
     );
+    applyHudOpacity(
+      typeof snap.hud_opacity === "number" ? snap.hud_opacity : 55,
+    );
     if (uiPrefsStatus) {
       uiPrefsStatus.textContent = "UI text size: " + (snap.text_size || "x-small");
     }
   } catch (error) {
     applyTextSize("x-small");
     applyHudIdleMs(3000);
+    applyHudOpacity(55);
     showUiPrefsError(error);
   }
 }
@@ -1610,6 +1664,47 @@ async function saveHudIdleSeconds(seconds) {
   }
 }
 
+
+function clampHudOpacity(percent) {
+  const n = Number(percent);
+  if (!Number.isFinite(n)) return 55;
+  return Math.max(35, Math.min(100, Math.round(n)));
+}
+
+function applyHudOpacity(percent) {
+  const clamped = clampHudOpacity(percent);
+  if (hudOpacityRange) hudOpacityRange.value = String(clamped);
+  if (hudOpacityNumber) hudOpacityNumber.value = String(clamped);
+}
+
+async function saveHudOpacity(percent) {
+  const clamped = clampHudOpacity(percent);
+  applyHudOpacity(clamped);
+  if (hudOpacityStatus) hudOpacityStatus.textContent = "Saving…";
+  try {
+    const snap = await invoke("ui_prefs_set_hud_opacity", { percent: clamped });
+    applyHudOpacity(typeof snap.hud_opacity === "number" ? snap.hud_opacity : clamped);
+    if (hudOpacityStatus) {
+      hudOpacityStatus.textContent = "HUD opacity: " + (snap.hud_opacity || clamped) + "%";
+    }
+  } catch (error) {
+    if (hudOpacityStatus) {
+      hudOpacityStatus.textContent =
+        "Save failed: " + (typeof error === "string" ? error : error && error.message ? error.message : "request failed");
+    }
+  }
+}
+
+let hudOpacitySaveTimer = null;
+function scheduleHudOpacitySave(percent) {
+  applyHudOpacity(percent);
+  if (hudOpacitySaveTimer) clearTimeout(hudOpacitySaveTimer);
+  hudOpacitySaveTimer = setTimeout(() => {
+    hudOpacitySaveTimer = null;
+    void saveHudOpacity(percent);
+  }, 200);
+}
+
 function scheduleHudIdleSave(seconds) {
   hudIdleDirty = true;
   if (hudIdleTimer) {
@@ -1636,6 +1731,23 @@ if (hudIdleRange && hudIdleNumber) {
     hudIdleNumber.value = String(seconds);
     hudIdleRange.value = String(seconds);
     scheduleHudIdleSave(seconds);
+  });
+}
+
+if (hudOpacityRange && hudOpacityNumber) {
+  hudOpacityRange.addEventListener("input", () => {
+    hudOpacityNumber.value = hudOpacityRange.value;
+    scheduleHudOpacitySave(hudOpacityRange.value);
+  });
+  hudOpacityNumber.addEventListener("input", () => {
+    const percent = clampHudOpacity(hudOpacityNumber.value);
+    hudOpacityRange.value = String(percent);
+    scheduleHudOpacitySave(percent);
+  });
+  hudOpacityNumber.addEventListener("change", () => {
+    const percent = clampHudOpacity(hudOpacityNumber.value);
+    hudOpacityRange.value = String(percent);
+    scheduleHudOpacitySave(percent);
   });
 }
 
@@ -2119,6 +2231,8 @@ async function refreshRemoteAgent(selectedId) {
 }
 
 async function saveRemoteAgent() {
+  if (remoteAgentStatus) remoteAgentStatus.textContent = "Saving…";
+  if (remoteAgentError) remoteAgentError.textContent = "";
   try {
     const args = {
       id: remoteAgentId ? remoteAgentId.value : "",
@@ -2144,6 +2258,9 @@ async function saveRemoteAgent() {
 if (remoteAgentSave) remoteAgentSave.addEventListener("click", () => saveRemoteAgent());
 if (remoteAgentTest) {
   remoteAgentTest.addEventListener("click", async () => {
+    if (remoteAgentStatus) remoteAgentStatus.textContent = "Testing…";
+    if (remoteAgentError) remoteAgentError.textContent = "";
+    remoteAgentTest.disabled = true;
     try {
       applyRemoteAgentSnapshot(
         await invoke("remote_agent_test", { agentId: remoteAgentId ? remoteAgentId.value : null }),
@@ -2151,12 +2268,18 @@ if (remoteAgentTest) {
       );
     } catch (error) {
       showRemoteAgentError(error);
+      if (remoteAgentStatus) remoteAgentStatus.textContent = "Test failed.";
+    } finally {
+      remoteAgentTest.disabled = false;
     }
   });
 }
 
 if (remoteAgentInstall) {
   remoteAgentInstall.addEventListener("click", async () => {
+    if (remoteAgentStatus) remoteAgentStatus.textContent = "Starting…";
+    if (remoteAgentError) remoteAgentError.textContent = "";
+    remoteAgentInstall.disabled = true;
     try {
       applyRemoteAgentSnapshot(
         await invoke("remote_agent_install", { agentId: remoteAgentId ? remoteAgentId.value : null }),
@@ -2164,6 +2287,9 @@ if (remoteAgentInstall) {
       );
     } catch (error) {
       showRemoteAgentError(error);
+      if (remoteAgentStatus) remoteAgentStatus.textContent = "Install failed.";
+    } finally {
+      remoteAgentInstall.disabled = false;
     }
   });
 }

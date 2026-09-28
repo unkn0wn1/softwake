@@ -90,6 +90,12 @@ pub(crate) struct Runtime {
     last_context_compact_at: Option<u8>,
     /// KWS / voice test mode. Default off. Phrases still transition; mic speech is not asked.
     voice_test: bool,
+    /// HUD mic mute: KWS/PTT/free-speech off; typed ask still works.
+    user_mic_muted: bool,
+    /// Live turn phase for HUD (`listening`, `thinking`, …).
+    turn_phase: Option<String>,
+    /// Shared with serve `last_status` so polls see reply/phase mid-ask (before TTS returns).
+    status_cache: Option<std::sync::Arc<std::sync::Mutex<Option<Status>>>>,
     /// State-announcement prompts recorded in tests. Production speaks them off-thread.
     #[cfg(test)]
     announced_prompts: Vec<String>,
@@ -187,6 +193,9 @@ impl Runtime {
             last_context_compacted: false,
             last_context_compact_at: None,
             voice_test: false,
+            user_mic_muted: false,
+            turn_phase: None,
+            status_cache: None,
             #[cfg(test)]
             announced_prompts: Vec::new(),
             last_speech_note: None,
@@ -399,6 +408,8 @@ impl Runtime {
         if self.session.phase() != SessionPhase::Open {
             return Self::chat_rejected("session is closed");
         }
+        self.set_turn_phase(Some("thinking"));
+        self.publish_live(Some("thinking…".to_owned()), Some("thinking".to_owned()));
         if let Some(outcome) = self.try_shell_ask(text) {
             return outcome;
         }
@@ -965,6 +976,11 @@ impl Runtime {
         name: &str,
         args: &[String],
     ) -> crate::tool_loop::ToolInvokeResult {
+        self.set_turn_phase(Some("calling_tools"));
+        self.publish_live(
+            Some("thinking…".to_owned()),
+            Some(format!("calling tools ({name})")),
+        );
         let step = self.hands.request(&self.machine, name, args);
         let result = crate::tool_loop::invoke_from_request(step);
         if let Some(effect) = self.hands.take_ctl_effect() {
@@ -1326,6 +1342,13 @@ impl Runtime {
                     reply: message,
                     context,
                 });
+                self.set_turn_phase(Some("awaiting_approve"));
+                let reply_msg = outcome.body.status().and_then(|st| st.message.clone());
+                if let ResponseBody::Ok { snapshot } = &mut outcome.body {
+                    snapshot.phase = Some("awaiting_approve".to_owned());
+                    snapshot.detail = Some("waiting for approve".to_owned());
+                }
+                self.publish_live(reply_msg, Some("waiting for approve".to_owned()));
                 outcome
                     .events
                     .push(softwake_ipc::Event::ToolConfirmPending {
@@ -1370,12 +1393,16 @@ impl Runtime {
 
         let profile_id =
             crate::hud_chat_write::active_profile_id().unwrap_or_else(|| "default".into());
+        // Publish reply + Speaking phase BEFORE TTS synthesize so HUD clears thinking
+        // and shows the bubble while speech is still preparing/playing.
+        self.set_turn_phase(Some("speaking"));
+        self.publish_live(Some(reply.clone()), Some("speaking".to_owned()));
+        crate::telegram::fanout_ask_reply(&profile_id, &reply);
         if crate::telegram::desktop_wants_ask_voice(&profile_id) {
             self.speak_if_configured(&reply);
         } else {
             self.last_speech_note = None;
         }
-        crate::telegram::fanout_ask_reply(&profile_id, &reply);
         let mut detail = self.last_speech_note.clone();
         if context.compacted {
             let compact_note = format!(
@@ -1389,7 +1416,9 @@ impl Runtime {
         }
         self.last_voice_activity = Some(now);
         self.auto_utt.reset();
+        self.set_turn_phase(None);
         self.retain_status_text(Some(reply.clone()), detail.clone());
+        self.publish_live(Some(reply.clone()), detail.clone());
 
         if from_free {
             let _ = self.reply_latch.record(&reply, now);
@@ -1454,6 +1483,9 @@ impl Runtime {
         if self.voice_test {
             return self.voice_test_speech_outcome();
         }
+        if self.user_mic_muted {
+            return Self::talk_rejected("mic muted — type to ask");
+        }
         if wire_state(self.machine.state()) == WireState::Hibernate {
             return Self::talk_rejected(crate::talk::TALK_HIBERNATING);
         }
@@ -1487,7 +1519,8 @@ impl Runtime {
         }
         self.talk.arm();
         self.drain_pcm();
-        self.retain_status_text(
+        self.set_turn_phase(Some("listening"));
+        self.publish_live(
             Some("listening".to_owned()),
             Some("press and hold to talk".to_owned()),
         );
@@ -1754,7 +1787,7 @@ impl Runtime {
         let awake = wire_state(self.machine.state()) == WireState::Awake;
         // Half-duplex: while Eve TTS plays (and a short grace after), drop mic
         // frames so speakers do not feed free-speech / KWS / PTT.
-        let muted = softwake_voice::input_muted();
+        let muted = softwake_voice::input_muted() || self.user_mic_muted;
         self.rearm_kws_after_unmute(muted);
         // Fuzzy wake listens only while the clarifier is already armed. Sleep
         // otherwise still drops the auto buffer.
@@ -2357,6 +2390,8 @@ impl Runtime {
                 .last_context_compact_at
                 .filter(|_| self.session.phase() == softwake_session::SessionPhase::Open),
             voice_test: self.voice_test,
+            mic_muted: self.user_mic_muted,
+            phase: self.turn_phase.clone(),
         }
     }
 
@@ -2398,6 +2433,7 @@ impl Runtime {
             && self.pending_auto_pcm.is_none()
             && !self.in_voice_cooldown()
             && !softwake_voice::input_muted()
+            && !self.user_mic_muted
     }
 
     fn in_voice_cooldown(&self) -> bool {
@@ -2418,6 +2454,48 @@ impl Runtime {
         if detail.is_some() {
             self.last_status_detail = detail;
         }
+    }
+
+    /// Attach the serve status cache so mid-ask polls see reply/phase before TTS returns.
+    pub(crate) fn attach_status_cache(
+        &mut self,
+        cache: std::sync::Arc<std::sync::Mutex<Option<Status>>>,
+    ) {
+        self.status_cache = Some(cache);
+    }
+
+    fn set_turn_phase(&mut self, phase: Option<&str>) {
+        self.turn_phase = phase.map(str::to_owned);
+    }
+
+    /// Push current snapshot into the shared status cache (visible while this lock is held).
+    fn publish_live(&mut self, message: Option<String>, detail: Option<String>) {
+        self.retain_status_text(message.clone(), detail.clone());
+        let snap = self.snapshot(message, detail);
+        if let Some(cache) = &self.status_cache {
+            if let Ok(mut guard) = cache.lock() {
+                *guard = Some(snap);
+            }
+        }
+    }
+
+    /// HUD mic mute toggle.
+    pub(crate) fn set_mic_mute(&mut self, muted: bool) -> Outcome {
+        self.user_mic_muted = muted;
+        if muted {
+            self.auto_utt.reset();
+            self.pending_auto_pcm = None;
+            if self.talk.is_armed() {
+                self.talk.clear();
+            }
+        }
+        let note = if muted {
+            "mic muted — type to ask"
+        } else {
+            "mic unmuted"
+        };
+        self.publish_live(Some(note.to_owned()), Some(note.to_owned()));
+        Self::quiet(self.snapshot(Some(note.to_owned()), Some(note.to_owned())))
     }
 
     fn pending_wire(&self) -> Option<PendingTool> {

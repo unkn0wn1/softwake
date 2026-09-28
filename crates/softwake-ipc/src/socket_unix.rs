@@ -480,6 +480,7 @@ impl ServerConnection {
             | ClientMessage::TalkStart { .. }
             | ClientMessage::TalkStop { .. }
             | ClientMessage::SetVoiceTest { .. }
+            | ClientMessage::SetMicMute { .. }
             | ClientMessage::ReloadKws { .. }
             | ClientMessage::ReloadUtterance { .. }
             | ClientMessage::ReloadPlayback { .. }
@@ -760,6 +761,16 @@ impl Client {
     pub fn set_voice_test(&mut self, enabled: bool) -> Result<Status, CallError> {
         let id = self.allocate_id();
         self.round_trip(&ClientMessage::SetVoiceTest { id, enabled }, id)
+    }
+
+    /// Mute or unmute mic listening (KWS / PTT / free-speech). Typed ask stays up.
+    ///
+    /// # Errors
+    ///
+    /// Socket or protocol failure.
+    pub fn set_mic_mute(&mut self, muted: bool) -> Result<Status, CallError> {
+        let id = self.allocate_id();
+        self.round_trip(&ClientMessage::SetMicMute { id, muted }, id)
     }
 
     /// Rebuild the KWS detector from current `softwake.json` / env thresholds.
@@ -1073,6 +1084,8 @@ mod tests {
                         context_compacted: false,
                         context_compact_at: None,
                         voice_test: false,
+                        mic_muted: false,
+                        phase: None,
                     }),
                 })
                 .expect("response");
