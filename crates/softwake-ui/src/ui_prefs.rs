@@ -85,6 +85,27 @@ pub const HUD_EXPANDED_H_MIN: u32 = 420;
 /// Largest resizable expanded height.
 pub const HUD_EXPANDED_H_MAX: u32 = 1200;
 
+/// Default expanded HUD opacity percent (matches prior CSS ~0.55).
+pub const HUD_OPACITY_DEFAULT: u8 = 55;
+/// Minimum expanded HUD opacity percent.
+pub const HUD_OPACITY_MIN: u8 = 35;
+/// Maximum expanded HUD opacity percent.
+pub const HUD_OPACITY_MAX: u8 = 100;
+
+const fn default_hud_bg_opacity() -> u8 {
+    HUD_OPACITY_DEFAULT
+}
+
+const fn default_hud_mic_muted_pref() -> bool {
+    false
+}
+
+/// Clamp opacity percent into [`HUD_OPACITY_MIN`]..=[`HUD_OPACITY_MAX`].
+#[must_use]
+pub fn clamp_hud_opacity(percent: u8) -> u8 {
+    percent.clamp(HUD_OPACITY_MIN, HUD_OPACITY_MAX)
+}
+
 const fn default_hud_expanded_w() -> u32 {
     HUD_EXPANDED_W_DEFAULT
 }
@@ -128,6 +149,12 @@ pub struct UiPrefs {
     /// Last expanded HUD height in logical pixels.
     #[serde(default = "default_hud_expanded_h")]
     pub hud_expanded_h: u32,
+    /// Expanded HUD background opacity percent (35..=100).
+    #[serde(default = "default_hud_bg_opacity")]
+    pub hud_opacity: u8,
+    /// HUD mic mute preference (daemon latch restored on HUD load).
+    #[serde(default = "default_hud_mic_muted_pref")]
+    pub hud_mic_muted: bool,
 }
 
 impl Default for UiPrefs {
@@ -138,6 +165,8 @@ impl Default for UiPrefs {
             hud_pinned: false,
             hud_expanded_w: HUD_EXPANDED_W_DEFAULT,
             hud_expanded_h: HUD_EXPANDED_H_DEFAULT,
+            hud_opacity: HUD_OPACITY_DEFAULT,
+            hud_mic_muted: false,
         }
     }
 }
@@ -148,6 +177,7 @@ pub fn normalize(mut prefs: UiPrefs) -> UiPrefs {
     prefs.hud_idle_collapse_ms = clamp_hud_idle_collapse_ms(prefs.hud_idle_collapse_ms);
     prefs.hud_expanded_w = clamp_hud_expanded_w(prefs.hud_expanded_w);
     prefs.hud_expanded_h = clamp_hud_expanded_h(prefs.hud_expanded_h);
+    prefs.hud_opacity = clamp_hud_opacity(prefs.hud_opacity);
     prefs
 }
 
@@ -201,6 +231,10 @@ pub struct UiPrefsSnapshot {
     pub hud_expanded_w: u32,
     /// Expanded HUD height (logical pixels, clamped).
     pub hud_expanded_h: u32,
+    /// Expanded HUD opacity percent (clamped).
+    pub hud_opacity: u8,
+    /// Persisted mic mute preference.
+    pub hud_mic_muted: bool,
 }
 
 impl From<&UiPrefs> for UiPrefsSnapshot {
@@ -211,6 +245,8 @@ impl From<&UiPrefs> for UiPrefsSnapshot {
             hud_pinned: prefs.hud_pinned,
             hud_expanded_w: clamp_hud_expanded_w(prefs.hud_expanded_w),
             hud_expanded_h: clamp_hud_expanded_h(prefs.hud_expanded_h),
+            hud_opacity: clamp_hud_opacity(prefs.hud_opacity),
+            hud_mic_muted: prefs.hud_mic_muted,
         }
     }
 }
@@ -276,8 +312,37 @@ pub fn ui_prefs_set_hud_expanded_size(width: u32, height: u32) -> Result<UiPrefs
     Ok(UiPrefsSnapshot::from(&prefs))
 }
 
+/// Save expanded HUD opacity percent (clamped 35..=100).
+#[tauri::command]
+pub fn ui_prefs_set_hud_opacity(percent: u8) -> Result<UiPrefsSnapshot, String> {
+    let mut prefs = load();
+    prefs.hud_opacity = clamp_hud_opacity(percent);
+    save(&prefs)?;
+    Ok(UiPrefsSnapshot::from(&prefs))
+}
+
+/// Persist HUD mic mute preference (daemon latch is separate via `SetMicMute`).
+#[tauri::command]
+pub fn ui_prefs_set_hud_mic_muted(muted: bool) -> Result<UiPrefsSnapshot, String> {
+    let mut prefs = load();
+    prefs.hud_mic_muted = muted;
+    save(&prefs)?;
+    Ok(UiPrefsSnapshot::from(&prefs))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn opacity_clamps_and_defaults() {
+        assert_eq!(super::clamp_hud_opacity(10), super::HUD_OPACITY_MIN);
+        assert_eq!(super::clamp_hud_opacity(200), super::HUD_OPACITY_MAX);
+        assert_eq!(
+            super::UiPrefs::default().hud_opacity,
+            super::HUD_OPACITY_DEFAULT
+        );
+        assert!(!super::UiPrefs::default().hud_mic_muted);
+    }
+
     use super::*;
 
     #[test]

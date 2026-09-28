@@ -177,6 +177,11 @@ pub struct HudSnapshot {
     pub talking: bool,
     /// Awake energy-gated listen without holding PTT.
     pub auto_listening: bool,
+    /// Operator mic mute latch.
+    pub mic_muted: bool,
+    /// Turn phase wire value (`listening` / `thinking` / `calling_tools` / `speaking` / `awaiting_approve`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
     /// Confirm-gated tool waiting for Approve or Deny. Omitted when nothing is waiting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_tool: Option<softwake_ipc::PendingTool>,
@@ -218,6 +223,8 @@ pub async fn hud_snapshot() -> Result<HudSnapshot, String> {
             detail: status.detail,
             talking: status.talking,
             auto_listening: status.auto_listening,
+            mic_muted: status.mic_muted,
+            phase: status.phase.clone(),
             pending_tool: status.pending_tool,
             context_used: status.context_used,
             context_limit: status.context_limit,
@@ -329,6 +336,26 @@ pub async fn hud_ask(text: String) -> Result<Status, String> {
     })
     .await
     .map_err(|error| format!("ask task failed: {error}"))?
+}
+
+/// Mute or unmute mic listening while keeping typed ask.
+///
+/// Persists the preference in ui-prefs and tells the daemon via `SetMicMute`.
+///
+/// # Errors
+///
+/// Returns the daemon or prefs error as text.
+#[tauri::command]
+pub async fn hud_set_mic_mute(muted: bool) -> Result<Status, String> {
+    let _ = crate::ui_prefs::ui_prefs_set_hud_mic_muted(muted)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut client = connect()?;
+        client
+            .set_mic_mute(muted)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("mic mute task failed: {error}"))?
 }
 
 /// Resize and re-anchor the HUD capsule (collapsed bloom vs expanded ask strip).

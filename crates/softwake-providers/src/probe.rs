@@ -307,16 +307,17 @@ pub fn apply_test_outcome(
             now_ms,
         );
         if settings.selected_provider == provider {
+            // Keep unset as unset — UI shows None until the operator picks.
+            // Only clear a selection that left the catalog.
             let current = settings.selected_model.clone();
-            if current.is_empty() || !outcome.chat_models.iter().any(|id| id == &current) {
-                settings.selected_model = outcome.chat_models.first().cloned().unwrap_or_default();
+            if !current.is_empty() && !outcome.chat_models.iter().any(|id| id == &current) {
+                settings.selected_model.clear();
             }
             let current_voice = settings.selected_voice_model.clone();
-            if current_voice.is_empty()
-                || !outcome.voice_models.iter().any(|id| id == &current_voice)
+            if !current_voice.is_empty()
+                && !outcome.voice_models.iter().any(|id| id == &current_voice)
             {
-                settings.selected_voice_model =
-                    outcome.voice_models.first().cloned().unwrap_or_default();
+                settings.selected_voice_model.clear();
             }
         }
     }
@@ -437,7 +438,14 @@ mod tests {
             settings.voice_models_for(ProviderId::XaiKey),
             &["grok-voice-transcribe-2.0".to_owned()]
         );
-        assert_eq!(settings.selected_voice_model, "grok-voice-transcribe-2.0");
+        assert!(
+            settings.selected_model.is_empty(),
+            "Test must not auto-pick a chat model when unset"
+        );
+        assert!(
+            settings.selected_voice_model.is_empty(),
+            "Test must not auto-pick a voice model when unset"
+        );
 
         let fail = run_test(
             &MockTransport::new().with_post_json(

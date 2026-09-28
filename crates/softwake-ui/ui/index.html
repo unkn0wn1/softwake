@@ -83,6 +83,18 @@
           </p>
           <p id="hud-idle-status" class="meta" role="status"></p>
           <p id="hud-idle-error" class="error" role="status"></p>
+          <label class="field">
+            <span>HUD transparency (expanded)</span>
+            <span class="idle-controls">
+              <input id="hud-opacity-range" type="range" min="35" max="100" step="1" value="55" aria-describedby="hud-opacity-hint" />
+              <input id="hud-opacity-percent" type="number" min="35" max="100" step="1" value="55" inputmode="numeric" aria-label="HUD opacity percent" />
+            </span>
+          </label>
+          <p id="hud-opacity-hint" class="meta">
+            Background opacity for the expanded HUD capsule (35–100%, default 55).
+            Saved in ui-prefs.json as <code>hud_opacity</code>. Collapsed bloom keeps its own look.
+          </p>
+          <p id="hud-opacity-status" class="meta" role="status"></p>
           <div class="chat-lock" id="chat-lock">
             <h3 class="subhead">Chat lock</h3>
             <p id="chat-lock-status" class="meta" role="status">Status: …</p>

@@ -179,6 +179,11 @@ identifier = "allow-hud-ask"
 description = "Submit a typed line from the HUD (wake then ask from sleep)."
 commands.allow = ["hud_ask"]
 
+
+[[permission]]
+identifier = "allow-hud-set-mic-mute"
+description = "Mute or unmute HUD microphone listening."
+commands.allow = ["hud_set_mic_mute"]
 [[permission]]
 identifier = "allow-hud-talk-start"
 description = "Arm press-to-talk on the daemon (wake from sleep; refuse hibernate)."
@@ -407,6 +412,16 @@ description = "Save expanded HUD size (ui-prefs.json hud_expanded_w / hud_expand
 commands.allow = ["ui_prefs_set_hud_expanded_size"]
 
 
+
+[[permission]]
+identifier = "allow-ui-prefs-set-hud-opacity"
+description = "Save expanded HUD opacity percent."
+commands.allow = ["ui_prefs_set_hud_opacity"]
+
+[[permission]]
+identifier = "allow-ui-prefs-set-hud-mic-muted"
+description = "Save HUD mic mute preference."
+commands.allow = ["ui_prefs_set_hud_mic_muted"]
 [[permission]]
 identifier = "allow-hud-seed-session"
 description = "Seed the awake model session with prior HUD turns."

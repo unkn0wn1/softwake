@@ -28,7 +28,8 @@ body {
   padding: 0;
   border-radius: 1.15rem;
   border: 1px solid var(--line);
-  background: oklch(0.22 0.03 273 / 0.55);
+  --hud-bg-alpha: 0.55;
+  background: oklch(0.22 0.03 273 / var(--hud-bg-alpha));
   backdrop-filter: blur(14px);
   cursor: pointer;
   display: grid;
@@ -76,9 +77,9 @@ body {
 
 .strip-main {
   display: grid;
-  grid-template-rows: minmax(0, 1fr);
-  grid-auto-rows: auto;
-  gap: 6px;
+  /* vault, toolbar, log(flex), live, pending, allow, meter, form */
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto auto auto;
+  gap: 8px;
   min-height: 0;
   min-width: 0;
 }
@@ -552,6 +553,40 @@ body {
   cursor: pointer;
 }
 
+.mic-mute {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 5;
+  width: 28px;
+  height: 28px;
+  border-radius: 0.45rem;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.35);
+  color: inherit;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+.capsule.expanded .mic-mute:not([hidden]) {
+  display: inline-flex;
+}
+.mic-mute[aria-pressed="true"] {
+  background: rgba(200, 80, 80, 0.45);
+  border-color: rgba(255, 140, 140, 0.65);
+}
+.mic-mute .mic-mute-slash {
+  display: none;
+}
+.mic-mute[aria-pressed="true"] .mic-mute-slash {
+  display: block;
+}
+.mic-mute[aria-pressed="true"] .mic-mute-on {
+  display: none;
+}
+
 .capsule.expanded .pin:not([hidden]) {
   display: grid;
 }
@@ -606,7 +641,8 @@ body {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.25rem 0.5rem 0.35rem;
+  padding: 0.25rem 0.5rem 0.45rem;
+  margin-bottom: 2px;
   flex-shrink: 0;
 }
 

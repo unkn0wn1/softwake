@@ -277,8 +277,7 @@ pub fn remote_agent_clear_secret(agent_id: String) -> Result<RemoteAgentSnapshot
 }
 
 /// Real Tailnet probe: host validation, optional tailscale ping, SSH `BatchMode`, GET `/health`.
-#[tauri::command]
-pub fn remote_agent_test(agent_id: Option<String>) -> Result<RemoteAgentSnapshot, String> {
+fn remote_agent_test_inner(agent_id: Option<String>) -> Result<RemoteAgentSnapshot, String> {
     let (_path, file) = load_file()?;
     let store = open_secrets()?;
     let bag = store.load().map_err(|e| e.to_string())?;
@@ -308,9 +307,15 @@ pub fn remote_agent_test(agent_id: Option<String>) -> Result<RemoteAgentSnapshot
     ))
 }
 
-/// SSH-install softwake-node on the companion (Tailscale only). Idempotent reinstall.
+/// Real Tailnet probe on a blocking pool so Settings UI stays responsive.
 #[tauri::command]
-pub fn remote_agent_install(agent_id: Option<String>) -> Result<RemoteAgentSnapshot, String> {
+pub async fn remote_agent_test(agent_id: Option<String>) -> Result<RemoteAgentSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || remote_agent_test_inner(agent_id))
+        .await
+        .map_err(|error| format!("remote agent test task failed: {error}"))?
+}
+
+fn remote_agent_install_inner(agent_id: Option<String>) -> Result<RemoteAgentSnapshot, String> {
     let (_path, file) = load_file()?;
     let store = open_secrets()?;
     let bag = store.load().map_err(|e| e.to_string())?;
@@ -349,4 +354,12 @@ pub fn remote_agent_install(agent_id: Option<String>) -> Result<RemoteAgentSnaps
         &report.message,
         &status,
     ))
+}
+
+/// SSH-install softwake-node on the companion (Tailscale only). Runs off the UI thread.
+#[tauri::command]
+pub async fn remote_agent_install(agent_id: Option<String>) -> Result<RemoteAgentSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || remote_agent_install_inner(agent_id))
+        .await
+        .map_err(|error| format!("remote agent install task failed: {error}"))?
 }

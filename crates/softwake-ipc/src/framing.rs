@@ -215,6 +215,8 @@ mod tests {
                     context_compacted: false,
                     context_compact_at: None,
                     voice_test: false,
+                    mic_muted: false,
+                    phase: None,
                 }),
             }),
             line(&ServerMessage::Event {

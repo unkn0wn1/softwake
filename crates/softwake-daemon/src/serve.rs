@@ -250,7 +250,8 @@ pub(crate) struct Shared {
     pub(crate) runtime: Mutex<Runtime>,
     /// Last successful status snapshot. Served when `GetStatus` cannot take the
     /// runtime lock because `ask` / `talk_stop` is in flight.
-    last_status: Mutex<Option<Status>>,
+    /// Shared with [`Runtime`] so mid-ask reply/phase updates are visible to polls.
+    last_status: Arc<Mutex<Option<Status>>>,
     subscribers: Mutex<Vec<Subscriber>>,
     clients: Mutex<Vec<ClientSlot>>,
     next_subscriber: AtomicU64,
@@ -282,11 +283,13 @@ impl Shared {
         if voice_test {
             let _ = runtime.set_voice_test(true);
         }
+        let last_status = Arc::new(Mutex::new(None));
+        runtime.attach_status_cache(Arc::clone(&last_status));
         let mcp_note = crate::mcp_bridge::rediscover();
         eprintln!("softwaked: {mcp_note}");
         Ok(Self {
             runtime: Mutex::new(runtime),
-            last_status: Mutex::new(None),
+            last_status,
             subscribers: Mutex::new(Vec::new()),
             clients: Mutex::new(Vec::new()),
             next_subscriber: AtomicU64::new(1),
@@ -467,6 +470,10 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
             let outcome = lock(&shared.runtime).set_voice_test(enabled);
             reply(shared, tx, id, outcome)
         }
+        Ok(ClientMessage::SetMicMute { id, muted }) => {
+            let outcome = lock(&shared.runtime).set_mic_mute(muted);
+            reply(shared, tx, id, outcome)
+        }
         Ok(ClientMessage::ReloadKws { id }) => {
             let outcome = lock(&shared.runtime).reload_kws();
             reply(shared, tx, id, outcome)
@@ -511,6 +518,16 @@ fn reply(shared: &Shared, tx: &SyncSender<Outbound>, id: u64, outcome: Outcome) 
 fn remember_status(shared: &Shared, outcome: &Outcome) {
     if let Some(status) = outcome.body.status() {
         *lock(&shared.last_status) = Some(status.clone());
+        return;
+    }
+    // Rejects must not leave the cache stuck on thinking… / speaking.
+    if let ResponseBody::Err { error } = &outcome.body {
+        let mut guard = lock(&shared.last_status);
+        if let Some(status) = guard.as_mut() {
+            status.phase = None;
+            status.message = Some(error.to_string());
+            status.detail = Some("error".to_owned());
+        }
     }
 }
 
@@ -521,6 +538,7 @@ fn publish_thinking(shared: &Shared, detail: &str) {
     if let Some(status) = guard.as_mut() {
         status.message = Some("thinking…".to_owned());
         status.detail = Some(detail.to_owned());
+        status.phase = Some("thinking".to_owned());
         status.talking = false;
         status.auto_listening = false;
     } else {
@@ -541,6 +559,8 @@ fn publish_thinking(shared: &Shared, detail: &str) {
             context_compacted: false,
             context_compact_at: None,
             voice_test: false,
+            mic_muted: false,
+            phase: Some("thinking".to_owned()),
         });
     }
 }
@@ -591,6 +611,8 @@ fn placeholder_status() -> Status {
         context_compacted: false,
         context_compact_at: None,
         voice_test: false,
+        mic_muted: false,
+        phase: None,
     }
 }
 
