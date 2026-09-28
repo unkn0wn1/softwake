@@ -149,6 +149,30 @@ fn handle_inbound(state: &NodeState, token: &str, message: TgMessage) {
     });
 }
 
+/// Deliver a timer / agent-task summary to Telegram when messengers want it.
+///
+/// No TTS on the node. Sticky ownership protocol is unchanged — this only
+/// sends when a bot token is mirrored and the profile is bound with timer push.
+pub fn maybe_fanout_timer(state: &NodeState, profile_id: &str, text: &str) {
+    let file = state.load_messengers(profile_id);
+    if !softwake_tools::wants_timer_push(&file.telegram.flags()) {
+        return;
+    }
+    let Some(chat_id) = file
+        .telegram
+        .chat_id
+        .as_ref()
+        .map(|c| c.trim().to_owned())
+        .filter(|c| !c.is_empty())
+    else {
+        return;
+    };
+    let Some(token) = state.telegram_bot_token() else {
+        return;
+    };
+    let _ = send_message(&token, &chat_id, text);
+}
+
 fn companion_ask(state: &NodeState, text: &str) -> String {
     let Some(key) = state.xai_api_key() else {
         return "Softwake companion here (laptop away). Full agent replies when the laptop is back."
@@ -201,7 +225,7 @@ fn xai_oneshot(api_key: &str, text: &str) -> Result<String, String> {
     Ok(content)
 }
 
-fn send_message(token: &str, chat_id: &str, text: &str) -> Result<(), String> {
+pub(crate) fn send_message(token: &str, chat_id: &str, text: &str) -> Result<(), String> {
     let url = format!("{API_ROOT}/bot{token}/sendMessage");
     let body = serde_json::json!({
         "chat_id": chat_id,

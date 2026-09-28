@@ -36,6 +36,7 @@ Operators want Softwake reachable while the laptop sleeps or is away, without tu
 | `softwake-node` health + empty outbox | Live stub binary | **Slice 2:** presence, leases, durable outbox, schedule mirror |
 | Outbox → HUD | Docs only | **Slice 2:** pull → per-profile HUD while-away |
 | Telegram sticky owner | Docs only | **Live (ADR-0042)** |
+| Companion `agent_task` LLM + soul/skills/tools mirror | Docs only | **Live (ADR-0043)** |
 | OAuth mirror, SSH install | Docs only | Later |
 
 ### Config
@@ -59,3 +60,4 @@ Companion binary exposes `GET /health` and `GET /v1/outbox` (empty in slice 1). 
 - [remote-agent-pairing.md](remote-agent-pairing.md)
 
 - [ADR-0042](ADR-0042-telegram-sticky-ownership.md) — Telegram sticky ownership
+- [ADR-0043](ADR-0043-companion-agent-task-llm.md) — Companion agent_task LLM

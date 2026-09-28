@@ -1,5 +1,5 @@
 //! Durable companion state: presence, leases, outbox, mirrored schedules,
-//! Telegram sticky ownership + mirrored vault (bot token / optional LLM key).
+//! soul / skills / tools, Telegram sticky ownership + mirrored vault.
 
 use std::collections::HashMap;
 use std::fs;
@@ -87,6 +87,21 @@ pub struct OutboxItem {
     pub summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease_id: Option<String>,
+}
+
+/// One skill row in `PUT /v1/skills`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MirroredSkill {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub procedure: String,
+    #[serde(default)]
+    pub pitfalls: String,
+    #[serde(default)]
+    pub verify: String,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -251,6 +266,7 @@ impl NodeState {
         fired
     }
 
+    #[allow(clippy::too_many_lines)]
     fn tick_profile(&self, profile_id: &str, now: u64, laptop_present: bool) -> usize {
         let mut map = self.schedules.lock().expect("schedules");
         let Some(file) = map.get_mut(profile_id) else {
@@ -258,7 +274,14 @@ impl NodeState {
         };
         let mut changed = false;
         let mut fired = 0_usize;
-        let mut events: Vec<(String, String, u64, String, String)> = Vec::new();
+        let mut events: Vec<(
+            String,
+            String,
+            u64,
+            String,
+            String,
+            Option<softwake_tools::ScheduleEntry>,
+        )> = Vec::new();
         for entry in &mut file.entries {
             if !entry.enabled {
                 continue;
@@ -282,27 +305,30 @@ impl NodeState {
                 let fire_ms = next;
                 match self.claim_lease(profile_id, &entry.id, fire_ms, "companion", LEASE_TTL_MS) {
                     Ok(lease_id) => {
-                        let summary = match entry.action {
-                            ScheduleActionKind::Notify => fire_notify_line(entry),
-                            ScheduleActionKind::AgentTask => {
-                                format!(
-                                    "agent_task recorded for '{}': {} (full companion LLM deferred)",
-                                    entry.title,
-                                    truncate(&entry.message, 160)
-                                )
+                        match entry.action {
+                            ScheduleActionKind::Notify => {
+                                let summary = fire_notify_line(entry);
+                                events.push((
+                                    entry.id.clone(),
+                                    lease_id,
+                                    fire_ms,
+                                    "fire_ack".to_owned(),
+                                    summary,
+                                    None,
+                                ));
                             }
-                        };
-                        let kind = match entry.action {
-                            ScheduleActionKind::Notify => "fire_ack",
-                            ScheduleActionKind::AgentTask => "agent_task_result",
-                        };
-                        events.push((
-                            entry.id.clone(),
-                            lease_id,
-                            fire_ms,
-                            kind.to_owned(),
-                            summary,
-                        ));
+                            ScheduleActionKind::AgentTask => {
+                                // Clone entry; run LLM after dropping the schedules lock.
+                                events.push((
+                                    entry.id.clone(),
+                                    lease_id,
+                                    fire_ms,
+                                    "agent_task_result".to_owned(),
+                                    String::new(),
+                                    Some(entry.clone()),
+                                ));
+                            }
+                        }
                         if advance_after_fire(entry, now).is_ok() {
                             changed = true;
                             fired += 1;
@@ -328,7 +354,16 @@ impl NodeState {
             }
         }
         drop(map);
-        for (schedule_id, lease_id, _fire_ms, kind, summary) in events {
+        for (schedule_id, lease_id, _fire_ms, kind, summary, agent_entry) in events {
+            let summary = if let Some(entry) = agent_entry {
+                crate::agent::run_schedule_agent_task(self, profile_id, &entry)
+            } else {
+                summary
+            };
+            // Telegram fan-out for notify rows when messengers want timer push.
+            if kind == "fire_ack" {
+                crate::telegram::maybe_fanout_timer(self, profile_id, &summary);
+            }
             self.push_outbox(OutboxItem {
                 id: format!("ob-{}-{schedule_id}", Self::now_ms()),
                 profile_id: profile_id.to_owned(),
@@ -479,6 +514,127 @@ impl NodeState {
         "default".into()
     }
 
+    /// Mirrored soul pack directory for a profile.
+    #[must_use]
+    pub fn profile_soul_dir(&self, profile_id: &str) -> PathBuf {
+        self.data_dir.join("profiles").join(profile_id).join("soul")
+    }
+
+    /// Mirrored skills directory (global on the node).
+    #[must_use]
+    pub fn skills_dir(&self) -> PathBuf {
+        self.data_dir.join("skills")
+    }
+
+    /// Path to mirrored tools.json.
+    #[must_use]
+    pub fn tools_path(&self) -> PathBuf {
+        self.data_dir.join("tools.json")
+    }
+
+    /// Load mirrored Tools Settings (defaults when missing).
+    #[must_use]
+    pub fn load_tools_settings(&self) -> softwake_tools::ToolsSettings {
+        let path = self.tools_path();
+        softwake_tools::FileToolsSettings::new(&path)
+            .ok()
+            .and_then(|s| s.load().ok())
+            .unwrap_or_default()
+    }
+
+    /// Persist mirrored soul pack (four markdown files).
+    pub fn put_soul_pack(
+        &self,
+        profile_id: &str,
+        soul_md: &str,
+        user_md: &str,
+        rules_md: &str,
+        glossary_md: &str,
+    ) -> Result<(), String> {
+        let dir = self.profile_soul_dir(profile_id);
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        for (name, body) in [
+            ("soul.md", soul_md),
+            ("user.md", user_md),
+            ("rules.md", rules_md),
+            ("glossary.md", glossary_md),
+        ] {
+            write_mode_0600(&dir.join(name), body).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// Persist mirrored tools.json body.
+    pub fn put_tools_json(&self, body: &str) -> Result<(), String> {
+        let path = self.tools_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        // Validate shape.
+        let parsed: softwake_tools::ToolsSettings =
+            serde_json::from_str(body).map_err(|e| e.to_string())?;
+        let store = softwake_tools::FileToolsSettings::new(&path).map_err(|e| e.to_string())?;
+        store.save(&parsed).map_err(|e| e.to_string())
+    }
+
+    /// Replace mirrored skills catalog.
+    pub fn put_skills_catalog(&self, skills: &[MirroredSkill]) -> Result<(), String> {
+        let dir = self.skills_dir();
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        // Clear existing .md skills
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                    let _ = fs::remove_file(path);
+                }
+            }
+        }
+        for skill in skills.iter().take(softwake_skills::MAX_CATALOG_ENTRIES) {
+            let source = match skill.source.as_str() {
+                "agent" => softwake_skills::SkillSource::Agent,
+                _ => softwake_skills::SkillSource::User,
+            };
+            let doc = softwake_skills::Skill {
+                id: skill.id.clone(),
+                title: skill.title.clone(),
+                source,
+                procedure: skill.procedure.clone(),
+                pitfalls: skill.pitfalls.clone(),
+                verify: skill.verify.clone(),
+                updated: None,
+            };
+            softwake_skills::save_skill(&dir, doc).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// Format mirrored schedules list for the schedule tool.
+    #[must_use]
+    pub fn format_schedule_list(&self, profile_id: &str) -> String {
+        let map = self.schedules.lock().expect("schedules");
+        let Some(file) = map.get(profile_id) else {
+            return "no mirrored schedules".into();
+        };
+        if file.entries.is_empty() {
+            return "no mirrored schedules".into();
+        }
+        file.entries
+            .iter()
+            .map(|e| {
+                format!(
+                    "{} action={} run_on={} enabled={} title={}",
+                    e.id,
+                    e.action.as_str(),
+                    e.run_on.as_str(),
+                    e.enabled,
+                    e.title
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     pub fn bind_chat_id(&self, profile_id: &str, chat_id: &str) {
         let mut file = self.load_messengers(profile_id);
         let needs = file
@@ -494,15 +650,6 @@ impl NodeState {
             }
         }
     }
-}
-
-fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_owned();
-    }
-    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
-    out.push('…');
-    out
 }
 
 fn data_file(dir: &Path, name: &str) -> PathBuf {

@@ -37,7 +37,7 @@ Schedules, outbox items, leases, and mirrored soul/skills/messengers on the comp
 
 ### Schedule mirror + node tick
 
-Laptop periodically `PUT /v1/schedules/{profile_id}` with enabled `companion`/`auto` rows. softwake-node ticks those rows every ~15s so fires continue while the laptop is asleep. `agent_task` on the node records an outbox **summary stub** in slice 2 (full companion LLM is slice 3).
+Laptop periodically `PUT /v1/schedules/{profile_id}` with enabled `companion`/`auto` rows. softwake-node ticks those rows every ~15s so fires continue while the laptop is asleep. `agent_task` on the node recorded an outbox **summary stub** in slice 2; full companion LLM is [ADR-0043](ADR-0043-companion-agent-task-llm.md).
 
 ### Outbox → HUD
 
@@ -53,10 +53,10 @@ Mutating / outbox / presence / lease / schedule endpoints require `Authorization
 - SSH installer of softwake-node  
 - OAuth token mirror / vault bidirectional sync  
 - HUD left-rail profile list (click → switch active profile + `/refresh`) — UI slice later  
-- Full companion LLM for `agent_task`
+- Full companion LLM for `agent_task` — **done in [ADR-0043](ADR-0043-companion-agent-task-llm.md)**
 
 ## Consequences
 
 - Timers with `run_on=companion|auto` finally dispatch for real.  
 - Operators must set the same pairing secret on laptop Settings and `SOFTWAKE_NODE_PAIRING_SECRET`.  
-- Companion `agent_task` summaries are honest stubs until slice 3.
+- Companion `agent_task` summaries were honest stubs until [ADR-0043](ADR-0043-companion-agent-task-llm.md).
