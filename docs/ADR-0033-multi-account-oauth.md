@@ -74,3 +74,11 @@ cargo check -p softwake-ui --features live-http
 Manual: Settings → Email → Add account for a second mailbox, Set active, then
 ask for the inbox. Pass `account` with the other email or connection id to use
 that mailbox instead. Manual sign-in is not part of CI.
+
+## Amendment — OAuth mirror (ADR-0045)
+
+When the operator enables Mirror OAuth tokens on a Remote Agent, the companion
+receives a copy of the same Google/Microsoft connection rows and uses the same
+`account=` / active-or-first / Google-preferred rules. There is still no
+per-profile account bind.
+

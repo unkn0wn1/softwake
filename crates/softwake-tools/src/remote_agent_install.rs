@@ -75,6 +75,12 @@ pub fn render_node_env(listen_host: &str, pairing_secret: &str) -> String {
         "# Managed by Softwake Remote Agent installer (ADR-0044).\n\
          # Optional: SOFTWAKE_NODE_XAI_API_KEY=…  (needed for real agent_task / Telegram LLM)\n\
          # Optional: SOFTWAKE_NODE_MODEL=grok-4-fast-non-reasoning\n\
+         # Optional, ADR-0045: publisher client for refresh while the laptop is away.\n\
+         # SOFTWAKE_GOOGLE_CLIENT_ID=\n\
+         # SOFTWAKE_GOOGLE_CLIENT_SECRET=\n\
+         # SOFTWAKE_MICROSOFT_CLIENT_ID=\n\
+         # Or oauth-clients.env under the softwake user's home\n\
+         # (/var/lib/softwake-node/.config/softwake/oauth-clients.env).\n\
          SOFTWAKE_NODE_LISTEN={listen_host}:{port}\n\
          SOFTWAKE_NODE_PAIRING_SECRET={pairing_secret}\n\
          SOFTWAKE_NODE_DATA=/var/lib/softwake-node\n",
@@ -82,6 +88,44 @@ pub fn render_node_env(listen_host: &str, pairing_secret: &str) -> String {
         port = DEFAULT_NODE_PORT,
         pairing_secret = pairing_secret,
     )
+}
+
+/// Keys from a previous `/etc/softwake-node.env` that reinstall must keep when the
+/// new render does not already set them (ADR-0045). Exact names only.
+#[allow(dead_code, reason = "documented allowlist; CT shell duplicates names")]
+pub const PRESERVED_NODE_ENV_KEYS: &[&str] = &[
+    "SOFTWAKE_NODE_XAI_API_KEY",
+    "SOFTWAKE_NODE_MODEL",
+    "SOFTWAKE_GOOGLE_CLIENT_ID",
+    "SOFTWAKE_GOOGLE_CLIENT_SECRET",
+    "SOFTWAKE_MICROSOFT_CLIENT_ID",
+    "MEETREC_GOOGLE_CLIENT_ID",
+    "MEETREC_GOOGLE_CLIENT_SECRET",
+    "MEETREC_MICROSOFT_CLIENT_ID",
+];
+
+/// Merge allowlisted keys from `previous` into `rendered` when missing.
+///
+/// Used by unit tests and documented for the CT-side install script. Does not
+/// log values.
+#[must_use]
+#[allow(dead_code, reason = "unit-tested; CT install uses equivalent shell")]
+pub fn merge_preserved_node_env(previous: &str, rendered: &str) -> String {
+    let mut out = rendered.trim_end().to_owned();
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    for key in PRESERVED_NODE_ENV_KEYS {
+        let prefix = format!("{key}=");
+        if out.lines().any(|line| line.starts_with(&prefix)) {
+            continue;
+        }
+        if let Some(line) = previous.lines().find(|line| line.starts_with(&prefix)) {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// Render the systemd unit for softwake-node.
@@ -379,7 +423,18 @@ set -e
 ENV_B64='{env_b64}'
 UNIT_B64='{unit_b64}'
 if [ "$(id -u)" -eq 0 ]; then
-  printf '%s' "$ENV_B64" | base64 -d > /etc/softwake-node.env
+  PREV=""
+  if [ -f /etc/softwake-node.env ]; then PREV=$(cat /etc/softwake-node.env); fi
+  printf '%s' "$ENV_B64" | base64 -d > /tmp/softwake-node.env.new
+  {{
+    cat /tmp/softwake-node.env.new
+    for key in SOFTWAKE_NODE_XAI_API_KEY SOFTWAKE_NODE_MODEL SOFTWAKE_GOOGLE_CLIENT_ID SOFTWAKE_GOOGLE_CLIENT_SECRET SOFTWAKE_MICROSOFT_CLIENT_ID MEETREC_GOOGLE_CLIENT_ID MEETREC_GOOGLE_CLIENT_SECRET MEETREC_MICROSOFT_CLIENT_ID; do
+      if ! grep -q "^${{key}}=" /tmp/softwake-node.env.new 2>/dev/null; then
+        echo "$PREV" | grep -E "^${{key}}=" || true
+      fi
+    done
+  }} > /etc/softwake-node.env
+  rm -f /tmp/softwake-node.env.new
   chown root:softwake /etc/softwake-node.env
   chmod 0640 /etc/softwake-node.env
   printf '%s' "$UNIT_B64" | base64 -d > /etc/systemd/system/softwake-node.service
@@ -388,7 +443,18 @@ if [ "$(id -u)" -eq 0 ]; then
   systemctl enable --now softwake-node
   systemctl restart softwake-node || true
 else
-  printf '%s' "$ENV_B64" | base64 -d | sudo -n tee /etc/softwake-node.env >/dev/null
+  PREV=""
+  if sudo -n test -f /etc/softwake-node.env; then PREV=$(sudo -n cat /etc/softwake-node.env); fi
+  printf '%s' "$ENV_B64" | base64 -d > /tmp/softwake-node.env.new
+  {{
+    cat /tmp/softwake-node.env.new
+    for key in SOFTWAKE_NODE_XAI_API_KEY SOFTWAKE_NODE_MODEL SOFTWAKE_GOOGLE_CLIENT_ID SOFTWAKE_GOOGLE_CLIENT_SECRET SOFTWAKE_MICROSOFT_CLIENT_ID MEETREC_GOOGLE_CLIENT_ID MEETREC_GOOGLE_CLIENT_SECRET MEETREC_MICROSOFT_CLIENT_ID; do
+      if ! grep -q "^${{key}}=" /tmp/softwake-node.env.new 2>/dev/null; then
+        echo "$PREV" | grep -E "^${{key}}=" || true
+      fi
+    done
+  }} | sudo -n tee /etc/softwake-node.env >/dev/null
+  rm -f /tmp/softwake-node.env.new
   sudo -n chown root:softwake /etc/softwake-node.env
   sudo -n chmod 0640 /etc/softwake-node.env
   printf '%s' "$UNIT_B64" | base64 -d | sudo -n tee /etc/systemd/system/softwake-node.service >/dev/null
@@ -468,7 +534,15 @@ pub fn resolve_softwake_node_bin() -> Result<(PathBuf, String), String> {
         return Ok((release, format!("workspace {}", root.display())));
     }
     let status = Command::new("cargo")
-        .args(["build", "--release", "-p", "softwake-node", "--locked"])
+        .args([
+            "build",
+            "--release",
+            "-p",
+            "softwake-node",
+            "--features",
+            "live-http",
+            "--locked",
+        ])
         .current_dir(&root)
         .status()
         .map_err(|e| format!("cargo build: {e}"))?;
@@ -716,6 +790,7 @@ mod tests {
             roles: RemoteAgentRoles::default(),
             conflict_policy: RemoteConflictPolicy::PreferLocal,
             enabled: true,
+            oauth_mirror: false,
             created_ms: None,
             updated_ms: None,
         }
@@ -752,5 +827,20 @@ mod tests {
         let report = probe_tailnet(&sample("1.2.3.4"), None);
         assert!(!report.ok);
         assert!(report.summary().contains("host=reject"));
+    }
+
+    #[test]
+    fn merge_preserved_node_env_keeps_allowlisted() {
+        let rendered = render_node_env("100.64.1.2", "sekrit");
+        assert!(!rendered.contains("sentinel-xai"));
+        let previous = "SOFTWAKE_NODE_XAI_API_KEY=sentinel-xai
+FOO=drop-me
+SOFTWAKE_GOOGLE_CLIENT_ID=sentinel-gid
+";
+        let merged = merge_preserved_node_env(previous, &rendered);
+        assert!(merged.contains("SOFTWAKE_NODE_XAI_API_KEY=sentinel-xai"));
+        assert!(merged.contains("SOFTWAKE_GOOGLE_CLIENT_ID=sentinel-gid"));
+        assert!(!merged.contains("FOO=drop-me"));
+        assert!(merged.contains("SOFTWAKE_NODE_LISTEN=100.64.1.2:"));
     }
 }

@@ -8,6 +8,8 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use softwake_providers::OauthMirrorDocument;
 use softwake_tools::{
     CATCH_UP_GRACE_MS, ScheduleActionKind, SchedulesFile, advance_after_fire, fire_notify_line,
     should_fire, skip_missed,
@@ -126,6 +128,8 @@ pub struct NodeState {
     schedules: Mutex<HashMap<String, SchedulesFile>>,
     /// Last claimed sticky owner (presence still wins for eligibility).
     telegram_owner: Mutex<TelegramOwner>,
+    /// Serializes read-modify-write of `vault/oauth.json` (ADR-0045).
+    oauth: Mutex<()>,
 }
 
 impl NodeState {
@@ -146,6 +150,7 @@ impl NodeState {
             outbox: Mutex::new(outbox),
             schedules: Mutex::new(schedules),
             telegram_owner: Mutex::new(telegram_owner),
+            oauth: Mutex::new(()),
         }
     }
 
@@ -469,6 +474,88 @@ impl NodeState {
             "xai_api_key",
             key.map(str::trim).filter(|t| !t.is_empty()),
         );
+    }
+
+    /// Path to the durable OAuth mirror vault file.
+    pub fn oauth_vault_path(&self) -> PathBuf {
+        vault_dir(&self.data_dir).join("oauth.json")
+    }
+
+    /// Load mirrored OAuth document. Missing/corrupt → empty.
+    pub fn load_oauth_document(&self) -> OauthMirrorDocument {
+        let _guard = self.oauth.lock().expect("oauth");
+        let path = self.oauth_vault_path();
+        let Ok(bytes) = fs::read(&path) else {
+            return OauthMirrorDocument::default();
+        };
+        serde_json::from_slice(&bytes).unwrap_or_default()
+    }
+
+    /// Replace or clear the OAuth vault (empty doc deletes the file).
+    pub fn put_oauth_document(&self, doc: &OauthMirrorDocument) -> Result<(), String> {
+        let _guard = self.oauth.lock().expect("oauth");
+        let root = vault_dir(&self.data_dir);
+        fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&root, fs::Permissions::from_mode(0o700));
+        }
+        let path = root.join("oauth.json");
+        let tmp = root.join("oauth.json.tmp");
+        if doc.is_empty() {
+            let _ = fs::remove_file(&path);
+            let _ = fs::remove_file(&tmp);
+            return Ok(());
+        }
+        let json = serde_json::to_string_pretty(doc).map_err(|e| e.to_string())?;
+        write_mode_0600(
+            &tmp,
+            &format!(
+                "{json}
+"
+            ),
+        )
+        .map_err(|e| e.to_string())?;
+        fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        }
+        Ok(())
+    }
+
+    /// Public status for GET /v1/vault/oauth (no tokens).
+    pub fn oauth_public_status(&self) -> Value {
+        let doc = self.load_oauth_document();
+        let map_row = |provider: &str, c: &softwake_providers::AccountConnection| {
+            json!({
+                "id": c.id,
+                "email": c.account_email,
+                "provider": provider,
+            })
+        };
+        let google: Vec<_> = doc
+            .google_connections
+            .iter()
+            .map(|c| map_row("google", c))
+            .collect();
+        let microsoft: Vec<_> = doc
+            .microsoft_connections
+            .iter()
+            .map(|c| map_row("microsoft", c))
+            .collect();
+        json!({
+            "google": google.len(),
+            "microsoft": microsoft.len(),
+            "active_google_connection_id": doc.active_google_connection_id,
+            "active_microsoft_connection_id": doc.active_microsoft_connection_id,
+            "accounts": {
+                "google": google,
+                "microsoft": microsoft,
+            }
+        })
     }
 
     pub fn put_messengers(&self, profile_id: &str, body: &str) -> Result<(), String> {

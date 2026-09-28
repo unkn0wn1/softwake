@@ -62,3 +62,9 @@ Companion binary exposes `GET /health` and `GET /v1/outbox` (empty in slice 1). 
 
 - [ADR-0042](ADR-0042-telegram-sticky-ownership.md) — Telegram sticky ownership
 - [ADR-0043](ADR-0043-companion-agent-task-llm.md) — Companion agent_task LLM
+
+## Amendment — OAuth mirror (ADR-0045)
+
+OAuth stays laptop-local by default. Opt-in mirror of Email OAuth connections to
+the companion is [ADR-0045](ADR-0045-oauth-mirror.md) (Live, default off).
+

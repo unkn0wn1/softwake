@@ -118,6 +118,66 @@ impl std::fmt::Debug for AccountConnection {
     }
 }
 
+/// Laptop → companion OAuth vault document (ADR-0045). Tokens stay redacted in Debug.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct OauthMirrorDocument {
+    /// Google account rows from the laptop bag.
+    #[serde(default, deserialize_with = "null_as_empty_connections")]
+    pub google_connections: Vec<AccountConnection>,
+    /// Microsoft account rows from the laptop bag.
+    #[serde(default, deserialize_with = "null_as_empty_connections")]
+    pub microsoft_connections: Vec<AccountConnection>,
+    /// Active Google connection id.
+    #[serde(default)]
+    pub active_google_connection_id: Option<String>,
+    /// Active Microsoft connection id.
+    #[serde(default)]
+    pub active_microsoft_connection_id: Option<String>,
+}
+
+impl OauthMirrorDocument {
+    /// True when both connection lists are empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.google_connections.is_empty() && self.microsoft_connections.is_empty()
+    }
+
+    /// True when any row has a non-empty access or refresh token.
+    #[must_use]
+    pub fn has_usable_connection(&self) -> bool {
+        self.google_connections
+            .iter()
+            .chain(self.microsoft_connections.iter())
+            .any(|c| !c.access_token.trim().is_empty() || !c.refresh_token.trim().is_empty())
+    }
+}
+
+impl std::fmt::Debug for OauthMirrorDocument {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OauthMirrorDocument")
+            .field("google_connections", &self.google_connections)
+            .field("microsoft_connections", &self.microsoft_connections)
+            .field(
+                "active_google_connection_id",
+                &self.active_google_connection_id,
+            )
+            .field(
+                "active_microsoft_connection_id",
+                &self.active_microsoft_connection_id,
+            )
+            .finish()
+    }
+}
+
+fn null_as_empty_connections<'de, D>(deserializer: D) -> Result<Vec<AccountConnection>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Vec<AccountConnection>>::deserialize(deserializer)?;
+    Ok(value.unwrap_or_default())
+}
+
 /// Read `SOFTWAKE_GOOGLE_CLIENT_ID` (or `MeetRec` alias) from process env or
 /// `oauth-clients.env`.
 #[must_use]

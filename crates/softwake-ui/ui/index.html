@@ -619,6 +619,11 @@
             <input type="checkbox" id="remote-agent-enabled" />
             <span>Enabled</span>
           </label>
+          <label class="row">
+            <input type="checkbox" id="remote-agent-oauth-mirror" />
+            <span>Mirror OAuth tokens to companion (email/calendar/Drive while away)</span>
+          </label>
+          <p id="remote-agent-oauth-mirror-danger" class="meta">OAuth tokens will be stored on the companion CT. Disable mirror and rotate the pairing secret to revoke.</p>
           <div class="row gap">
             <button type="button" class="btn" id="remote-agent-save">Save</button>
             <button type="button" class="btn" id="remote-agent-test">Test on Tailnet</button>

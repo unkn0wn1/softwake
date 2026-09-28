@@ -1,7 +1,7 @@
 //! Softwake companion node (Remote Agent / ADR-0039 + ADR-0040 + ADR-0042 + ADR-0043).
 //!
 //! Presence, fire leases, durable outbox, per-profile schedule + soul/skills/tools
-//! mirror, companion `agent_task` LLM, Telegram sticky ownership.
+//! mirror, companion `agent_task` LLM, opt-in OAuth vault (ADR-0045), Telegram sticky ownership.
 //! Bind via `SOFTWAKE_NODE_LISTEN` (default `127.0.0.1:8790`). Production binds
 //! the node's Tailscale IP only.
 //! Auth: `SOFTWAKE_NODE_PAIRING_SECRET` + Bearer / X-Softwake-Remote-Token.
@@ -9,6 +9,7 @@
 mod agent;
 mod auth;
 mod http;
+mod oauth_tools;
 mod state;
 mod telegram;
 
@@ -349,6 +350,44 @@ fn route(
                 &json!({"ok": true, "has_key": state.xai_api_key().is_some()}).to_string(),
             )
         }
+
+        ("PUT", "/v1/vault/oauth") => {
+            if req.body.len() > 256 * 1024 {
+                return write_response(
+                    stream,
+                    400,
+                    "application/json",
+                    r#"{"ok":false,"error":"body too large"}"#,
+                );
+            }
+            match serde_json::from_str::<softwake_providers::OauthMirrorDocument>(&req.body) {
+                Ok(doc) => match state.put_oauth_document(&doc) {
+                    Ok(()) => {
+                        let body = json!({
+                            "ok": true,
+                            "google": doc.google_connections.len(),
+                            "microsoft": doc.microsoft_connections.len(),
+                        })
+                        .to_string();
+                        write_response(stream, 200, "application/json", &body)
+                    }
+                    Err(error) => {
+                        let body = json!({"ok": false, "error": error}).to_string();
+                        write_response(stream, 400, "application/json", &body)
+                    }
+                },
+                Err(_) => write_response(
+                    stream,
+                    400,
+                    "application/json",
+                    r#"{"ok":false,"error":"invalid oauth document"}"#,
+                ),
+            }
+        }
+        ("GET", "/v1/vault/oauth") => {
+            let body = state.oauth_public_status().to_string();
+            write_response(stream, 200, "application/json", &body)
+        }
         ("PUT", path) if path.starts_with("/v1/profiles/") && path.ends_with("/messengers") => {
             let rest = path
                 .trim_start_matches("/v1/profiles/")
@@ -572,6 +611,51 @@ mod tests {
         let put_skills = http(addr, "PUT", "/v1/skills", skills, Some("tok"), &[]);
         assert!(put_skills.contains("200"), "{put_skills}");
         assert!(dir.join("skills/demo.md").is_file());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn vault_oauth_round_trip_clears_and_keeps_on_bad_put() {
+        let (addr, dir, _h) = spawn_node("tok");
+        let denied = http(addr, "PUT", "/v1/vault/oauth", "{}", None, &[]);
+        assert!(denied.contains("401"), "{denied}");
+        let body = r#"{"google_connections":[{"id":"g1","access_token":"sentinel-access","refresh_token":"r","expires_at_ms":999,"token_type":"Bearer","scope":"s","account_email":"ada@example.com"}],"microsoft_connections":[]}"#;
+        let put = http(addr, "PUT", "/v1/vault/oauth", body, Some("tok"), &[]);
+        assert!(put.contains("200"), "{put}");
+        let path = dir.join("vault/oauth.json");
+        assert!(path.is_file());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "mode {mode:o}");
+        }
+        let file = std::fs::read_to_string(&path).unwrap();
+        assert!(file.contains("sentinel-access"));
+        let got = http(addr, "GET", "/v1/vault/oauth", "", Some("tok"), &[]);
+        assert!(got.contains("200"), "{got}");
+        assert!(got.contains("ada@example.com"), "{got}");
+        assert!(!got.contains("sentinel-access"), "{got}");
+        assert!(!got.contains("access_token"), "{got}");
+        let clear = http(addr, "PUT", "/v1/vault/oauth", "{}", Some("tok"), &[]);
+        assert!(clear.contains("200"), "{clear}");
+        assert!(!path.exists());
+        let put2 = http(addr, "PUT", "/v1/vault/oauth", body, Some("tok"), &[]);
+        assert!(put2.contains("200"), "{put2}");
+        let bad = http(
+            addr,
+            "PUT",
+            "/v1/vault/oauth",
+            "{not-json",
+            Some("tok"),
+            &[],
+        );
+        assert!(bad.contains("400"), "{bad}");
+        assert!(path.exists());
+        let huge = "x".repeat(256 * 1024 + 1);
+        let too_big = http(addr, "PUT", "/v1/vault/oauth", &huge, Some("tok"), &[]);
+        assert!(too_big.contains("400"), "{too_big}");
+        assert!(path.exists());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

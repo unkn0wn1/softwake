@@ -35,11 +35,12 @@ pub use account_oauth::{
     AccountConnection, AccountProvider, GOOGLE_AUTHORIZE_URL, GOOGLE_EMAIL_SCOPES,
     GOOGLE_REVOKE_URL, GOOGLE_TOKEN_URL, GOOGLE_USERINFO_URL, MICROSOFT_AUTHORIZE_URL,
     MICROSOFT_EMAIL_SCOPES, MICROSOFT_PROFILE_URL, MICROSOFT_TOKEN_URL, OAUTH_CLIENT_MISSING,
-    PkceStart, account_needs_refresh, apply_publisher_oauth_from_config, ensure_fresh_account,
-    exchange_and_profile, google_authorize_url, merge_account_refresh, microsoft_authorize_url,
-    parse_google_profile, parse_microsoft_profile, parse_oauth_clients_env, parse_token_json,
-    publisher_google_client_id, publisher_google_client_secret, publisher_microsoft_client_id,
-    refresh_token_body, revoke_google_refresh, token_exchange_body,
+    OauthMirrorDocument, PkceStart, account_needs_refresh, apply_publisher_oauth_from_config,
+    ensure_fresh_account, exchange_and_profile, google_authorize_url, merge_account_refresh,
+    microsoft_authorize_url, parse_google_profile, parse_microsoft_profile,
+    parse_oauth_clients_env, parse_token_json, publisher_google_client_id,
+    publisher_google_client_secret, publisher_microsoft_client_id, refresh_token_body,
+    revoke_google_refresh, token_exchange_body,
 };
 pub use chat::{
     CHAT_MAX_TOKENS, COMPACT_SYSTEM, ChatError, ChatMessage, ChatRole, PrepareError, PreparedChat,

@@ -124,6 +124,49 @@ impl Transport for LiveTransport {
         )?;
         read_bytes(response)
     }
+
+    fn get_bearer_with_headers(
+        &self,
+        url: &str,
+        bearer: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<HttpResponse, TransportError> {
+        let mut request = self
+            .agent
+            .get(url)
+            .set("Authorization", &format!("Bearer {bearer}"));
+        for (name, value) in headers {
+            request = request.set(name, value);
+        }
+        let response = take_response(request.call())?;
+        read_response(response)
+    }
+
+    fn patch_json_bearer(
+        &self,
+        url: &str,
+        bearer: &str,
+        body: &str,
+    ) -> Result<HttpResponse, TransportError> {
+        let response = take_response(
+            self.agent
+                .request("PATCH", url)
+                .set("Authorization", &format!("Bearer {bearer}"))
+                .set("Content-Type", "application/json")
+                .send_string(body),
+        )?;
+        read_response(response)
+    }
+
+    fn delete_bearer(&self, url: &str, bearer: &str) -> Result<HttpResponse, TransportError> {
+        let response = take_response(
+            self.agent
+                .request("DELETE", url)
+                .set("Authorization", &format!("Bearer {bearer}"))
+                .call(),
+        )?;
+        read_response(response)
+    }
 }
 
 fn send_multipart(

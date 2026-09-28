@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use softwake_providers::{open_store, resolve_secrets_file};
+use softwake_providers::{OauthMirrorDocument, SecretBag, open_store, resolve_secrets_file};
 use softwake_soul::resolve_config_dir;
 use softwake_state::VoiceState;
 use softwake_tools::{
@@ -76,6 +76,7 @@ struct CompanionTarget {
     agent_id: String,
     base_url: String,
     secret: String,
+    oauth_mirror: bool,
 }
 
 fn resolve_target() -> Option<CompanionTarget> {
@@ -102,6 +103,7 @@ fn resolve_target() -> Option<CompanionTarget> {
         agent_id: agent.id.clone(),
         base_url,
         secret,
+        oauth_mirror: agent.oauth_mirror,
     })
 }
 
@@ -245,6 +247,47 @@ pub(crate) fn claim_lease(
         return Ok(false);
     }
     Err(format!("lease http: {}", raw.lines().next().unwrap_or("")))
+}
+
+fn oauth_mirror_document(bag: &SecretBag) -> OauthMirrorDocument {
+    OauthMirrorDocument {
+        google_connections: bag.google_connections.clone(),
+        microsoft_connections: bag.microsoft_connections.clone(),
+        active_google_connection_id: bag.active_google_connection_id.clone(),
+        active_microsoft_connection_id: bag.active_microsoft_connection_id.clone(),
+    }
+}
+
+/// Mirror Google/Microsoft OAuth connections to the node when opt-in (ADR-0045).
+///
+/// Default off. When disabled, PUT an empty document so the node clears the vault.
+pub(crate) fn mirror_oauth_vault() {
+    let Some(target) = resolve_target() else {
+        return;
+    };
+    let body = if target.oauth_mirror {
+        let Ok(secrets_path) = resolve_secrets_file() else {
+            return;
+        };
+        let Ok(store) = open_store(&secrets_path) else {
+            return;
+        };
+        let Ok(bag) = store.load() else {
+            return;
+        };
+        let doc = oauth_mirror_document(&bag);
+        serde_json::to_string(&doc).unwrap_or_else(|_| "{}".into())
+    } else {
+        serde_json::to_string(&OauthMirrorDocument::default()).unwrap_or_else(|_| "{}".into())
+    };
+    let _ = http_json(
+        &target.base_url,
+        "PUT",
+        "/v1/vault/oauth",
+        &body,
+        &target.secret,
+        &[],
+    );
 }
 
 /// Mirror Telegram bot token, optional xAI key, and per-profile messengers to the node vault.
@@ -413,7 +456,7 @@ pub(crate) fn pull_outbox_into_hud() {
 
 /// Mirror per-profile soul packs, global tools.json, and authored skills to the node.
 ///
-/// OAuth tokens are never mirrored (ADR-0043).
+/// Soul/skills/tools mirror does not include OAuth; OAuth is `mirror_oauth_vault` (ADR-0045), default off.
 pub(crate) fn mirror_soul_skills_tools() {
     let Some(target) = resolve_target() else {
         return;
@@ -516,6 +559,7 @@ pub(crate) fn spawn_background(shared: &std::sync::Arc<crate::serve::Shared>) {
                 std::thread::sleep(Duration::from_secs(MIRROR_SECS));
                 mirror_schedules();
                 mirror_telegram_vault();
+                mirror_oauth_vault();
                 mirror_soul_skills_tools();
             }
         });
@@ -539,5 +583,62 @@ mod tests {
         assert_eq!(presence_from_voice(VoiceState::Awake), "present");
         assert_eq!(presence_from_voice(VoiceState::Sleep), "sleeping");
         assert_eq!(presence_from_voice(VoiceState::Hibernate), "hibernated");
+    }
+}
+
+#[cfg(test)]
+mod oauth_mirror_tests {
+    use super::oauth_mirror_document;
+    use softwake_providers::{AccountConnection, OauthMirrorDocument, SecretBag};
+
+    fn conn(id: &str, email: &str, access: &str, refresh: &str) -> AccountConnection {
+        AccountConnection {
+            id: id.into(),
+            access_token: access.into(),
+            refresh_token: refresh.into(),
+            expires_at_ms: 9_999_999_999_999,
+            token_type: "Bearer".into(),
+            scope: "s".into(),
+            account_email: Some(email.into()),
+        }
+    }
+
+    #[test]
+    fn oauth_mirror_document_omits_other_secrets() {
+        let mut bag = SecretBag::empty();
+        bag.xai_api_key = Some("sentinel-xai".into());
+        bag.telegram_bot_token = Some("sentinel-tg".into());
+        bag.email_smtp_password = Some("sentinel-smtp".into());
+        bag.mcp_secrets.insert("mcp1".into(), "sentinel-mcp".into());
+        bag.remote_agent_pairing_secrets
+            .insert("c".into(), "sentinel-pair".into());
+        bag.google_connections = vec![conn(
+            "g1",
+            "ada@example.com",
+            "sentinel-access",
+            "sentinel-refresh",
+        )];
+        let doc = oauth_mirror_document(&bag);
+        let json = serde_json::to_string(&doc).expect("ser");
+        assert!(json.contains("ada@example.com"));
+        assert!(json.contains("sentinel-access"));
+        assert!(!json.contains("sentinel-xai"));
+        assert!(!json.contains("sentinel-tg"));
+        assert!(!json.contains("sentinel-smtp"));
+        assert!(!json.contains("sentinel-mcp"));
+        assert!(!json.contains("sentinel-pair"));
+        let dbg = format!("{doc:?}");
+        assert!(!dbg.contains("sentinel-access"));
+        assert!(!dbg.contains("sentinel-refresh"));
+    }
+
+    #[test]
+    fn clear_document_has_empty_arrays() {
+        let json = serde_json::to_string(&OauthMirrorDocument::default()).expect("ser");
+        assert!(json.contains("google_connections"));
+        assert!(!json.contains("sentinel-access"));
+        let doc: OauthMirrorDocument =
+            serde_json::from_str(r#"{"google_connections":null}"#).expect("null");
+        assert!(doc.is_empty());
     }
 }

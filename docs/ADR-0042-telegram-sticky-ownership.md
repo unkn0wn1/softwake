@@ -78,3 +78,11 @@ When no enabled Remote Agent is configured, softwaked always owns Telegram (unch
 
 - [remote-agent-pairing.md](remote-agent-pairing.md)
 - [ADR-0040](ADR-0040-remote-agent-presence-outbox.md)
+
+## Amendment — OAuth mirror (ADR-0045)
+
+Inbound Telegram on the companion stays a no-tools oneshot unless the OAuth
+vault has a usable connection, in which case it uses `run_agent_turn`. Sticky
+ownership is unchanged. Opt-in mirror:
+[ADR-0045](ADR-0045-oauth-mirror.md).
+

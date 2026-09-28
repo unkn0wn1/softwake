@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Opt-in OAuth mirror to the companion (ADR-0045): Settings checkbox (default off), `PUT /v1/vault/oauth`, companion email/calendar/Drive when mirrored.
 
 - Remote Agent **Test on Tailnet** (real ping/SSH/health) and **Install companion** / `softwaked ctl remote-agent install` — Tailscale-only SSH installer for softwake-node (ADR-0044).
 

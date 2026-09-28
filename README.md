@@ -377,7 +377,7 @@ Default workspace tests do not call the network. Live HTTPS is the `live-http` f
 
 ### Remote Agent (Tailscale installer ADR-0044) (companion)
 
-Always-on Tailscale **companion** on a CT (not a remote core). Settings → **Remote Agent** stores pairing; **Test on Tailnet** + **Install companion** (ADR-0044) ship `softwake-node` over Tailscale SSH only. Timers get `run_on` (`local` / `companion` / `auto`). Presence / leases / outbox (ADR-0040), Telegram sticky ownership (ADR-0042), companion `agent_task` LLM (ADR-0043). OAuth stays laptop-local. See [docs/remote-agent-pairing.md](docs/remote-agent-pairing.md).
+Always-on Tailscale **companion** on a CT (not a remote core). Settings → **Remote Agent** stores pairing; **Test on Tailnet** + **Install companion** (ADR-0044) ship `softwake-node` over Tailscale SSH only. Timers get `run_on` (`local` / `companion` / `auto`). Presence / leases / outbox (ADR-0040), Telegram sticky ownership (ADR-0042), companion `agent_task` LLM (ADR-0043). OAuth stays laptop-local unless **Mirror OAuth tokens** is enabled (ADR-0045, default off). See [docs/remote-agent-pairing.md](docs/remote-agent-pairing.md) and [docs/ADR-0045-oauth-mirror.md](docs/ADR-0045-oauth-mirror.md).
 
 ### Webhook wake
 

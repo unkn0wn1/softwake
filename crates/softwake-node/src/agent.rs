@@ -2,18 +2,18 @@
 //!
 //! Same family as laptop `messenger_ask_oneshot` / ADR-0036: soul + tools
 //! appendix + advertised tools, max 6 rounds. Ask → pending text (never silent
-//! Always-allow). OAuth tools refuse. TTS is never used on the node.
+//! Always-allow). OAuth tools run from the opt-in mirror vault when present (ADR-0045). TTS is never used on the node.
 
 use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{Value, json};
 use softwake_tools::{
-    ECHO_TOOL, EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL,
-    EmailOauthStatus, NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL,
-    ScheduleEntry, ToolPermission, ToolsSettings, advertise_chat_tools, agent_task_user_prompt,
-    fire_agent_notify_line, format_shell_output, run_shell, tool_args_from_json,
-    tools_permissions_appendix,
+    ConnectedAccount, ECHO_TOOL, EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL,
+    EMAIL_SEND_TOOL, EmailOauthStatus, NOTIFY_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL,
+    SKILL_LIST_TOOL, ScheduleEntry, ToolPermission, ToolsSettings, advertise_chat_tools,
+    agent_task_user_prompt, fire_agent_notify_line, format_shell_output, run_shell,
+    tool_args_from_json, tools_permissions_appendix,
 };
 
 use crate::state::NodeState;
@@ -60,9 +60,15 @@ pub fn run_agent_turn(
     let system_soul = pack.render_instructions();
 
     let tools_settings = state.load_tools_settings();
-    let tools_appendix = tools_permissions_appendix(&tools_settings, &EmailOauthStatus::default());
+    let oauth_doc = state.load_oauth_document();
+    let email_status = email_oauth_status_from_doc(&oauth_doc);
+    let tools_appendix = tools_permissions_appendix(&tools_settings, &email_status);
     let skills_appendix = skills_catalog_appendix(&state.skills_dir());
-    let companion_note = "You are Softwake's companion node running a scheduled agent task while the laptop Softwake is away. Ask-mode tools cannot be approved here — if you need one, say so and stop. OAuth (email/calendar/drive) is laptop-local and unavailable. Be concise.";
+    let companion_note = if oauth_doc.has_usable_connection() {
+        "You are Softwake's companion node running a scheduled agent task while the laptop Softwake is away. Ask-mode tools cannot be approved here — if you need one, say so and stop. Mirrored OAuth accounts are available for email/calendar/Drive; pass account= to pick a mailbox. Be concise."
+    } else {
+        "You are Softwake's companion node running a scheduled agent task while the laptop Softwake is away. Ask-mode tools cannot be approved here — if you need one, say so and stop. OAuth (email/calendar/drive) is unavailable until Mirror OAuth tokens is enabled in Settings → Remote Agent. Be concise."
+    };
 
     let system = format!(
         "{system_soul}\n\n{tools_appendix}\n\n{skills_appendix}\n\n# Companion\n\n{companion_note}"
@@ -231,6 +237,43 @@ fn chat_turn(
     Ok(Turn::Message(text))
 }
 
+fn email_oauth_status_from_doc(doc: &softwake_providers::OauthMirrorDocument) -> EmailOauthStatus {
+    let google_active = doc
+        .active_google_connection_id
+        .as_ref()
+        .and_then(|id| doc.google_connections.iter().find(|c| &c.id == id))
+        .or_else(|| doc.google_connections.first());
+    let microsoft_active = doc
+        .active_microsoft_connection_id
+        .as_ref()
+        .and_then(|id| doc.microsoft_connections.iter().find(|c| &c.id == id))
+        .or_else(|| doc.microsoft_connections.first());
+    EmailOauthStatus {
+        google_connected: !doc.google_connections.is_empty(),
+        google_email: google_active.and_then(|c| c.account_email.clone()),
+        google_accounts: doc
+            .google_connections
+            .iter()
+            .map(|row| ConnectedAccount {
+                id: row.id.clone(),
+                email: row.account_email.clone(),
+                active: google_active.is_some_and(|c| c.id == row.id),
+            })
+            .collect(),
+        microsoft_connected: !doc.microsoft_connections.is_empty(),
+        microsoft_email: microsoft_active.and_then(|c| c.account_email.clone()),
+        microsoft_accounts: doc
+            .microsoft_connections
+            .iter()
+            .map(|row| ConnectedAccount {
+                id: row.id.clone(),
+                email: row.account_email.clone(),
+                active: microsoft_active.is_some_and(|c| c.id == row.id),
+            })
+            .collect(),
+    }
+}
+
 fn parse_args(name: &str, arguments: &str) -> Vec<String> {
     tool_args_from_json(name, arguments).unwrap_or_default()
 }
@@ -243,7 +286,7 @@ fn invoke_companion(
     args: &[String],
     _settings: &ToolsSettings,
 ) -> String {
-    // OAuth family — laptop-local.
+    // OAuth family — opt-in mirror vault (ADR-0045).
     if matches!(
         name,
         EMAIL_SEND_TOOL
@@ -259,9 +302,21 @@ fn invoke_companion(
             | "drive_search"
             | "drive_get"
     ) {
-        return format!(
-            "tool `{name}` needs OAuth tokens that stay laptop-local (not mirrored to companion)"
-        );
+        let doc = state.load_oauth_document();
+        if !doc.has_usable_connection() {
+            return crate::oauth_tools::oauth_enable_hint(name);
+        }
+        #[cfg(not(feature = "live-http"))]
+        {
+            let _ = (state, args);
+            return crate::oauth_tools::LIVE_REQUIRED.to_owned();
+        }
+        #[cfg(feature = "live-http")]
+        {
+            let transport =
+                softwake_providers::live::LiveTransport::bounded(Duration::from_secs(30));
+            return crate::oauth_tools::run_oauth_tool(state, name, args, &transport);
+        }
     }
 
     match name {
@@ -410,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn oauth_tools_refuse_laptop_local() {
+    fn oauth_tools_refuse_when_vault_empty() {
         let t = Tmp::new();
         let msg = invoke_companion(
             &t.state,
@@ -419,8 +474,9 @@ mod tests {
             &[],
             &ToolsSettings::default(),
         );
+        assert!(msg.contains("OAuth"), "{msg}");
         assert!(
-            msg.contains("OAuth") || msg.contains("laptop-local"),
+            msg.contains("Mirror OAuth") || msg.contains("mirrored"),
             "{msg}"
         );
     }
