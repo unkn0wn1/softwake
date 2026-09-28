@@ -1,4 +1,4 @@
-//! Laptop-side Remote Agent client (presence, schedule/vault mirror, outbox pull).
+//! Laptop-side Remote Agent client (presence, schedule/vault/soul/skills/tools mirror, outbox pull).
 //!
 //! Uses raw TCP HTTP so offline CI does not need `live-http` / ureq.
 
@@ -13,9 +13,9 @@ use softwake_providers::{open_store, resolve_secrets_file};
 use softwake_soul::resolve_config_dir;
 use softwake_state::VoiceState;
 use softwake_tools::{
-    DEFAULT_NODE_PORT, ScheduleRunOn, first_enabled_agent, list_profile_ids, load_messengers,
-    load_remote_agents, load_schedules, node_base_url, resolve_messengers_file,
-    resolve_remote_agents_file, resolve_schedules_file,
+    DEFAULT_NODE_PORT, FileToolsSettings, ScheduleRunOn, first_enabled_agent, list_profile_ids,
+    load_messengers, load_remote_agents, load_schedules, node_base_url, resolve_messengers_file,
+    resolve_remote_agents_file, resolve_schedules_file, resolve_tools_file,
 };
 
 use crate::hud_chat_write;
@@ -411,6 +411,87 @@ pub(crate) fn pull_outbox_into_hud() {
     save_cursor(&path, &cursor);
 }
 
+/// Mirror per-profile soul packs, global tools.json, and authored skills to the node.
+///
+/// OAuth tokens are never mirrored (ADR-0043).
+pub(crate) fn mirror_soul_skills_tools() {
+    let Some(target) = resolve_target() else {
+        return;
+    };
+    // tools.json (global)
+    if let Ok(tools_path) = resolve_tools_file() {
+        if let Ok(store) = FileToolsSettings::new(&tools_path) {
+            if let Ok(settings) = store.load() {
+                if let Ok(body) = serde_json::to_string(&settings) {
+                    let _ = http_json(
+                        &target.base_url,
+                        "PUT",
+                        "/v1/tools",
+                        &body,
+                        &target.secret,
+                        &[],
+                    );
+                }
+            }
+        }
+    }
+    // skills catalog
+    if let Ok(skills_dir) = softwake_skills::resolve_skills_dir() {
+        if let Ok(list) = softwake_skills::list_skills(&skills_dir) {
+            let mut skills = Vec::new();
+            for skill in list.into_iter().take(softwake_skills::MAX_CATALOG_ENTRIES) {
+                skills.push(serde_json::json!({
+                    "id": skill.id,
+                    "title": skill.title,
+                    "source": skill.source.as_str(),
+                    "procedure": skill.procedure,
+                    "pitfalls": skill.pitfalls,
+                    "verify": skill.verify,
+                }));
+            }
+            let body = serde_json::json!({ "skills": skills }).to_string();
+            let _ = http_json(
+                &target.base_url,
+                "PUT",
+                "/v1/skills",
+                &body,
+                &target.secret,
+                &[],
+            );
+        }
+    }
+    // per-profile soul packs
+    let Ok(profiles) = list_profile_ids() else {
+        return;
+    };
+    let xdg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let Ok(config) = resolve_config_dir(xdg.as_deref(), home.as_deref()) else {
+        return;
+    };
+    for profile_id in profiles {
+        let pack = softwake_soul::profile_pack_dir(&config, &profile_id);
+        let read =
+            |name: &str| -> String { std::fs::read_to_string(pack.join(name)).unwrap_or_default() };
+        let soul_md = read("soul.md");
+        let user_md = read("user.md");
+        let rules_md = read("rules.md");
+        let glossary_md = read("glossary.md");
+        if soul_md.trim().is_empty() {
+            continue;
+        }
+        let body = serde_json::json!({
+            "soul_md": soul_md,
+            "user_md": user_md,
+            "rules_md": rules_md,
+            "glossary_md": glossary_md,
+        })
+        .to_string();
+        let api = format!("/v1/profiles/{profile_id}/soul");
+        let _ = http_json(&target.base_url, "PUT", &api, &body, &target.secret, &[]);
+    }
+}
+
 /// Background loops: heartbeat, schedule mirror, outbox pull.
 pub(crate) fn spawn_background(shared: &std::sync::Arc<crate::serve::Shared>) {
     let shared_hb = std::sync::Arc::clone(shared);
@@ -435,6 +516,7 @@ pub(crate) fn spawn_background(shared: &std::sync::Arc<crate::serve::Shared>) {
                 std::thread::sleep(Duration::from_secs(MIRROR_SECS));
                 mirror_schedules();
                 mirror_telegram_vault();
+                mirror_soul_skills_tools();
             }
         });
 

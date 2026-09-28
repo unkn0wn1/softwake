@@ -47,3 +47,8 @@ gateway into Softwake.
   scheduled fires — Tools Settings remain the control plane.
 - Reinstall daemon + UI; Spencer restarts softwaked so the tick path picks up
   agent-task handling.
+
+
+## Companion node
+
+When `run_on` is `companion` or `auto` (laptop away), softwake-node runs the same family of bounded turn using mirrored soul / skills / tools ([ADR-0043](ADR-0043-companion-agent-task-llm.md)). Ask still never silently elevates; OAuth stays laptop-local.

@@ -2,12 +2,15 @@
 
 ## Unreleased
 
+- Remote Agent companion **`agent_task` LLM** (ADR-0043): softwake-node runs a bounded tool loop with mirrored soul pack, skills, and `tools.json` permissions; Ask → pending text (no silent Always-allow); OAuth tools refuse laptop-local; results go to outbox + Telegram timer fan-out when messengers say so. Env: `SOFTWAKE_NODE_XAI_API_KEY` / mirrored vault llm + optional `SOFTWAKE_NODE_MODEL`.
+
+
 - **Telegram sticky ownership:** only one surface long-polls Telegram. Laptop softwaked owns while companion presence is `present`; when sleeping/hibernated/offline (90s grace), softwake-node may take over if the bot token is mirrored to the node vault. Per-profile messengers stay honored; TTS skipped on the node. See [ADR-0042](docs/ADR-0042-telegram-sticky-ownership.md).
 
 
 - **HUD left-rail profile switch:** expanded HUD lists profiles on the left; click sets the active profile and runs `/refresh` (soul reload, clear/reseed session, MCP rediscover), then loads that profile’s HUD chat history. Collapsed bloom unchanged. See [ADR-0041](docs/ADR-0041-hud-profile-rail.md).
 
-- **Remote Agent (slice 2):** presence heartbeats (90s grace), `run_on` dispatch with fire leases, per-profile schedule mirror + softwake-node tick, durable outbox → HUD “While you were away” (ADR-0040). Companion `agent_task` is a summary stub; SSH install / OAuth mirror remain later. Telegram sticky ownership shipped in ADR-0042; HUD profile rail in ADR-0041.
+- **Remote Agent (slice 2):** presence heartbeats (90s grace), `run_on` dispatch with fire leases, per-profile schedule mirror + softwake-node tick, durable outbox → HUD “While you were away” (ADR-0040). Companion `agent_task` LLM shipped in ADR-0043; SSH install / OAuth mirror remain later. Telegram sticky ownership shipped in ADR-0042; HUD profile rail in ADR-0041.
 
 ## Unreleased
 

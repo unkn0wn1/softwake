@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 rust-version.workspace = true
-description = "Softwake companion node (Remote Agent). Presence, fire leases, durable outbox, mirrored schedules + Telegram sticky ownership over Tailscale-bound listen."
+description = "Softwake companion node (Remote Agent). Presence, fire leases, durable outbox, mirrored soul/skills/tools + agent_task LLM + Telegram sticky over Tailscale."
 
 [[bin]]
 name = "softwake-node"
@@ -13,6 +13,8 @@ path = "src/main.rs"
 [dependencies]
 serde = { workspace = true }
 serde_json.workspace = true
+softwake-skills.workspace = true
+softwake-soul.workspace = true
 softwake-tools.workspace = true
 ureq = "2.12"
 

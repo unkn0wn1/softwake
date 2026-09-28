@@ -1,10 +1,12 @@
-//! Softwake companion node (Remote Agent / ADR-0039 + ADR-0040 + ADR-0042).
+//! Softwake companion node (Remote Agent / ADR-0039 + ADR-0040 + ADR-0042 + ADR-0043).
 //!
-//! Slice 2: presence heartbeats, fire leases, durable outbox, per-profile
-//! schedule mirror + tick, Telegram sticky ownership. Bind via `SOFTWAKE_NODE_LISTEN` (default
-//! `127.0.0.1:8790`). Production binds the node's Tailscale IP only.
+//! Presence, fire leases, durable outbox, per-profile schedule + soul/skills/tools
+//! mirror, companion `agent_task` LLM, Telegram sticky ownership.
+//! Bind via `SOFTWAKE_NODE_LISTEN` (default `127.0.0.1:8790`). Production binds
+//! the node's Tailscale IP only.
 //! Auth: `SOFTWAKE_NODE_PAIRING_SECRET` + Bearer / X-Softwake-Remote-Token.
 
+mod agent;
 mod auth;
 mod http;
 mod state;
@@ -21,7 +23,7 @@ use serde_json::json;
 
 use crate::auth::{PAIRING_SECRET_ENV, authorized};
 use crate::http::{HttpRequest, read_request, write_response};
-use crate::state::{LEASE_TTL_MS, NodeState, PRESENCE_GRACE_MS, PresenceState};
+use crate::state::{LEASE_TTL_MS, MirroredSkill, NodeState, PRESENCE_GRACE_MS, PresenceState};
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:8790";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -369,6 +371,56 @@ fn route(
             }
         }
 
+        ("PUT", "/v1/tools") => match state.put_tools_json(&req.body) {
+            Ok(()) => write_response(stream, 200, "application/json", "{\"ok\":true}"),
+            Err(error) => {
+                let body = json!({"ok": false, "error": error}).to_string();
+                write_response(stream, 400, "application/json", &body)
+            }
+        },
+        ("PUT", "/v1/skills") => {
+            let v: serde_json::Value = serde_json::from_str(&req.body).unwrap_or(json!({}));
+            let list = v.get("skills").cloned().unwrap_or_else(|| json!([]));
+            match serde_json::from_value::<Vec<MirroredSkill>>(list) {
+                Ok(skills) => match state.put_skills_catalog(&skills) {
+                    Ok(()) => write_response(stream, 200, "application/json", "{\"ok\":true}"),
+                    Err(error) => {
+                        let body = json!({"ok": false, "error": error}).to_string();
+                        write_response(stream, 400, "application/json", &body)
+                    }
+                },
+                Err(error) => {
+                    let body = json!({"ok": false, "error": error.to_string()}).to_string();
+                    write_response(stream, 400, "application/json", &body)
+                }
+            }
+        }
+        ("PUT", path) if path.starts_with("/v1/profiles/") && path.ends_with("/soul") => {
+            let rest = path
+                .trim_start_matches("/v1/profiles/")
+                .trim_end_matches("/soul")
+                .trim_end_matches('/');
+            if rest.is_empty() || rest.contains('/') {
+                return write_response(
+                    stream,
+                    400,
+                    "application/json",
+                    "{\"ok\":false,\"error\":\"bad profile_id\"}",
+                );
+            }
+            let v: serde_json::Value = serde_json::from_str(&req.body).unwrap_or(json!({}));
+            let soul_md = v.get("soul_md").and_then(|x| x.as_str()).unwrap_or("");
+            let user_md = v.get("user_md").and_then(|x| x.as_str()).unwrap_or("");
+            let rules_md = v.get("rules_md").and_then(|x| x.as_str()).unwrap_or("");
+            let glossary_md = v.get("glossary_md").and_then(|x| x.as_str()).unwrap_or("");
+            match state.put_soul_pack(rest, soul_md, user_md, rules_md, glossary_md) {
+                Ok(()) => write_response(stream, 200, "application/json", "{\"ok\":true}"),
+                Err(error) => {
+                    let body = json!({"ok": false, "error": error}).to_string();
+                    write_response(stream, 400, "application/json", &body)
+                }
+            }
+        }
         _ => {
             if matches!(req.method.as_str(), "GET" | "POST" | "PUT") {
                 write_response(stream, 404, "text/plain", "not found\n")
@@ -397,10 +449,13 @@ mod tests {
     use std::net::{SocketAddr, TcpStream};
 
     fn spawn_node(secret: &str) -> (SocketAddr, PathBuf, thread::JoinHandle<()>) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "sw-node-itest-{}-{}",
+            "sw-node-itest-{}-{}-{}",
             std::process::id(),
-            NodeState::now_ms()
+            NodeState::now_ms(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -490,6 +545,33 @@ mod tests {
         assert!(push.contains("200"), "{push}");
         let out = http(addr, "GET", "/v1/outbox", "", Some("tok"), &[]);
         assert!(out.contains("timer: hi"), "{out}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn soul_tools_skills_mirror_roundtrip() {
+        let (addr, dir, _h) = spawn_node("tok");
+        let soul = "{\"soul_md\":\"# Soul\\nI am Softwake.\\n\",\"user_md\":\"# User\\nOperator.\\n\",\"rules_md\":\"# Rules\\nBe brief.\\n\",\"glossary_md\":\"# Glossary\\n\"}";
+        let put_soul = http(
+            addr,
+            "PUT",
+            "/v1/profiles/default/soul",
+            soul,
+            Some("tok"),
+            &[],
+        );
+        assert!(put_soul.contains("200"), "{put_soul}");
+        assert!(dir.join("profiles/default/soul/soul.md").is_file());
+
+        let tools = r#"{"version":2,"shell_enabled":false,"confirm_policy":"always","permissions":{"echo":"always_allow","notify":"ask"}}"#;
+        let put_tools = http(addr, "PUT", "/v1/tools", tools, Some("tok"), &[]);
+        assert!(put_tools.contains("200"), "{put_tools}");
+        assert!(dir.join("tools.json").is_file());
+
+        let skills = r#"{"skills":[{"id":"demo","title":"Demo","source":"user","procedure":"Do it","pitfalls":"None","verify":"Ok"}]}"#;
+        let put_skills = http(addr, "PUT", "/v1/skills", skills, Some("tok"), &[]);
+        assert!(put_skills.contains("200"), "{put_skills}");
+        assert!(dir.join("skills/demo.md").is_file());
         let _ = std::fs::remove_dir_all(dir);
     }
 }
