@@ -11,10 +11,12 @@
 
 ### Fixed
 
+- HUD strip: thinking/phase, context meter, and composer no longer mash or jump after the first message (`.strip-main` is flex; `#log` owns the grow — hidden siblings cannot steal it).
+- Assistant reply is shown once: pre-TTS status poll and post-TTS ask/talk settle no longer append a duplicate bubble for the same text.
 - Long Settings actions (**Test on Tailnet**, **Install companion**, Providers Test/Save) run off the UI thread with immediate status (`Testing…` / `Starting…` / `Saving…`).
 - Assistant text appears as soon as the reply is ready (before TTS synthesize finishes); thinking no longer sticks when a turn rejects or Telegram lands.
 - Chat/voice model select shows **None** when unset instead of the first catalog entry; Test no longer auto-picks the first model.
-- Select/Delete chrome no longer overlaps the chat log (strip-main grid gives the log the `1fr` row).
+- Select/Delete chrome no longer overlaps the chat log (`#log` remains the sole flex grower; toolbar stays `flex-shrink: 0`).
 
 ## Unreleased
 
