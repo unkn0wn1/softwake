@@ -575,7 +575,7 @@
           <p class="lede">
             Always-on <strong>companion</strong> on a Proxmox CT over <strong>Tailscale only</strong> (MagicDNS / 100.x).
             Laptop softwaked + UI + KWS + keyring stay primary. Not a remote core or thin client.
-            See pairing docs / ADR-0039. Install of softwake-node is slice 2; this page stores pairing config now.
+            See pairing docs / ADR-0039 and ADR-0044. Use <strong>Test on Tailnet</strong> then <strong>Install companion</strong> to ship softwake-node over Tailscale SSH (MagicDNS / 100.x only).
           </p>
           <p id="remote-agent-storage" class="meta">Storage: …</p>
           <p class="meta">Pick an agent in the left sub-list.</p>
@@ -622,6 +622,7 @@
           <div class="row gap">
             <button type="button" class="btn" id="remote-agent-save">Save</button>
             <button type="button" class="btn" id="remote-agent-test">Test on Tailnet</button>
+            <button type="button" class="btn" id="remote-agent-install">Install companion</button>
             <button type="button" class="btn" id="remote-agent-clear-secret">Clear secret</button>
             <button type="button" class="btn" id="remote-agent-delete">Delete</button>
           </div>

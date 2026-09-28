@@ -18,6 +18,7 @@ mod chat_schema;
 mod cloud_read;
 mod mcp_config;
 mod messengers;
+mod remote_agent_install;
 mod remote_agents;
 mod schedule;
 mod settings;
@@ -47,12 +48,16 @@ pub use messengers::{
     resolve_active_messengers_file, resolve_hud_chat_inbox, resolve_messengers_file,
     save_messengers, take_hud_inbox, wants_ask_fanout, wants_timer_push,
 };
+pub use remote_agent_install::{
+    InstallReport, ProbeReport, install_companion, probe_tailnet, render_node_env,
+    render_node_unit, resolve_softwake_node_bin,
+};
 pub use remote_agents::{
     DEFAULT_NODE_PORT, MAX_REMOTE_AGENTS, REMOTE_AGENTS_FILE_NAME, RemoteAgentConfig,
-    RemoteAgentRoles, RemoteAgentsError, RemoteAgentsFile, RemoteConflictPolicy, delete_agent,
-    first_enabled_agent, load_remote_agents, node_base_url, parse_conflict_policy,
-    resolve_remote_agents_file, sanitize_remote_agent_id, save_remote_agents, upsert_agent,
-    validate_agent,
+    RemoteAgentRoles, RemoteAgentsError, RemoteAgentsFile, RemoteConflictPolicy,
+    assert_tailscale_host, delete_agent, first_enabled_agent, is_tailscale_host,
+    load_remote_agents, node_base_url, parse_conflict_policy, resolve_remote_agents_file,
+    sanitize_remote_agent_id, save_remote_agents, upsert_agent, validate_agent,
 };
 pub use schedule::{
     AGENT_TASK_SPEAK_MAX, CATCH_UP_GRACE_MS, CronExpr, MAX_ENTRIES, SCHEDULES_FILE_NAME,

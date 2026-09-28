@@ -72,6 +72,11 @@ pub(crate) enum CtlAction {
         /// Subcommand payload.
         action: WebhookSecretCtl,
     },
+    /// `ctl remote-agent test|install` (local-disk; no IPC).
+    RemoteAgent {
+        /// Subcommand payload.
+        action: RemoteAgentCtl,
+    },
 }
 
 /// Local-disk webhook config ctl (no IPC).
@@ -104,6 +109,21 @@ pub(crate) enum WebhookSecretCtl {
     Clear,
 }
 
+/// Local-disk Remote Agent probe / install ctl (no IPC).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RemoteAgentCtl {
+    /// Probe Tailnet (ping / SSH / health).
+    Test {
+        /// Agent id; None → first enabled / sole agent.
+        id: Option<String>,
+    },
+    /// SSH-install softwake-node on the companion.
+    Install {
+        /// Agent id; None → first enabled / sole agent.
+        id: Option<String>,
+    },
+}
+
 impl CtlAction {
     /// Parse a ctl subcommand.
     #[must_use]
@@ -134,6 +154,8 @@ pub(crate) fn run(path: &Path, action: &CtlAction) -> Result<String, CallError> 
             .map_err(|message| CallError::Rejected(IpcError::protocol(message))),
         CtlAction::WebhookSecret { action } => run_webhook_secret_ctl(action)
             .map_err(|message| CallError::Rejected(IpcError::protocol(message))),
+        CtlAction::RemoteAgent { action } => run_remote_agent_ctl(action)
+            .map_err(|message| CallError::Rejected(IpcError::protocol(message))),
         other => {
             let status = match other {
                 CtlAction::Status => call(path, Command::GetStatus)?,
@@ -153,7 +175,9 @@ pub(crate) fn run(path: &Path, action: &CtlAction) -> Result<String, CallError> 
                     None => call(path, Command::GetStatus)?,
                     Some(enabled) => call_voice_test(path, *enabled)?,
                 },
-                CtlAction::Webhook { .. } | CtlAction::WebhookSecret { .. } => unreachable!(),
+                CtlAction::Webhook { .. }
+                | CtlAction::WebhookSecret { .. }
+                | CtlAction::RemoteAgent { .. } => unreachable!(),
             };
             Ok(format_status(&status))
         }
@@ -264,7 +288,66 @@ pub(crate) fn call_cancel(path: &Path, pending_id: &str) -> Result<Status, CallE
     client.cancel_tool(pending_id)
 }
 
-/// Human-readable status. The string ends with a newline.
+/// Probe or install a Remote Agent companion (local-disk; no IPC).
+fn run_remote_agent_ctl(action: &RemoteAgentCtl) -> Result<String, String> {
+    use softwake_tools::{
+        first_enabled_agent, install_companion, load_remote_agents, probe_tailnet,
+        resolve_remote_agents_file, sanitize_remote_agent_id,
+    };
+
+    let path = resolve_remote_agents_file().map_err(|e| e.to_string())?;
+    let file = load_remote_agents(&path).map_err(|e| e.to_string())?;
+    let want = match action {
+        RemoteAgentCtl::Test { id } | RemoteAgentCtl::Install { id } => id
+            .as_deref()
+            .map(sanitize_remote_agent_id)
+            .filter(|s| !s.is_empty()),
+    };
+    let agent = if let Some(id) = want {
+        file.agents
+            .iter()
+            .find(|a| a.id == id)
+            .ok_or_else(|| format!("remote agent not found: {id}"))?
+    } else if let Some(a) = first_enabled_agent(&file) {
+        a
+    } else if file.agents.len() == 1 {
+        &file.agents[0]
+    } else if file.agents.is_empty() {
+        return Err("no remote agents configured".into());
+    } else {
+        return Err("multiple remote agents — pass an id".into());
+    };
+
+    let secrets_path = softwake_providers::resolve_secrets_file().map_err(|e| e.to_string())?;
+    let store = softwake_providers::open_store(&secrets_path).map_err(|e| e.to_string())?;
+    let bag = store.load().map_err(|e| e.to_string())?;
+    let secret = bag
+        .remote_agent_pairing_secrets
+        .get(&agent.id)
+        .cloned()
+        .unwrap_or_default();
+
+    let text = match action {
+        RemoteAgentCtl::Test { .. } => {
+            let secret_opt = if secret.trim().is_empty() {
+                None
+            } else {
+                Some(secret.as_str())
+            };
+            probe_tailnet(agent, secret_opt).summary()
+        }
+        RemoteAgentCtl::Install { .. } => {
+            if secret.trim().is_empty() {
+                return Err(
+                    "pairing secret required in bag — set it in Settings → Remote Agent".into(),
+                );
+            }
+            install_companion(agent, &secret).summary()
+        }
+    };
+    Ok(format!("{text}\n"))
+}
+
 pub(crate) fn run_webhook_ctl(action: &WebhookCtl) -> Result<String, String> {
     let xdg = std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from);
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);

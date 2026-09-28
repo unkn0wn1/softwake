@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Remote Agent **Test on Tailnet** (real ping/SSH/health) and **Install companion** / `softwaked ctl remote-agent install` — Tailscale-only SSH installer for softwake-node (ADR-0044).
+
 - Remote Agent companion **`agent_task` LLM** (ADR-0043): softwake-node runs a bounded tool loop with mirrored soul pack, skills, and `tools.json` permissions; Ask → pending text (no silent Always-allow); OAuth tools refuse laptop-local; results go to outbox + Telegram timer fan-out when messengers say so. Env: `SOFTWAKE_NODE_XAI_API_KEY` / mirrored vault llm + optional `SOFTWAKE_NODE_MODEL`.
 
 

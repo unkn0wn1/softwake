@@ -28,16 +28,17 @@ Operators want Softwake reachable while the laptop sleeps or is away, without tu
 | Area | Slice 1 (this ADR) | Slice 2+ |
 |---|---|---|
 | ADR + pairing docs | Live | — |
-| `remote-agents.json` + Settings UI | Live | Installer / SSH install of softwake-node |
+| `remote-agents.json` + Settings UI | Live | **Live (ADR-0044):** Install companion / ctl install |
 | Pairing secret in bag | Live (storage) | Used by installer / mutual auth |
-| Test on Tailnet | Stub status string | `tailscale ping` / SSH BatchMode probe |
+| Test on Tailnet | Stub status string | **Live (ADR-0044):** ping / SSH / health |
 | Conflict policy | Persisted stub enum | Runtime resolver |
 | `run_on` field + Timers UI | Live field; fire still **local** | **Slice 2 (ADR-0040):** honor run_on + leases |
 | `softwake-node` health + empty outbox | Live stub binary | **Slice 2:** presence, leases, durable outbox, schedule mirror |
 | Outbox → HUD | Docs only | **Slice 2:** pull → per-profile HUD while-away |
 | Telegram sticky owner | Docs only | **Live (ADR-0042)** |
 | Companion `agent_task` LLM + soul/skills/tools mirror | Docs only | **Live (ADR-0043)** |
-| OAuth mirror, SSH install | Docs only | Later |
+| OAuth mirror | Docs only | Later |
+| SSH install | Docs only | **Live (ADR-0044)** |
 
 ### Config
 

@@ -2047,6 +2047,7 @@ const remoteAgentSecretStatus = document.querySelector("#remote-agent-secret-sta
 const remoteAgentEnabled = document.querySelector("#remote-agent-enabled");
 const remoteAgentSave = document.querySelector("#remote-agent-save");
 const remoteAgentTest = document.querySelector("#remote-agent-test");
+const remoteAgentInstall = document.querySelector("#remote-agent-install");
 const remoteAgentClearSecret = document.querySelector("#remote-agent-clear-secret");
 const remoteAgentDelete = document.querySelector("#remote-agent-delete");
 const remoteAgentSubNew = document.querySelector("#remote-agent-sub-new");
@@ -2150,6 +2151,20 @@ if (remoteAgentTest) {
     }
   });
 }
+
+if (remoteAgentInstall) {
+  remoteAgentInstall.addEventListener("click", async () => {
+    try {
+      applyRemoteAgentSnapshot(
+        await invoke("remote_agent_install", { agentId: remoteAgentId ? remoteAgentId.value : null }),
+        "",
+      );
+    } catch (error) {
+      showRemoteAgentError(error);
+    }
+  });
+}
+
 if (remoteAgentClearSecret) {
   remoteAgentClearSecret.addEventListener("click", async () => {
     try {

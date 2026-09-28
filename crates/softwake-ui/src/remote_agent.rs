@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 use softwake_providers::{SecretBag, SecretStore, update_bag};
 use softwake_tools::{
     RemoteAgentConfig, RemoteAgentRoles, RemoteAgentsFile, RemoteConflictPolicy, delete_agent,
-    load_remote_agents, parse_conflict_policy, resolve_remote_agents_file,
-    sanitize_remote_agent_id, save_remote_agents, upsert_agent, validate_agent,
+    install_companion, load_remote_agents, parse_conflict_policy, probe_tailnet,
+    resolve_remote_agents_file, sanitize_remote_agent_id, save_remote_agents, upsert_agent,
+    validate_agent,
 };
 
 /// One agent chip / list row.
@@ -270,7 +271,7 @@ pub fn remote_agent_clear_secret(agent_id: String) -> Result<RemoteAgentSnapshot
     remote_agent_snapshot(Some(id))
 }
 
-/// Honest Tailnet probe stub (slice 1).
+/// Real Tailnet probe: host validation, optional tailscale ping, SSH `BatchMode`, GET `/health`.
 #[tauri::command]
 pub fn remote_agent_test(agent_id: Option<String>) -> Result<RemoteAgentSnapshot, String> {
     let (_path, file) = load_file()?;
@@ -284,15 +285,54 @@ pub fn remote_agent_test(agent_id: Option<String>) -> Result<RemoteAgentSnapshot
         .or_else(|| file.agents.first().map(|a| a.id.clone()))
         .unwrap_or_default();
     let status = if let Some(agent) = file.agents.iter().find(|a| a.id == id) {
-        if agent.tailscale_hostname.trim().is_empty() {
-            "Test blocked: set Tailscale hostname (MagicDNS or 100.x) first.".to_owned()
-        } else {
-            format!(
-                "Tailnet probe not implemented in slice 1 (would: `tailscale ping {}` / SSH BatchMode as {}). Config looks structurally valid.",
-                agent.tailscale_hostname.trim(),
-                agent.ssh_user.trim()
-            )
-        }
+        let secret = bag
+            .remote_agent_pairing_secrets
+            .get(&id)
+            .map(String::as_str);
+        probe_tailnet(agent, secret).summary()
+    } else {
+        "No remote agent selected.".to_owned()
+    };
+    Ok(snapshot_for(
+        &file,
+        &id,
+        &bag,
+        report.backend.as_str(),
+        &report.message,
+        &status,
+    ))
+}
+
+/// SSH-install softwake-node on the companion (Tailscale only). Idempotent reinstall.
+#[tauri::command]
+pub fn remote_agent_install(agent_id: Option<String>) -> Result<RemoteAgentSnapshot, String> {
+    let (_path, file) = load_file()?;
+    let store = open_secrets()?;
+    let bag = store.load().map_err(|e| e.to_string())?;
+    let report = store.report();
+    let id = agent_id
+        .as_deref()
+        .map(sanitize_remote_agent_id)
+        .filter(|s| !s.is_empty())
+        .or_else(|| file.agents.first().map(|a| a.id.clone()))
+        .unwrap_or_default();
+    let status = if let Some(agent) = file.agents.iter().find(|a| a.id == id) {
+        let Some(secret) = bag
+            .remote_agent_pairing_secrets
+            .get(&id)
+            .map(String::as_str)
+            .filter(|s| !s.trim().is_empty())
+        else {
+            return Ok(snapshot_for(
+                &file,
+                &id,
+                &bag,
+                report.backend.as_str(),
+                &report.message,
+                "Install blocked: save a pairing secret first.",
+            ));
+        };
+        install_companion(agent, secret).summary()
     } else {
         "No remote agent selected.".to_owned()
     };
