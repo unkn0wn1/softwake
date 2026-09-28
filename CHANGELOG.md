@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **HUD left-rail profile switch:** expanded HUD lists profiles on the left; click sets the active profile and runs `/refresh` (soul reload, clear/reseed session, MCP rediscover), then loads that profile’s HUD chat history. Collapsed bloom unchanged. See [ADR-0041](docs/ADR-0041-hud-profile-rail.md).
+
 - **Remote Agent (slice 2):** presence heartbeats (90s grace), `run_on` dispatch with fire leases, per-profile schedule mirror + softwake-node tick, durable outbox → HUD “While you were away” (ADR-0040). Companion `agent_task` is a summary stub; Telegram sticky / SSH install / OAuth mirror / HUD profile rail remain later.
 
 ## Unreleased

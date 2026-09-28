@@ -67,11 +67,80 @@ body {
 
 .capsule.expanded .strip:not([hidden]) {
   display: grid !important;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 6px;
+  min-height: 0;
+  min-width: 0;
+}
+
+.strip-main {
+  display: grid;
   grid-template-rows: minmax(0, 1fr);
   grid-auto-rows: auto;
   gap: 6px;
   min-height: 0;
   min-width: 0;
+}
+
+.profile-rail {
+  display: none;
+  box-sizing: border-box;
+  width: 84px;
+  min-width: 72px;
+  max-width: 110px;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 0;
+  border-right: 1px solid var(--line);
+}
+
+.capsule.expanded .profile-rail {
+  display: block;
+}
+
+.profile-rail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.profile-rail-item {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  padding: 6px 6px;
+  border-radius: 0.55rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  text-align: left;
+  line-height: 1.2;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-rail-item:hover,
+.profile-rail-item:focus-visible {
+  color: var(--text);
+  border-color: var(--line);
+  background: oklch(1 0 0 / 0.06);
+  outline: none;
+}
+
+.profile-rail-item[aria-selected="true"] {
+  color: var(--cyan-ink);
+  background: oklch(0.78 0.13 200 / 0.82);
+  border-color: oklch(0.78 0.13 200 / 0.95);
 }
 
 .log {

@@ -71,6 +71,7 @@
     "allow-profile-create",
     "allow-profile-rename",
     "allow-profile-set-active",
+    "allow-hud-switch-profile",
     "allow-pack-snapshot",
     "allow-pack-save",
     "allow-tools-snapshot",

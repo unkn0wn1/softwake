@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
+use softwake_ipc::{Client, resolve_socket_path};
 use softwake_soul::{
     create_profile, ensure_migrated, list_profiles, load_app_config, profile_name_in,
     profile_pack_dir, rename_profile, resolve_config_dir, resolve_soul_dir, set_active_profile,
@@ -44,6 +45,17 @@ pub struct ProfilesSnapshot {
     pub profiles: Vec<ProfileRow>,
     /// Pack editors for the selected profile.
     pub pack: PackSnapshot,
+}
+
+/// Result of a HUD left-rail profile switch (ADR-0041).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HudSwitchProfileResult {
+    /// Profiles snapshot with the new active id selected.
+    pub snapshot: ProfilesSnapshot,
+    /// Daemon `/refresh` reply (or a local note when the daemon was unreachable).
+    pub refresh_message: String,
+    /// True when the daemon Ask(`/refresh`) call succeeded.
+    pub refresh_ok: bool,
 }
 
 fn config_dir() -> Result<PathBuf, String> {
@@ -123,6 +135,62 @@ pub fn profile_set_active(id: String) -> Result<ProfilesSnapshot, String> {
     let config = config_dir()?;
     set_active_profile(&config, &id).map_err(|error| error.to_string())?;
     snapshot_at(&config, &id)
+}
+
+/// HUD left-rail switch: set active profile on disk, then run `/refresh` effects.
+///
+/// Does **not** wake Softwake from sleep. `/refresh` retargets the soul from the
+/// new active pack (and rediscovers MCP when awake). See ADR-0041.
+#[tauri::command]
+pub fn hud_switch_profile(id: String) -> Result<HudSwitchProfileResult, String> {
+    let id = id.trim().to_owned();
+    if id.is_empty() {
+        return Err("profile id is blank".to_owned());
+    }
+    let config = config_dir()?;
+    ensure_migrated(&config).map_err(|error| error.to_string())?;
+    let dir = profile_pack_dir(&config, &id);
+    if !dir.is_dir() {
+        return Err(format!("unknown profile `{id}`"));
+    }
+    let app = load_app_config(&config).map_err(|error| error.to_string())?;
+    let already = app.active_profile == id;
+    if !already {
+        set_active_profile(&config, &id).map_err(|error| error.to_string())?;
+    }
+    let snapshot = snapshot_at(&config, &id)?;
+    let (refresh_ok, refresh_message) = match ask_refresh() {
+        Ok(msg) => (true, msg),
+        Err(err) => {
+            let note = if already {
+                format!("Already active `{id}`; daemon refresh skipped: {err}")
+            } else {
+                format!(
+                    "Active profile set to `{id}`; daemon refresh failed (applies on next successful /refresh): {err}"
+                )
+            };
+            (false, note)
+        }
+    };
+    Ok(HudSwitchProfileResult {
+        snapshot,
+        refresh_message,
+        refresh_ok,
+    })
+}
+
+/// Ask the running daemon for `/refresh` without waking from sleep/hibernate.
+fn ask_refresh() -> Result<String, String> {
+    let path = resolve_socket_path(None).map_err(|error| error.to_string())?;
+    let mut client = Client::connect(&path).map_err(|error| error.to_string())?;
+    // Short timeout: refresh is local (no model). Longer only if MCP rediscover stalls.
+    client
+        .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+        .map_err(|error| error.to_string())?;
+    let status = client
+        .call_ask("/refresh")
+        .map_err(|error| error.to_string())?;
+    Ok(status.message.unwrap_or_else(|| "Refreshed".to_owned()))
 }
 
 /// Read pack editors for a profile id (does not change active).
@@ -211,5 +279,32 @@ mod tests {
         assert!(snap.profiles.iter().any(|row| row.id == "default"));
         assert!(snap.pack.ok);
         assert!(snap.pack.soul.contains("legacy soul"));
+    }
+
+    #[test]
+    fn set_active_profile_disk_round_trip() {
+        let home = TempHome::new();
+        let config = home.path.join(".config").join("softwake");
+        softwake_soul::ensure_migrated(&config).expect("migrate");
+        let created = softwake_soul::create_profile(&config, "Sally", None).expect("create");
+        set_active_profile(&config, &created.id).expect("active");
+        let app = load_app_config(&config).expect("app");
+        assert_eq!(app.active_profile, created.id);
+        let snap = snapshot_at(&config, &created.id).expect("snap");
+        assert_eq!(snap.active_id, created.id);
+        assert!(
+            snap.profiles
+                .iter()
+                .any(|row| row.active && row.id == created.id)
+        );
+    }
+
+    #[test]
+    fn snapshot_at_rejects_unknown_profile() {
+        let home = TempHome::new();
+        let config = home.path.join(".config").join("softwake");
+        softwake_soul::ensure_migrated(&config).expect("migrate");
+        let err = snapshot_at(&config, "no-such-profile").expect_err("unknown");
+        assert!(err.contains("unknown profile"), "{err}");
     }
 }

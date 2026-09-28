@@ -732,6 +732,8 @@ impl Runtime {
                 let line = self.format_slash_status();
                 self.quiet_slash(line)
             }
+            // /refresh and /profile retarget from disk while sleep/hibernate
+            // (fresh_session / slash_set_profile already return an honest not-awake note).
             SlashCommand::Clear
             | SlashCommand::Compact
             | SlashCommand::Halve
@@ -743,9 +745,7 @@ impl Runtime {
             | SlashCommand::ReasoningList
             | SlashCommand::ReasoningSet(_)
             | SlashCommand::NewSession
-            | SlashCommand::Refresh
             | SlashCommand::ProfileList
-            | SlashCommand::ProfileSet(_)
                 if self.machine.permit_tool_dispatch().is_err()
                     || self.session.phase() != SessionPhase::Open =>
             {

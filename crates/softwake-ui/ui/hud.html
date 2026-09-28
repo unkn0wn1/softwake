@@ -19,6 +19,10 @@
       <div id="resize-grip" class="resize-grip" hidden aria-hidden="true" title="Drag to resize"></div>
       <canvas id="bloom" width="120" height="120" aria-hidden="true"></canvas>
       <div id="strip" class="strip" hidden>
+      <nav id="profile-rail" class="profile-rail" aria-label="Profiles">
+        <ul id="profile-rail-list" class="profile-rail-list" role="listbox" aria-label="Active profile"></ul>
+      </nav>
+      <div id="strip-main" class="strip-main">
       <div id="vault-gate" class="vault-gate" hidden>
         <p id="vault-title" class="vault-title">Chat lock</p>
         <p id="vault-hint" class="vault-hint"></p>
@@ -81,6 +85,7 @@
           ></textarea>
           <button type="submit" id="ask-send">Send</button>
         </form>
+      </div>
       </div>
       <p id="hint" class="hint" hidden>click to type · hold to talk</p>
     </div>

@@ -230,6 +230,11 @@ description = "Switch the active Softwake profile used on the next awake."
 commands.allow = ["profile_set_active"]
 
 [[permission]]
+identifier = "allow-hud-switch-profile"
+description = "HUD left-rail: set active profile and run /refresh effects."
+commands.allow = ["hud_switch_profile"]
+
+[[permission]]
 identifier = "allow-tools-snapshot"
 description = "Load Tools Settings."
 commands.allow = ["tools_snapshot"]
