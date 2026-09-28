@@ -20,6 +20,7 @@ mod pack;
 mod playback_prefs;
 mod profiles;
 mod providers;
+mod remote_agent;
 mod skills;
 mod timers;
 mod tools;
@@ -95,6 +96,12 @@ pub fn run() {
             mcp::mcp_save,
             mcp::mcp_delete,
             mcp::mcp_clear_secret,
+            remote_agent::remote_agent_snapshot,
+            remote_agent::remote_agent_add,
+            remote_agent::remote_agent_save,
+            remote_agent::remote_agent_delete,
+            remote_agent::remote_agent_clear_secret,
+            remote_agent::remote_agent_test,
             email::email_snapshot,
             email::email_save,
             email::email_clear_password,
@@ -492,6 +499,12 @@ mod tests {
         "mcp_save",
         "mcp_delete",
         "mcp_clear_secret",
+        "remote_agent_snapshot",
+        "remote_agent_add",
+        "remote_agent_save",
+        "remote_agent_delete",
+        "remote_agent_clear_secret",
+        "remote_agent_test",
         "email_snapshot",
         "email_save",
         "email_clear_password",

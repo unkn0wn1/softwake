@@ -375,6 +375,10 @@ cargo test -p softwake-providers
 Default workspace tests do not call the network. Live HTTPS is the `live-http` feature.
 
 
+### Remote Agent (companion)
+
+Always-on Tailscale **companion** on a CT (not a remote core). Settings → **Remote Agent** stores pairing; timers get `run_on`. Slice 1 ships config + UI + `softwake-node` health/outbox stub — see [ADR 0039](docs/ADR-0039-remote-agent.md) and [pairing](docs/remote-agent-pairing.md).
+
 ### Webhook wake
 
 Authenticated local HTTP wake without the mic ([ADR 0038](docs/ADR-0038-webhook-wake.md)):
@@ -494,7 +498,7 @@ The soul directory is the first match of `--soul-dir PATH` (on `serve` and `demo
 - Drag the bloom to move it; Softwake persists that spot and keeps the bottom-right corner across expand/collapse until `hud-position.json` is cleared.
 - Particles follow capture level while listening ([ADR 0015](docs/ADR-0015-tray-hud.md), [ADR 0016](docs/ADR-0016-capture-level-hud.md)): daemon sends peak-normalized RMS on `Status` when PCM is scored; UI falls back to a local sine when that field is absent.
 
-**Settings left-nav** shows **exactly one** content pane at a time: General, Profiles (sublist), Providers, Tools, Timers (sublist), Skills (sublist), Messengers (sublist), Email, and Status. Status is selected when the Settings window opens.
+**Settings left-nav** shows **exactly one** content pane at a time: General, Profiles (sublist), Providers, Tools, Timers (sublist), Skills (sublist), Messengers (sublist), MCP (sublist), Remote Agent (sublist), Email, and Status. Status is selected when the Settings window opens.
 
 **Status** shows:
 

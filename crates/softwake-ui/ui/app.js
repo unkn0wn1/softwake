@@ -10,7 +10,7 @@ const confirmBtn = document.querySelector("#confirm");
 const cancelBtn = document.querySelector("#cancel");
 const navStatus = document.querySelector("#nav-status");
 
-const panes = ["general", "profiles", "providers", "tools", "timers", "skills", "messengers", "mcp", "email", "status"];
+const panes = ["general", "profiles", "providers", "tools", "timers", "skills", "messengers", "mcp", "remote-agent", "email", "status"];
 
 const providerSelect = document.querySelector("#provider-select");
 const keyPanel = document.querySelector("#key-panel");
@@ -1218,11 +1218,36 @@ if (skillsDeleteBtn) {
 }
 
 
+
+let remoteAgentCompanionEnabled = false;
+
+function applyTimersRunOnAvailability(hasCompanion) {
+  remoteAgentCompanionEnabled = !!hasCompanion;
+  if (!timersRunOn) return;
+  for (const opt of timersRunOn.options) {
+    if (opt.value === "local") {
+      opt.disabled = false;
+    } else {
+      opt.disabled = !remoteAgentCompanionEnabled;
+    }
+  }
+  if (!remoteAgentCompanionEnabled && timersRunOn.value !== "local") {
+    timersRunOn.value = "local";
+  }
+  if (timersRunOnHint) {
+    timersRunOnHint.textContent = remoteAgentCompanionEnabled
+      ? "Companion enabled. Slice 1 still fires locally; companion/auto dispatch is slice 2."
+      : "Companion options unlock when a Remote Agent is enabled. Slice 1 still fires locally.";
+  }
+}
+
 /* ---- Timers ---- */
 const timersList = document.querySelector("#timers-list");
 const timersShowAll = document.querySelector("#timers-show-all");
 const timersActive = document.querySelector("#timers-active");
 const timersAction = document.querySelector("#timers-action");
+const timersRunOn = document.querySelector("#timers-run-on");
+const timersRunOnHint = document.querySelector("#timers-run-on-hint");
 const timersKind = document.querySelector("#timers-kind");
 const timersWhen = document.querySelector("#timers-when");
 const timersTitleInput = document.querySelector("#timers-title-input");
@@ -1256,6 +1281,7 @@ function clearTimersForm() {
   timersSelectedProfile = "";
   if (timersList) timersList.selectedIndex = -1;
   if (timersAction) timersAction.value = "notify";
+  if (timersRunOn) timersRunOn.value = "local";
   if (timersKind) timersKind.value = "daily";
   if (timersWhen) timersWhen.value = "";
   if (timersTitleInput) timersTitleInput.value = "";
@@ -1268,6 +1294,7 @@ function fillTimersForm(row) {
   timersSelectedId = row.id || "";
   timersSelectedProfile = row.profileId || "";
   if (timersAction) timersAction.value = row.action || "notify";
+  if (timersRunOn) timersRunOn.value = row.runOn || "local";
   if (timersKind) timersKind.value = row.kind || "daily";
   if (timersWhen) timersWhen.value = row.when || "";
   if (timersTitleInput) timersTitleInput.value = row.title || "";
@@ -1348,6 +1375,12 @@ async function refreshTimers() {
   try {
     const showAll = timersShowAll ? timersShowAll.checked : false;
     renderTimers(await invoke("timers_snapshot", { showAll }));
+    try {
+      const ra = await invoke("remote_agent_snapshot", {});
+      applyTimersRunOnAvailability(!!ra.hasEnabledCompanion);
+    } catch (_) {
+      applyTimersRunOnAvailability(false);
+    }
   } catch (error) {
     showTimersError(error);
   }
@@ -1383,6 +1416,7 @@ if (timersSaveBtn) {
         id: timersSelectedId || null,
         kind: timersKind ? timersKind.value : "daily",
         action: timersAction ? timersAction.value : "notify",
+        runOn: timersRunOn ? timersRunOn.value : "local",
         when: timersWhen ? timersWhen.value : "",
         title: timersTitleInput ? timersTitleInput.value : "",
         message: timersMessage ? timersMessage.value : "",
@@ -1993,6 +2027,163 @@ if (skillsSubNew && skillsNewBtn) {
 
 
 
+
+/* ---- Remote Agent ---- */
+const remoteAgentSubnav = document.querySelector("#remote-agent-subnav");
+const remoteAgentStorage = document.querySelector("#remote-agent-storage");
+const remoteAgentStatus = document.querySelector("#remote-agent-status");
+const remoteAgentError = document.querySelector("#remote-agent-error");
+const remoteAgentId = document.querySelector("#remote-agent-id");
+const remoteAgentName = document.querySelector("#remote-agent-name");
+const remoteAgentHostname = document.querySelector("#remote-agent-hostname");
+const remoteAgentSshUser = document.querySelector("#remote-agent-ssh-user");
+const remoteAgentRoleTimers = document.querySelector("#remote-agent-role-timers");
+const remoteAgentRoleOutbox = document.querySelector("#remote-agent-role-outbox");
+const remoteAgentRoleWebhook = document.querySelector("#remote-agent-role-webhook");
+const remoteAgentRoleTelegram = document.querySelector("#remote-agent-role-telegram");
+const remoteAgentConflict = document.querySelector("#remote-agent-conflict");
+const remoteAgentSecret = document.querySelector("#remote-agent-secret");
+const remoteAgentSecretStatus = document.querySelector("#remote-agent-secret-status");
+const remoteAgentEnabled = document.querySelector("#remote-agent-enabled");
+const remoteAgentSave = document.querySelector("#remote-agent-save");
+const remoteAgentTest = document.querySelector("#remote-agent-test");
+const remoteAgentClearSecret = document.querySelector("#remote-agent-clear-secret");
+const remoteAgentDelete = document.querySelector("#remote-agent-delete");
+const remoteAgentSubNew = document.querySelector("#remote-agent-sub-new");
+let remoteAgentSnap = null;
+
+function showRemoteAgentError(error) {
+  if (!remoteAgentError) return;
+  remoteAgentError.textContent =
+    typeof error === "string" ? error : error && error.message ? error.message : "request failed";
+}
+
+function applyRemoteAgentSnapshot(snap, statusText) {
+  remoteAgentSnap = snap;
+  if (remoteAgentError) remoteAgentError.textContent = "";
+  if (remoteAgentStatus) remoteAgentStatus.textContent = statusText || snap.testStatus || "";
+  if (remoteAgentStorage) {
+    remoteAgentStorage.textContent =
+      "Storage: " + (snap.storageBackend || "—") + (snap.storageMessage ? " — " + snap.storageMessage : "");
+  }
+  if (remoteAgentId) remoteAgentId.value = snap.id || "";
+  if (remoteAgentName) remoteAgentName.value = snap.name || "";
+  if (remoteAgentHostname) remoteAgentHostname.value = snap.tailscaleHostname || "";
+  if (remoteAgentSshUser) remoteAgentSshUser.value = snap.sshUser || "root";
+  if (remoteAgentRoleTimers) remoteAgentRoleTimers.checked = !!snap.roleTimers;
+  if (remoteAgentRoleOutbox) remoteAgentRoleOutbox.checked = !!snap.roleOutbox;
+  if (remoteAgentRoleWebhook) remoteAgentRoleWebhook.checked = !!snap.roleWebhookWake;
+  if (remoteAgentRoleTelegram) remoteAgentRoleTelegram.checked = false;
+  if (remoteAgentConflict) remoteAgentConflict.value = snap.conflictPolicy || "prefer_local";
+  if (remoteAgentSecret) remoteAgentSecret.value = "";
+  if (remoteAgentSecretStatus) {
+    remoteAgentSecretStatus.textContent = snap.hasSecret ? "Secret: saved" : "Secret: not set";
+  }
+  if (remoteAgentEnabled) remoteAgentEnabled.checked = !!snap.enabled;
+  applyTimersRunOnAvailability(!!snap.hasEnabledCompanion);
+  renderRemoteAgentSubnav(snap);
+}
+
+function renderRemoteAgentSubnav(snap) {
+  const list = document.querySelector("#remote-agent-sub-list");
+  if (!list) return;
+  list.innerHTML = "";
+  for (const row of snap.agents || []) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "profile-chip";
+    btn.setAttribute("role", "option");
+    btn.setAttribute("aria-selected", row.id === (snap.selectedId || "") ? "true" : "false");
+    const title = document.createElement("span");
+    title.className = "profile-chip-label";
+    title.textContent = (row.name || row.id) + (row.enabled ? "" : " · off");
+    btn.appendChild(title);
+    btn.addEventListener("click", () => refreshRemoteAgent(row.id));
+    li.appendChild(btn);
+    list.appendChild(li);
+  }
+}
+
+async function refreshRemoteAgent(selectedId) {
+  try {
+    const args = {};
+    if (selectedId) args.selectedId = selectedId;
+    applyRemoteAgentSnapshot(await invoke("remote_agent_snapshot", args), "");
+  } catch (error) {
+    showRemoteAgentError(error);
+  }
+}
+
+async function saveRemoteAgent() {
+  try {
+    const args = {
+      id: remoteAgentId ? remoteAgentId.value : "",
+      name: remoteAgentName ? remoteAgentName.value : "",
+      tailscaleHostname: remoteAgentHostname ? remoteAgentHostname.value : "",
+      sshUser: remoteAgentSshUser ? remoteAgentSshUser.value : "root",
+      roleTimers: remoteAgentRoleTimers ? !!remoteAgentRoleTimers.checked : true,
+      roleOutbox: remoteAgentRoleOutbox ? !!remoteAgentRoleOutbox.checked : true,
+      roleWebhookWake: remoteAgentRoleWebhook ? !!remoteAgentRoleWebhook.checked : false,
+      roleTelegramOwner: false,
+      conflictPolicy: remoteAgentConflict ? remoteAgentConflict.value : "prefer_local",
+      enabled: remoteAgentEnabled ? !!remoteAgentEnabled.checked : false,
+      secret: remoteAgentSecret && remoteAgentSecret.value ? remoteAgentSecret.value : null,
+      clearSecret: false,
+    };
+    applyRemoteAgentSnapshot(await invoke("remote_agent_save", { args }), "Saved.");
+  } catch (error) {
+    showRemoteAgentError(error);
+  }
+}
+
+if (remoteAgentSave) remoteAgentSave.addEventListener("click", () => saveRemoteAgent());
+if (remoteAgentTest) {
+  remoteAgentTest.addEventListener("click", async () => {
+    try {
+      applyRemoteAgentSnapshot(
+        await invoke("remote_agent_test", { agentId: remoteAgentId ? remoteAgentId.value : null }),
+        "",
+      );
+    } catch (error) {
+      showRemoteAgentError(error);
+    }
+  });
+}
+if (remoteAgentClearSecret) {
+  remoteAgentClearSecret.addEventListener("click", async () => {
+    try {
+      applyRemoteAgentSnapshot(
+        await invoke("remote_agent_clear_secret", { agentId: remoteAgentId ? remoteAgentId.value : "" }),
+        "Secret cleared.",
+      );
+    } catch (error) {
+      showRemoteAgentError(error);
+    }
+  });
+}
+if (remoteAgentDelete) {
+  remoteAgentDelete.addEventListener("click", async () => {
+    try {
+      applyRemoteAgentSnapshot(
+        await invoke("remote_agent_delete", { agentId: remoteAgentId ? remoteAgentId.value : "" }),
+        "Deleted.",
+      );
+    } catch (error) {
+      showRemoteAgentError(error);
+    }
+  });
+}
+if (remoteAgentSubNew) {
+  remoteAgentSubNew.addEventListener("click", async () => {
+    try {
+      applyRemoteAgentSnapshot(await invoke("remote_agent_add"), "Draft created — fill hostname and Save.");
+    } catch (error) {
+      showRemoteAgentError(error);
+    }
+  });
+}
+
 /* ---- MCP ---- */
 const mcpSubnav = document.querySelector("#mcp-subnav");
 const mcpStorage = document.querySelector("#mcp-storage");
@@ -2151,6 +2342,7 @@ function showPane(name) {
   setSubnavVisible(skillsSubnav, name === "skills");
   setSubnavVisible(messengersSubnav, name === "messengers");
   setSubnavVisible(mcpSubnav, name === "mcp");
+  setSubnavVisible(remoteAgentSubnav, name === "remote-agent");
   if (name === "profiles") {
     if (!profilesLoaded) {
       loadProfiles(selectedProfileId);
@@ -2175,6 +2367,9 @@ function showPane(name) {
   }
   if (name === "mcp") {
     refreshMcp(mcpSnap ? mcpSnap.selectedId : null);
+  }
+  if (name === "remote-agent") {
+    refreshRemoteAgent(remoteAgentSnap ? remoteAgentSnap.selectedId : null);
   }
 
 }

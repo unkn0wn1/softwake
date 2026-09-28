@@ -108,6 +108,9 @@ pub struct SecretBag {
     /// MCP server auth secrets keyed by server id (ADR-0031). Never logged.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub mcp_secrets: BTreeMap<String, String>,
+    /// Remote Agent pairing secrets keyed by agent id (ADR-0039). Never logged.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub remote_agent_pairing_secrets: BTreeMap<String, String>,
 }
 
 fn legacy_version() -> u32 {
@@ -172,6 +175,14 @@ impl std::fmt::Debug for SecretBag {
                     .map(|k| (k.as_str(), "<redacted>"))
                     .collect::<Vec<_>>(),
             )
+            .field(
+                "remote_agent_pairing_secrets",
+                &self
+                    .remote_agent_pairing_secrets
+                    .keys()
+                    .map(|k| (k.as_str(), "<redacted>"))
+                    .collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -198,6 +209,7 @@ impl SecretBag {
             active_google_connection_id: None,
             active_microsoft_connection_id: None,
             mcp_secrets: BTreeMap::new(),
+            remote_agent_pairing_secrets: BTreeMap::new(),
         }
     }
 
@@ -924,6 +936,10 @@ pub(crate) fn bag_has_secret(bag: &SecretBag) -> bool {
             .mcp_secrets
             .values()
             .any(|value| !value.trim().is_empty())
+        || bag
+            .remote_agent_pairing_secrets
+            .values()
+            .any(|value| !value.trim().is_empty())
 }
 
 fn connection_has_secret(connection: &AccountConnection) -> bool {
@@ -1085,6 +1101,8 @@ pub(crate) struct SecretPayload {
     pub(crate) active_microsoft_connection_id: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) mcp_secrets: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) remote_agent_pairing_secrets: BTreeMap<String, String>,
 }
 
 pub(crate) fn encode_payload(bag: &SecretBag) -> Result<String, SecretStoreError> {
@@ -1102,6 +1120,7 @@ pub(crate) fn encode_payload(bag: &SecretBag) -> Result<String, SecretStoreError
         active_google_connection_id: bag.active_google_connection_id.clone(),
         active_microsoft_connection_id: bag.active_microsoft_connection_id.clone(),
         mcp_secrets: bag.mcp_secrets.clone(),
+        remote_agent_pairing_secrets: bag.remote_agent_pairing_secrets.clone(),
     };
     serde_json::to_string(&payload).map_err(|_| SecretStoreError::Keyring)
 }
@@ -1135,6 +1154,7 @@ pub(crate) fn decode_payload(path: &Path, json: &str) -> Result<SecretBag, Secre
         active_google_connection_id: payload.active_google_connection_id,
         active_microsoft_connection_id: payload.active_microsoft_connection_id,
         mcp_secrets: payload.mcp_secrets,
+        remote_agent_pairing_secrets: payload.remote_agent_pairing_secrets,
     })
 }
 

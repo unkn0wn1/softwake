@@ -16,6 +16,7 @@ members = [
     "crates/softwake-soul",
     "crates/softwake-ipc",
     "crates/softwake-ui",
+    "crates/softwake-node",
 ]
 
 [workspace.package]

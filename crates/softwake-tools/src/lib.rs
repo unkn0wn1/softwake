@@ -18,6 +18,7 @@ mod chat_schema;
 mod cloud_read;
 mod mcp_config;
 mod messengers;
+mod remote_agents;
 mod schedule;
 mod settings;
 mod shell;
@@ -46,14 +47,20 @@ pub use messengers::{
     resolve_active_messengers_file, resolve_hud_chat_inbox, resolve_messengers_file,
     save_messengers, take_hud_inbox, wants_ask_fanout, wants_timer_push,
 };
+pub use remote_agents::{
+    MAX_REMOTE_AGENTS, REMOTE_AGENTS_FILE_NAME, RemoteAgentConfig, RemoteAgentRoles,
+    RemoteAgentsError, RemoteAgentsFile, RemoteConflictPolicy, delete_agent, load_remote_agents,
+    parse_conflict_policy, resolve_remote_agents_file, sanitize_remote_agent_id,
+    save_remote_agents, upsert_agent, validate_agent,
+};
 pub use schedule::{
     AGENT_TASK_SPEAK_MAX, CATCH_UP_GRACE_MS, CronExpr, MAX_ENTRIES, SCHEDULES_FILE_NAME,
-    ScheduleAction, ScheduleActionKind, ScheduleEntry, ScheduleError, ScheduleKind, SchedulesFile,
-    TIMEZONE_LOCAL, advance_after_fire, agent_task_user_prompt, apply_action, compute_next_fire_ms,
-    fire_agent_notify_line, fire_agent_speak_line, fire_notify_line, fire_speak_line,
-    list_profile_ids, load_schedules, new_schedule_id, now_ms, parse_schedule_args,
-    refresh_next_fire, resolve_active_schedules_file, resolve_schedules_file, save_schedules,
-    should_fire, skip_missed, truncate_chars, validate_entry,
+    ScheduleAction, ScheduleActionKind, ScheduleEntry, ScheduleError, ScheduleKind, ScheduleRunOn,
+    SchedulesFile, TIMEZONE_LOCAL, advance_after_fire, agent_task_user_prompt, apply_action,
+    compute_next_fire_ms, fire_agent_notify_line, fire_agent_speak_line, fire_notify_line,
+    fire_speak_line, list_profile_ids, load_schedules, new_schedule_id, now_ms,
+    parse_schedule_args, refresh_next_fire, resolve_active_schedules_file, resolve_schedules_file,
+    save_schedules, should_fire, skip_missed, truncate_chars, validate_entry,
 };
 pub use settings::{
     ConfirmPolicy, ConnectedAccount, EmailOauthStatus, FileToolsSettings, TOOLS_FILE_NAME,

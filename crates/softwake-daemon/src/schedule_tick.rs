@@ -69,6 +69,10 @@ fn tick_profile(runtime: &mut Runtime, profile_id: &str, now: u64) -> usize {
 }
 
 fn fire_one(runtime: &mut Runtime, profile_id: &str, entry: &ScheduleEntry) {
+    // TODO(remote-agent slice 2): when entry.run_on is Companion/Auto, lease/dispatch
+    // to the paired companion outbox instead of (or after) local fire. Slice 1 always
+    // fires locally so timers keep working before presence/outbox land.
+    let _ = entry.run_on;
     match entry.action {
         ScheduleActionKind::Notify => {
             let notify = fire_notify_line(entry);

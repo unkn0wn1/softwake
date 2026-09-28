@@ -86,6 +86,37 @@ impl std::fmt::Display for ScheduleKind {
     }
 }
 
+/// Where a schedule prefers to fire (ADR-0039). Slice 1 still fires locally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduleRunOn {
+    /// Fire on the laptop softwaked (default).
+    #[default]
+    Local,
+    /// Prefer companion softwake-node (dispatch is slice 2; local fire remains).
+    Companion,
+    /// Prefer laptop if present, else companion (slice 2 dispatch).
+    Auto,
+}
+
+impl ScheduleRunOn {
+    /// Stable spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Companion => "companion",
+            Self::Auto => "auto",
+        }
+    }
+}
+
+impl std::fmt::Display for ScheduleRunOn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// What happens when a schedule fires.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -124,6 +155,9 @@ pub struct ScheduleEntry {
     /// Fire behavior (`notify` default for back-compat).
     #[serde(default)]
     pub action: ScheduleActionKind,
+    /// Where to run (`local` default). Companion dispatch is slice 2.
+    #[serde(default)]
+    pub run_on: ScheduleRunOn,
     /// Short label.
     #[serde(default)]
     pub title: String,
@@ -619,6 +653,8 @@ pub enum ScheduleAction {
         kind: ScheduleKind,
         /// Fire action (`notify` vs `agent_task`).
         action: ScheduleActionKind,
+        /// Run-on preference.
+        run_on: ScheduleRunOn,
         /// When field (`at_local` / `daily_time` / cron).
         when: String,
         /// Title/message body (rest of args).
@@ -632,6 +668,8 @@ pub enum ScheduleAction {
         kind: Option<ScheduleKind>,
         /// Optional fire action.
         action: Option<ScheduleActionKind>,
+        /// Optional run-on.
+        run_on: Option<ScheduleRunOn>,
         /// Optional when string.
         when: Option<String>,
         /// Optional text.
@@ -698,11 +736,27 @@ pub fn parse_schedule_args(args: &[String]) -> Result<ScheduleAction, ScheduleEr
                     "schedule create needs message text".to_owned(),
                 ));
             }
+            let mut run_on = ScheduleRunOn::Local;
+            let mut body: Vec<&str> = Vec::new();
+            for tok in &rest {
+                let lower = tok.to_ascii_lowercase();
+                if let Some(v) = lower.strip_prefix("run_on=") {
+                    run_on = parse_run_on(v)?;
+                } else {
+                    body.push(tok);
+                }
+            }
+            if body.is_empty() {
+                return Err(ScheduleError::Invalid(
+                    "schedule create needs message text".to_owned(),
+                ));
+            }
             Ok(ScheduleAction::Create {
                 kind,
                 action: action_kind,
+                run_on,
                 when,
-                text: rest.join(" "),
+                text: body.join(" "),
             })
         }
         "edit" => {
@@ -712,6 +766,7 @@ pub fn parse_schedule_args(args: &[String]) -> Result<ScheduleAction, ScheduleEr
                 .to_owned();
             let mut kind = None;
             let mut action = None;
+            let mut run_on = None;
             let mut when = None;
             let mut text = None;
             let mut enabled = None;
@@ -730,6 +785,12 @@ pub fn parse_schedule_args(args: &[String]) -> Result<ScheduleAction, ScheduleEr
                             ScheduleError::Invalid("edit action needs value".to_owned())
                         })?;
                         action = Some(parse_action_kind(v)?);
+                    }
+                    "run_on" => {
+                        let v = iter.next().ok_or_else(|| {
+                            ScheduleError::Invalid("edit run_on needs value".to_owned())
+                        })?;
+                        run_on = Some(parse_run_on(v)?);
                     }
                     "when" => {
                         let v = iter.next().ok_or_else(|| {
@@ -757,6 +818,7 @@ pub fn parse_schedule_args(args: &[String]) -> Result<ScheduleAction, ScheduleEr
                 id,
                 kind,
                 action,
+                run_on,
                 when,
                 text,
                 enabled,
@@ -785,6 +847,17 @@ fn parse_action_kind(raw: &str) -> Result<ScheduleActionKind, ScheduleError> {
         "agent_task" | "agent" | "task" => Ok(ScheduleActionKind::AgentTask),
         other => Err(ScheduleError::Invalid(format!(
             "unknown action: {other} (want notify|agent_task)"
+        ))),
+    }
+}
+
+fn parse_run_on(raw: &str) -> Result<ScheduleRunOn, ScheduleError> {
+    match raw.to_ascii_lowercase().as_str() {
+        "local" | "laptop" => Ok(ScheduleRunOn::Local),
+        "companion" | "remote" | "node" => Ok(ScheduleRunOn::Companion),
+        "auto" => Ok(ScheduleRunOn::Auto),
+        other => Err(ScheduleError::Invalid(format!(
+            "unknown run_on: {other} (want local|companion|auto)"
         ))),
     }
 }
@@ -836,10 +909,11 @@ pub fn apply_action(
                 .iter()
                 .map(|e| {
                     format!(
-                        "{} {} action={} {} enabled={} next={} | {} — {}",
+                        "{} {} action={} run_on={} {} enabled={} next={} | {} — {}",
                         e.id,
                         e.kind,
                         e.action,
+                        e.run_on,
                         when_label(e),
                         e.enabled,
                         e.next_fire_ms
@@ -862,6 +936,7 @@ pub fn apply_action(
         ScheduleAction::Create {
             kind,
             action,
+            run_on,
             when,
             text,
         } => {
@@ -872,6 +947,7 @@ pub fn apply_action(
                 id: new_schedule_id(),
                 kind: *kind,
                 action: *action,
+                run_on: *run_on,
                 title: text.clone(),
                 message: text.clone(),
                 enabled: true,
@@ -887,10 +963,11 @@ pub fn apply_action(
             validate_entry(&mut entry)?;
             refresh_next_fire(&mut entry, now_ms)?;
             let detail = format!(
-                "schedule created: {} {} action={} {} next={}",
+                "schedule created: {} {} action={} run_on={} {} next={}",
                 entry.id,
                 entry.kind,
                 entry.action,
+                entry.run_on,
                 when_label(&entry),
                 entry
                     .next_fire_ms
@@ -903,6 +980,7 @@ pub fn apply_action(
             id,
             kind,
             action,
+            run_on,
             when,
             text,
             enabled,
@@ -917,6 +995,9 @@ pub fn apply_action(
             }
             if let Some(a) = action {
                 entry.action = *a;
+            }
+            if let Some(r) = run_on {
+                entry.run_on = *r;
             }
             if let Some(w) = when {
                 apply_when(entry, w)?;
@@ -1046,6 +1127,7 @@ mod tests {
             id: "sch-1".into(),
             kind: ScheduleKind::Daily,
             action: ScheduleActionKind::Notify,
+            run_on: ScheduleRunOn::Local,
             title: "Standup".into(),
             message: "Standup".into(),
             enabled: true,
@@ -1089,6 +1171,7 @@ mod tests {
             id: "sch-2".into(),
             kind: ScheduleKind::Once,
             action: ScheduleActionKind::Notify,
+            run_on: ScheduleRunOn::Local,
             title: "Past".into(),
             message: "Past".into(),
             enabled: true,
@@ -1110,6 +1193,7 @@ mod tests {
             id: "sch-3".into(),
             kind: ScheduleKind::Once,
             action: ScheduleActionKind::Notify,
+            run_on: ScheduleRunOn::Local,
             title: "t".into(),
             message: "t".into(),
             enabled: true,
@@ -1140,6 +1224,7 @@ mod tests {
             ScheduleAction::Create {
                 kind,
                 action,
+                run_on: _,
                 when,
                 text,
             } => {
@@ -1158,6 +1243,7 @@ mod tests {
         let action = ScheduleAction::Create {
             kind: ScheduleKind::Daily,
             action: ScheduleActionKind::Notify,
+            run_on: ScheduleRunOn::Local,
             when: "08:00".into(),
             text: "Hi".into(),
         };
@@ -1204,6 +1290,7 @@ mod tests {
             ScheduleAction::Create {
                 kind,
                 action,
+                run_on: _,
                 when,
                 text,
             } => {
@@ -1237,6 +1324,7 @@ mod tests {
             id: "sch-a".into(),
             kind: ScheduleKind::Once,
             action: ScheduleActionKind::AgentTask,
+            run_on: ScheduleRunOn::Local,
             title: "Brief".into(),
             message: "Check calendar".into(),
             enabled: true,
@@ -1256,5 +1344,35 @@ mod tests {
         let prompt = agent_task_user_prompt(&loaded.entries[0]);
         assert!(prompt.contains("Check calendar"));
         assert!(prompt.contains("Brief"));
+    }
+
+    #[test]
+    fn run_on_defaults_to_local_and_round_trips() {
+        let json = r#"{"id":"t1","kind":"daily","title":"x","message":"y","enabled":true,"daily_time":"07:30","created_ms":1,"updated_ms":1}"#;
+        let entry: ScheduleEntry = serde_json::from_str(json).expect("parse");
+        assert_eq!(entry.run_on, ScheduleRunOn::Local);
+        let mut entry2 = entry.clone();
+        entry2.run_on = ScheduleRunOn::Companion;
+        let back: ScheduleEntry =
+            serde_json::from_str(&serde_json::to_string(&entry2).expect("ser")).expect("de");
+        assert_eq!(back.run_on, ScheduleRunOn::Companion);
+    }
+
+    #[test]
+    fn parse_create_run_on_token() {
+        let args = vec![
+            "create".into(),
+            "daily".into(),
+            "07:30".into(),
+            "run_on=auto".into(),
+            "hello".into(),
+        ];
+        match parse_schedule_args(&args).expect("parse") {
+            ScheduleAction::Create { run_on, text, .. } => {
+                assert_eq!(run_on, ScheduleRunOn::Auto);
+                assert_eq!(text, "hello");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
     }
 }

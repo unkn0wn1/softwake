@@ -1,0 +1,18 @@
+[package]
+name = "softwake-node"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Softwake companion node stub (Remote Agent). Health + empty outbox over a configurable listen addr (Tailscale IP in production)."
+
+[[bin]]
+name = "softwake-node"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json.workspace = true
+
+[lints]
+workspace = true

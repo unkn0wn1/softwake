@@ -47,3 +47,7 @@ Schedules may set `action: agent_task` so a fire runs a bounded agent turn and
 delivers the result (not only a fixed notify string). See
 [ADR-0036](ADR-0036-agent-task-cron.md). Default `action` remains `notify`.
 
+## Amendment (2026-09-28) — run_on
+
+Schedules may set `run_on: local | companion | auto` (default `local`) so a row can prefer the laptop or a Remote Agent companion. See [ADR-0039](ADR-0039-remote-agent.md). Slice 1 persists the field and exposes Timers UI; companion dispatch is slice 2 (fires remain local).
+
