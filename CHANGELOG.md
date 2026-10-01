@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- HUD thinking/live phase always clears when ask completes, soft-finalizes, errors, rejects, or TTS settles (incl. Softwright multi-tool / last-round soft-finalize); `talkPending` cannot stick.
+
 ### Added
 
 - Settings General **HUD transparency** slider (`hud_opacity` in ui-prefs.json) for the expanded capsule.

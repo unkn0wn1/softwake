@@ -389,7 +389,7 @@ impl Runtime {
     /// onto the status.
     pub(crate) fn ask(&mut self, text: &str) -> Outcome {
         if text.trim().is_empty() {
-            return Self::chat_rejected("ask needs text");
+            return self.chat_rejected("ask needs text");
         }
         // Slash first so `/sleep` is immediate (no NL confirm) and `/resume`
         // works from hibernate before the awake-only gate.
@@ -400,24 +400,24 @@ impl Runtime {
             return outcome;
         }
         if self.machine.permit_tool_dispatch().is_err() {
-            return Self::chat_rejected(&format!(
+            return self.chat_rejected(&format!(
                 "ask while {} (chat acts only while awake)",
                 wire_state(self.machine.state())
             ));
         }
         if self.session.phase() != SessionPhase::Open {
-            return Self::chat_rejected("session is closed");
+            return self.chat_rejected("session is closed");
         }
         self.set_turn_phase(Some("thinking"));
         self.publish_live(Some("thinking…".to_owned()), Some("thinking".to_owned()));
         if let Some(outcome) = self.try_shell_ask(text) {
-            return outcome;
+            return self.settle_intent_outcome(outcome);
         }
         if let Some(outcome) = self.try_schedule_ask(text) {
-            return outcome;
+            return self.settle_intent_outcome(outcome);
         }
         if let Some(outcome) = self.try_skill_ask(text) {
-            return outcome;
+            return self.settle_intent_outcome(outcome);
         }
         #[cfg(test)]
         if self.chat_fixture.is_some() {
@@ -1013,7 +1013,7 @@ impl Runtime {
 
     fn run_context_command(&mut self, command: crate::chat::ContextCommand) -> Outcome {
         let Some(instructions) = self.session.instructions().map(str::to_owned) else {
-            return Self::chat_rejected("session is closed");
+            return self.chat_rejected("session is closed");
         };
         let tools_settings = self.hands.tools_settings();
         let appendix = crate::chat::system_appendix("", &tools_settings);
@@ -1200,7 +1200,8 @@ impl Runtime {
         }
     }
 
-    fn chat_rejected(message: &str) -> Outcome {
+    fn chat_rejected(&mut self, message: &str) -> Outcome {
+        self.clear_turn_live();
         Self::rejected(IpcError::ChatRejected {
             message: message.to_owned(),
         })
@@ -1249,7 +1250,7 @@ impl Runtime {
                     trace,
                 ) {
                     Ok(ok) => ok,
-                    Err(error) => return Self::chat_rejected(error.sentence()),
+                    Err(error) => return self.chat_rejected(error.sentence()),
                 };
                 let (system, context) = prepared_ask;
                 let messages = self.session.messages().to_vec();
@@ -1264,14 +1265,14 @@ impl Runtime {
                 );
                 self.finish_tool_loop_ask(loop_ok, context)
             }
-            Err(message) => Self::chat_rejected(&message),
+            Err(message) => self.chat_rejected(&message),
         }
     }
 
     fn ask_disk(&mut self, text: &str) -> Outcome {
         let ready = match crate::chat::load_disk_chat() {
             Ok(ready) => ready,
-            Err(message) => return Self::chat_rejected(&message),
+            Err(message) => return self.chat_rejected(&message),
         };
         let crate::chat::DiskChat {
             prepared,
@@ -1281,7 +1282,7 @@ impl Runtime {
             budget,
         } = ready;
         if let Err(message) = crate::chat::gate_live_http(&prepared, &bearer, text) {
-            return Self::chat_rejected(&message);
+            return self.chat_rejected(&message);
         }
         let call = prepared.clone();
         let call_c = prepared.clone();
@@ -1302,7 +1303,7 @@ impl Runtime {
             trace,
         ) {
             Ok(ok) => ok,
-            Err(error) => return Self::chat_rejected(error.sentence()),
+            Err(error) => return self.chat_rejected(error.sentence()),
         };
         let (system, context) = prepared_ask;
         let messages = self.session.messages().to_vec();
@@ -1327,13 +1328,13 @@ impl Runtime {
         match loop_ok {
             Ok(crate::tool_loop::ToolLoopOk::Message(reply)) => {
                 if let Err(error) = self.session.push_assistant_turn(&reply) {
-                    return Self::chat_rejected(&error.to_string());
+                    return self.chat_rejected(&error.to_string());
                 }
                 self.finish_ask_reply(crate::chat::AskOk { reply, context })
             }
             Ok(crate::tool_loop::ToolLoopOk::Pending { message, pending }) => {
                 if let Err(error) = self.session.push_assistant_turn(&message) {
-                    return Self::chat_rejected(&error.to_string());
+                    return self.chat_rejected(&error.to_string());
                 }
                 let _ = context;
                 // Context accounting still applies; reuse finish path for speech/status
@@ -1359,7 +1360,7 @@ impl Runtime {
                     });
                 outcome
             }
-            Err(message) => Self::chat_rejected(&message),
+            Err(message) => self.chat_rejected(&message),
         }
     }
 
@@ -1383,6 +1384,7 @@ impl Runtime {
             let _ = self.reply_latch.record(&reply, now);
             self.reply_latch.clear();
             let note = "Ambient loop detected — sleeping.".to_owned();
+            self.clear_turn_live();
             self.retain_status_text(Some(note.clone()), Some(note.clone()));
             let mut outcome = self.sleep_phrase();
             if let ResponseBody::Ok { snapshot } = &mut outcome.body {
@@ -1653,6 +1655,7 @@ impl Runtime {
     /// `name`, when set, must match the pending tool. A second confirm of the
     /// same id fails because the first confirm clears the record.
     pub(crate) fn confirm_tool(&mut self, pending_id: &str, name: Option<&str>) -> Outcome {
+        self.clear_turn_live();
         match self.hands.confirm(&self.machine, pending_id, name) {
             Ok(mut confirmed) => {
                 if let Some(effect) = self.hands.take_ctl_effect() {
@@ -1675,6 +1678,7 @@ impl Runtime {
     /// a confirmation that survived a state change. Sleep and hibernate also
     /// clear it on their own.
     pub(crate) fn cancel_tool(&mut self, pending_id: &str, name: Option<&str>) -> Outcome {
+        self.clear_turn_live();
         match self.hands.cancel(pending_id, name) {
             Ok(cancelled) => self.cancelled_outcome(cancelled),
             Err(error) => Self::rejected(tool_ipc_error(&error)),
@@ -2263,6 +2267,7 @@ impl Runtime {
                     self.talk.clear();
                     self.auto_utt.reset();
                     self.pending_auto_pcm = None;
+                    self.turn_phase = None;
                     self.last_status_message = None;
                     self.last_status_detail = None;
                     let _ = self.stt.drain();
@@ -2466,6 +2471,47 @@ impl Runtime {
 
     fn set_turn_phase(&mut self, phase: Option<&str>) {
         self.turn_phase = phase.map(str::to_owned);
+    }
+
+    /// Drop live turn phase and a stuck `thinking…` placeholder so `GetStatus`
+    /// cannot resurrect Thinking after reject / short-circuit / sleep.
+    fn clear_turn_live(&mut self) {
+        self.turn_phase = None;
+        if let Some("thinking…" | "thinking...") = self.last_status_message.as_deref() {
+            self.last_status_message = None;
+            self.last_status_detail = None;
+        }
+    }
+
+    /// Intent short-circuit after `ask` already published thinking: clear phase,
+    /// or keep `awaiting_approve` when a confirm-gated tool was staged.
+    fn settle_intent_outcome(&mut self, mut outcome: Outcome) -> Outcome {
+        let awaiting = outcome
+            .events
+            .iter()
+            .any(|event| matches!(event, WireEvent::ToolConfirmPending { .. }));
+        if awaiting {
+            self.set_turn_phase(Some("awaiting_approve"));
+            if let ResponseBody::Ok { snapshot } = &mut outcome.body {
+                snapshot.phase = Some("awaiting_approve".to_owned());
+                if snapshot.detail.is_none() {
+                    snapshot.detail = Some("waiting for approve".to_owned());
+                }
+            }
+        } else {
+            self.clear_turn_live();
+            if let ResponseBody::Ok { snapshot } = &mut outcome.body {
+                snapshot.phase = None;
+            }
+        }
+        if let ResponseBody::Ok { snapshot } = &outcome.body {
+            if let Some(cache) = &self.status_cache {
+                if let Ok(mut guard) = cache.lock() {
+                    *guard = Some(snapshot.clone());
+                }
+            }
+        }
+        outcome
     }
 
     /// Push current snapshot into the shared status cache (visible while this lock is held).
@@ -4300,6 +4346,53 @@ mod tests {
         assert!(runtime.chat_posts().is_empty());
         assert!(runtime.session_turns().is_empty());
         assert!(!format!("{outcome:?}").contains("sk-test-secret"));
+    }
+
+    #[test]
+    fn ask_reject_after_thinking_clears_phase_on_get_status() {
+        let soul = TestSoulDir::valid();
+        let mut runtime = Runtime::new(soul.soul_dir());
+        wake(&mut runtime);
+        // Missing bearer fails inside ask_disk after thinking was published.
+        runtime.install_chat_fixture(crate::chat::xai_key_fixture(true, None, "pong"));
+        let outcome = runtime.ask("hello soulwright");
+        match outcome.body {
+            ResponseBody::Err {
+                error: IpcError::ChatRejected { ref message },
+            } => assert!(
+                message.contains("API key") || message.contains("key"),
+                "{message}"
+            ),
+            other => panic!("expected chat_rejected after thinking, got {other:?}"),
+        }
+        let polled = runtime.handle(Command::GetStatus);
+        let status = polled.body.status().expect("status");
+        assert_eq!(status.phase, None, "stuck phase={:?}", status.phase);
+        assert!(
+            !matches!(status.message.as_deref(), Some("thinking…" | "thinking...")),
+            "stuck thinking message={:?}",
+            status.message
+        );
+    }
+
+    #[test]
+    fn ask_success_clears_turn_phase() {
+        let soul = TestSoulDir::valid();
+        let mut runtime = Runtime::new(soul.soul_dir());
+        wake(&mut runtime);
+        runtime.install_chat_fixture(crate::chat::xai_key_fixture(
+            true,
+            Some("sk-test-secret"),
+            "soft finalize reply",
+        ));
+        let asked = runtime.ask("draft a short note");
+        let status = asked.body.status().expect("ok status");
+        assert_eq!(status.message.as_deref(), Some("soft finalize reply"));
+        assert_eq!(status.phase, None, "phase after ask={:?}", status.phase);
+        let polled_outcome = runtime.handle(Command::GetStatus);
+        let polled = polled_outcome.body.status().expect("poll");
+        assert_eq!(polled.phase, None);
+        assert_eq!(polled.message.as_deref(), Some("soft finalize reply"));
     }
 
     #[test]

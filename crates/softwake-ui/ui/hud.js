@@ -840,6 +840,40 @@ function applyPhase(phase, message, detail) {
   }
 }
 
+/** Clear stuck Thinking/Speaking live line after a turn settles. */
+function clearThinkingLive() {
+  lastPhase = "";
+  if (!holding) {
+    setLive("", false);
+  }
+}
+
+/**
+ * Ask/talk promise settled: never leave talkPending or Thinking stuck.
+ * Keep Waiting for approve when a confirm card is up.
+ */
+function endTurnUi(status, hadError) {
+  talkPending = false;
+  const phase = (status && status.phase) || "";
+  const pending = status && status.pending_tool;
+  if (hadError) {
+    clearThinkingLive();
+    return;
+  }
+  if (phase === "awaiting_approve" || pending) {
+    lastPhase = "awaiting_approve";
+    setLive("Waiting for approve…", false);
+    return;
+  }
+  if (phase === "speaking") {
+    lastPhase = "speaking";
+    setLive("Speaking…", false);
+    return;
+  }
+  // Turn finished (incl. soft-finalize): clear thinking/calling_tools overlay.
+  clearThinkingLive();
+}
+
 function considerStatus(message, detail, phase) {
   const text = message || "";
   if (holding) {
@@ -857,6 +891,12 @@ function considerStatus(message, detail, phase) {
   }
   if (isPhaseToken(text) && phase !== "speaking") {
     lastReplyKey = key;
+    // Stale thinking resurrection: daemon GetStatus after reject used to keep
+    // thinking… with phase cleared. Do not re-stick Thinking when idle.
+    if (!phase && isThinking(text) && !talkPending && !holding) {
+      clearThinkingLive();
+      return;
+    }
     if (!phase) {
       if (text === "listening" || text === "listening…") {
         setLive("Listening…", false);
@@ -1355,8 +1395,9 @@ async function refresh() {
     autoListening = !!snap.auto_listening;
     const message = (snap && snap.message) || "";
     const detail = (snap && snap.detail) || "";
+    const phase = (snap && snap.phase) || "";
     lastStatusMessage = message;
-    considerStatus(message, detail);
+    considerStatus(message, detail, phase);
     applyPending(snap && snap.pending_tool);
     applyContextMeter(snap);
   } catch (_error) {
@@ -1442,6 +1483,13 @@ function endTalk() {
     invoke("hud_talk_stop")
       .then((status) => {
         applyPending(status && status.pending_tool);
+        applyContextMeter({
+          state: (status && status.state) || state,
+          context_used: status && status.context_used,
+          context_limit: status && status.context_limit,
+          context_compact_at: status && status.context_compact_at,
+          context_compacted: !!(status && status.context_compacted),
+        });
         const message = (status && (status.message || status.detail)) || "(no reply text)";
         const detail = (status && status.detail) || "";
         lastReplyKey = message + "\0" + detail;
@@ -1450,23 +1498,26 @@ function endTalk() {
         if (phase) {
           applyPhase(phase, message, detail);
         }
+        // Promise settled: stale thinking/phase tokens must not keep the overlay.
         if (isThinking(message) || isPhaseToken(message)) {
-          if (!phase) {
-            setLive(isThinking(message) ? "Thinking…" : message, false);
-          }
+          endTurnUi(status, false);
           return;
         }
         if (phase === "speaking") {
           setLive("Speaking…", false);
+        } else if (phase === "awaiting_approve") {
+          setLive("Waiting for approve…", false);
         } else {
           setLive("", false);
         }
         pushAssistant(message, detail, false);
+        endTurnUi(status, false);
       })
       .catch((error) => {
         const line = errorText(error, "talk failed");
         setLive(line, true);
         pushAssistant(line, "", true);
+        endTurnUi(null, true);
       })
       .finally(() => {
         talkPending = false;
@@ -1683,11 +1734,10 @@ form.addEventListener("submit", (event) => {
       if (phase) {
         applyPhase(phase, message, detail);
       }
+      // Settled ask: do not keep Thinking from a stale phase-token status
+      // (soft-finalize / reject / multi-tool completion).
       if (isThinking(message) || isPhaseToken(message)) {
-        // Prefer phase live line; never leave bare thinking if we have a real reply elsewhere.
-        if (!phase) {
-          setLive(isThinking(message) ? "Thinking…" : message, false);
-        }
+        endTurnUi(status, false);
         return;
       }
       if (phase === "speaking") {
@@ -1698,11 +1748,13 @@ form.addEventListener("submit", (event) => {
         setLive("", false);
       }
       pushAssistant(message, detail, false);
+      endTurnUi(status, false);
     })
     .catch((error) => {
       const line = errorText(error, "ask failed");
       setLive(line, true);
       pushAssistant(line, "", true);
+      endTurnUi(null, true);
     })
     .finally(() => {
       talkPending = false;

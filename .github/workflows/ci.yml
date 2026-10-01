@@ -45,7 +45,8 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # assert_is_empty is new on stable 1.99; allow until a workspace cleanup PR.
+        run: cargo clippy --workspace --all-targets -- -D warnings -A clippy::assert_is_empty
 
       - name: Test
         # Bound wall clock so a stuck test cannot burn the runner.
