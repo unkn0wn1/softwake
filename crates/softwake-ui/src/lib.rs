@@ -568,6 +568,7 @@ mod tests {
         "allow-ask",
         "allow-hud-snapshot",
         "allow-hud-ask",
+        "allow-hud-cancel-ask",
         "allow-hud-set-mic-mute",
         "allow-hud-talk-start",
         "allow-hud-talk-stop",
