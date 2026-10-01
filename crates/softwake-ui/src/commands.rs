@@ -338,6 +338,23 @@ pub async fn hud_ask(text: String) -> Result<Status, String> {
     .map_err(|error| format!("ask task failed: {error}"))?
 }
 
+/// Abort an in-flight ask / chat stream (Escape or Cancel).
+///
+/// Sets the daemon cancel flag without waiting for the ask lock.
+///
+/// # Errors
+///
+/// Returns the daemon or socket error as text.
+#[tauri::command]
+pub async fn hud_cancel_ask() -> Result<Status, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut client = connect()?;
+        client.call_cancel_ask().map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("cancel ask task failed: {error}"))?
+}
+
 /// Mute or unmute mic listening while keeping typed ask.
 ///
 /// Persists the preference in ui-prefs and tells the daemon via `SetMicMute`.

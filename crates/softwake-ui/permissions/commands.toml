@@ -181,6 +181,11 @@ commands.allow = ["hud_ask"]
 
 
 [[permission]]
+identifier = "allow-hud-cancel-ask"
+description = "Abort an in-flight HUD ask / chat stream."
+commands.allow = ["hud_cancel_ask"]
+
+[[permission]]
 identifier = "allow-hud-set-mic-mute"
 description = "Mute or unmute HUD microphone listening."
 commands.allow = ["hud_set_mic_mute"]

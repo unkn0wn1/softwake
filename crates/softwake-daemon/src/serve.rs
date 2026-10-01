@@ -252,6 +252,8 @@ pub(crate) struct Shared {
     /// runtime lock because `ask` / `talk_stop` is in flight.
     /// Shared with [`Runtime`] so mid-ask reply/phase updates are visible to polls.
     last_status: Arc<Mutex<Option<Status>>>,
+    /// Cooperative ask cancel (`CancelAsk` sets without taking the runtime lock).
+    ask_cancel: Arc<std::sync::atomic::AtomicBool>,
     subscribers: Mutex<Vec<Subscriber>>,
     clients: Mutex<Vec<ClientSlot>>,
     next_subscriber: AtomicU64,
@@ -285,11 +287,13 @@ impl Shared {
         }
         let last_status = Arc::new(Mutex::new(None));
         runtime.attach_status_cache(Arc::clone(&last_status));
+        let ask_cancel = runtime.ask_cancel_handle();
         let mcp_note = crate::mcp_bridge::rediscover();
         eprintln!("softwaked: {mcp_note}");
         Ok(Self {
             runtime: Mutex::new(runtime),
             last_status,
+            ask_cancel,
             subscribers: Mutex::new(Vec::new()),
             clients: Mutex::new(Vec::new()),
             next_subscriber: AtomicU64::new(1),
@@ -406,6 +410,31 @@ fn client_loop(stream: IpcStream, shared: &Shared) {
     let _ = writer_thread.join();
 }
 
+fn cancel_ask_outcome(shared: &Shared) -> crate::runtime::Outcome {
+    Runtime::request_cancel_ask(&shared.ask_cancel);
+    if let Ok(mut runtime) = shared.runtime.try_lock() {
+        runtime.clear_turn_live_for_cancel();
+        return crate::runtime::Outcome {
+            body: softwake_ipc::ResponseBody::ok(runtime.snapshot_for_cancel()),
+            events: Vec::new(),
+        };
+    }
+    // Ask holds the lock; stream will stop and finish_ask_reply clears phase.
+    {
+        let mut guard = lock(&shared.last_status);
+        if let Some(status) = guard.as_mut() {
+            status.detail = Some("cancelling…".to_owned());
+        }
+    }
+    let status = lock(&shared.last_status)
+        .clone()
+        .unwrap_or_else(placeholder_status);
+    crate::runtime::Outcome {
+        body: softwake_ipc::ResponseBody::ok(status),
+        events: Vec::new(),
+    }
+}
+
 fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerReader) -> bool {
     match reader.read() {
         Ok(ClientMessage::Request { id, command }) => {
@@ -474,6 +503,7 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
             let outcome = lock(&shared.runtime).set_mic_mute(muted);
             reply(shared, tx, id, outcome)
         }
+        Ok(ClientMessage::CancelAsk { id }) => reply(shared, tx, id, cancel_ask_outcome(shared)),
         Ok(ClientMessage::ReloadKws { id }) => {
             let outcome = lock(&shared.runtime).reload_kws();
             reply(shared, tx, id, outcome)

@@ -152,6 +152,44 @@ pub trait Transport {
         bearer: &str,
         body: &str,
     ) -> Result<HttpBytes, TransportError>;
+
+    /// POST JSON and invoke `on_event` for each SSE `data:` payload (no `data:` prefix).
+    ///
+    /// `on_event` returns `false` to stop early (cancel). Default falls back to a
+    /// non-stream [`Self::post_json_bearer`] and synthesizes one delta event from
+    /// `choices[0].message.content` so callers work without a live SSE path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError`] when the request cannot complete.
+    fn post_json_bearer_stream(
+        &self,
+        url: &str,
+        bearer: &str,
+        body: &str,
+        on_event: &mut dyn FnMut(&str) -> bool,
+    ) -> Result<(), TransportError> {
+        let response = self.post_json_bearer(url, bearer, body)?;
+        if !(200..300).contains(&response.status) {
+            return Err(TransportError::Failed {
+                message: format!("chat stream HTTP {}", response.status),
+            });
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(&response.body).map_err(|_| TransportError::Failed {
+                message: "chat stream response was not JSON".into(),
+            })?;
+        let content = value
+            .pointer("/choices/0/message/content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let event = serde_json::json!({
+            "choices": [{"delta": {"content": content}}]
+        })
+        .to_string();
+        let _ = on_event(&event);
+        Ok(())
+    }
 }
 
 /// In-memory routes for unit tests. Does not open a socket.
@@ -164,6 +202,8 @@ pub struct MockTransport {
     deletes: HashMap<String, HttpResponse>,
     multiparts: HashMap<String, HttpResponse>,
     byte_posts: HashMap<String, HttpBytes>,
+    /// Scripted SSE `data:` payloads for [`Transport::post_json_bearer_stream`].
+    stream_events: std::cell::RefCell<Vec<String>>,
     /// Last multipart call, for tests that assert request shape.
     last_multipart: std::cell::RefCell<Option<RecordedMultipart>>,
     /// Last binary JSON POST body, for tests that assert TTS JSON.
@@ -252,6 +292,13 @@ impl MockTransport {
     #[must_use]
     pub fn with_post_bytes(mut self, url: impl Into<String>, response: HttpBytes) -> Self {
         self.byte_posts.insert(url.into(), response);
+        self
+    }
+
+    /// Queue SSE `data:` JSON payloads for the next stream POST (FIFO).
+    #[must_use]
+    pub fn with_stream_events(self, events: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        *self.stream_events.borrow_mut() = events.into_iter().map(Into::into).collect();
         self
     }
 
@@ -382,5 +429,49 @@ impl Transport for MockTransport {
                 method: "POST".to_owned(),
                 url: url.to_owned(),
             })
+    }
+
+    fn post_json_bearer_stream(
+        &self,
+        url: &str,
+        bearer: &str,
+        body: &str,
+        on_event: &mut dyn FnMut(&str) -> bool,
+    ) -> Result<(), TransportError> {
+        let queued = self
+            .stream_events
+            .borrow_mut()
+            .drain(..)
+            .collect::<Vec<_>>();
+        if !queued.is_empty() {
+            let _ = (url, bearer, body);
+            for event in queued {
+                if !on_event(&event) {
+                    break;
+                }
+            }
+            return Ok(());
+        }
+        // Fall back to non-stream registered POST (same as trait default).
+        let response = self.post_json_bearer(url, bearer, body)?;
+        if !(200..300).contains(&response.status) {
+            return Err(TransportError::Failed {
+                message: format!("chat stream HTTP {}", response.status),
+            });
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(&response.body).map_err(|_| TransportError::Failed {
+                message: "chat stream response was not JSON".into(),
+            })?;
+        let content = value
+            .pointer("/choices/0/message/content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let event = serde_json::json!({
+            "choices": [{"delta": {"content": content}}]
+        })
+        .to_string();
+        let _ = on_event(&event);
+        Ok(())
     }
 }

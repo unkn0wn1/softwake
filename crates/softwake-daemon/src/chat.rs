@@ -711,6 +711,27 @@ where
     crate::tool_loop::run_tool_loop(&transport, prepared, bearer, system, &chat, tools, invoke)
 }
 
+/// Live tool loop with stream delta + cancel hooks (ADR-0048).
+#[cfg(feature = "live-http")]
+pub(crate) fn finish_prepared_chat_tools_with_hooks<F>(
+    prepared: &PreparedChat,
+    bearer: &str,
+    system: &str,
+    messages: &[SessionMessage],
+    tools: &[serde_json::Value],
+    invoke: F,
+    hooks: crate::tool_loop::ToolLoopHooks<'_>,
+) -> Result<crate::tool_loop::ToolLoopOk, String>
+where
+    F: FnMut(&str, &[String]) -> crate::tool_loop::ToolInvokeResult,
+{
+    let transport = softwake_providers::live::LiveTransport::bounded(CHAT_TIMEOUT);
+    let chat = to_chat_messages(messages);
+    crate::tool_loop::run_tool_loop_with_hooks(
+        &transport, prepared, bearer, system, &chat, tools, invoke, hooks,
+    )
+}
+
 #[cfg(not(feature = "live-http"))]
 pub(crate) fn finish_prepared_chat_tools<F>(
     prepared: &PreparedChat,
@@ -725,6 +746,22 @@ where
 {
     let _ = (prepared, bearer, system, messages, tools);
     Err(LIVE_HTTP_DISABLED.to_owned())
+}
+
+#[cfg(not(feature = "live-http"))]
+pub(crate) fn finish_prepared_chat_tools_with_hooks<F>(
+    prepared: &PreparedChat,
+    bearer: &str,
+    system: &str,
+    messages: &[SessionMessage],
+    tools: &[serde_json::Value],
+    invoke: F,
+    _hooks: crate::tool_loop::ToolLoopHooks<'_>,
+) -> Result<crate::tool_loop::ToolLoopOk, String>
+where
+    F: FnMut(&str, &[String]) -> crate::tool_loop::ToolInvokeResult,
+{
+    finish_prepared_chat_tools(prepared, bearer, system, messages, tools, invoke)
 }
 
 #[cfg(test)]

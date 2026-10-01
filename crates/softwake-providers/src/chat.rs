@@ -131,6 +131,9 @@ pub enum ChatError {
     /// 2xx body was not a JSON string at `choices[0].message.content`.
     #[error("The provider reply could not be read.")]
     Unparseable,
+    /// Operator cancelled mid-stream (partial text may still be usable).
+    #[error("Ask cancelled.")]
+    Cancelled,
 }
 
 /// Operator sentence when the selected provider has no bearer.
@@ -235,6 +238,80 @@ pub fn complete_chat<T: Transport>(
     parse_chat_response(transport.post_json_bearer(&url, bearer, &body.to_string()))
 }
 
+/// Streaming chat completion (`stream: true`). Invokes `on_delta` with the
+/// accumulated text after each content delta. Return `false` from `on_delta`
+/// to stop early (cancel); the partial text is still returned as [`Ok`].
+///
+/// # Errors
+///
+/// [`ChatError`] when the transport fails or no content arrives (unless cancelled
+/// with a non-empty partial). Secrets are never included.
+pub fn complete_chat_stream<T: Transport>(
+    transport: &T,
+    prepared: &PreparedChat,
+    bearer: &str,
+    system: &str,
+    messages: &[ChatMessage],
+    mut on_delta: impl FnMut(&str) -> bool,
+) -> Result<String, ChatError> {
+    let url = format!("{}/chat/completions", prepared.api_base);
+    let mut wire = Vec::with_capacity(messages.len() + 1);
+    wire.push(serde_json::json!({"role": "system", "content": system}));
+    for message in messages {
+        wire.push(serde_json::json!({
+            "role": message.role.as_str(),
+            "content": message.content,
+        }));
+    }
+    let mut body = serde_json::json!({
+        "model": prepared.model,
+        "max_tokens": CHAT_MAX_TOKENS,
+        "messages": wire,
+        "stream": true,
+    });
+    crate::reasoning::insert_reasoning_effort(&mut body, &prepared.reasoning_effort);
+    let mut assembled = String::new();
+    let mut cancelled = false;
+    let result = transport.post_json_bearer_stream(&url, bearer, &body.to_string(), &mut |event| {
+        if let Some(piece) = delta_content_from_sse_data(event) {
+            assembled.push_str(&piece);
+            if !on_delta(&assembled) {
+                cancelled = true;
+                return false;
+            }
+        }
+        true
+    });
+    match result {
+        Ok(()) => {
+            let trimmed = assembled.trim();
+            if trimmed.is_empty() {
+                return Err(ChatError::Empty);
+            }
+            let _ = cancelled;
+            Ok(trimmed.to_owned())
+        }
+        Err(TransportError::Failed { message })
+            if message.contains("401") || message.contains("403") =>
+        {
+            Err(ChatError::Rejected)
+        }
+        Err(TransportError::Failed { .. } | TransportError::NoRoute { .. }) => {
+            Err(ChatError::Unreachable)
+        }
+    }
+}
+
+/// Parse one SSE `data:` JSON object for `choices[0].delta.content`.
+pub(crate) fn delta_content_from_sse_data(data: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(data).ok()?;
+    let content = value.pointer("/choices/0/delta/content")?;
+    match content {
+        Value::String(s) if !s.is_empty() => Some(s.clone()),
+        _ => None,
+    }
+}
+
 /// One short compaction completion over older turns.
 ///
 /// # Errors
@@ -313,7 +390,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        ChatError, ChatMessage, PrepareError, PreparedChat, complete_chat,
+        ChatError, ChatMessage, PrepareError, PreparedChat, complete_chat, complete_chat_stream,
         missing_credential_message, prepare_chat,
     };
     use crate::handle::ProviderHandle;
@@ -614,6 +691,38 @@ mod tests {
             })
             .to_string(),
         }
+    }
+
+    #[test]
+    fn complete_chat_stream_assembles_delta_events() {
+        let url = "https://api.x.ai/v1/chat/completions";
+        let transport = crate::MockTransport::default().with_stream_events([
+            r#"{"choices":[{"delta":{"content":"Hel"}}]}"#,
+            r#"{"choices":[{"delta":{"content":"lo"}}]}"#,
+        ]);
+        let prepared = PreparedChat {
+            provider: ProviderId::XaiKey,
+            family: crate::registry::ProviderFamily::Xai,
+            api_base: "https://api.x.ai/v1".into(),
+            model: "grok-test".into(),
+            reasoning_effort: String::new(),
+        };
+        let mut seen = Vec::new();
+        let reply = complete_chat_stream(
+            &transport,
+            &prepared,
+            "sk-test",
+            "sys",
+            &[ChatMessage::user("hi")],
+            |partial| {
+                seen.push(partial.to_owned());
+                true
+            },
+        )
+        .expect("stream");
+        assert_eq!(reply, "Hello");
+        assert_eq!(seen, vec!["Hel".to_owned(), "Hello".to_owned()]);
+        let _ = url;
     }
 
     #[test]

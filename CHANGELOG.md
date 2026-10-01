@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Chat **token streaming** into the HUD bubble (`phase=streaming`) on text-only / finalize rounds; **CancelAsk** / Escape / Cancel aborts in-flight ask (ADR-0048).
+
 ### Fixed
 
 - HUD thinking/live phase always clears when ask completes, soft-finalizes, errors, rejects, or TTS settles (incl. Softwright multi-tool / last-round soft-finalize); `talkPending` cannot stick.
