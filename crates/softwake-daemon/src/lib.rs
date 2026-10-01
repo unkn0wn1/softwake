@@ -26,6 +26,7 @@ mod ctl;
 mod ctl_disk;
 mod demo;
 mod dispatch;
+mod early_tts;
 mod email_send;
 mod email_tool;
 mod free_speech;
@@ -57,3 +58,14 @@ mod webhook;
 mod e2e;
 
 pub use cli::execute;
+
+/// Daemon binary stamp for Status.build / ops (crate version · git sha · `built_at`).
+#[must_use]
+pub(crate) fn build_stamp() -> String {
+    format!(
+        "{} · {} · {}",
+        env!("SOFTWAKE_DAEMON_VERSION"),
+        env!("SOFTWAKE_DAEMON_GIT_SHA"),
+        env!("SOFTWAKE_DAEMON_BUILT_AT"),
+    )
+}

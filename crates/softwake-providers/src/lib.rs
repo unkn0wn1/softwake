@@ -49,7 +49,7 @@ pub use chat::{
 };
 pub use chat_turn::{
     AssistantToolCall, ChatTurn, WireMessage, WireRole, complete_chat_turn,
-    complete_chat_turn_text_stream, wire_from_chat_messages,
+    complete_chat_turn_stream, complete_chat_turn_text_stream, wire_from_chat_messages,
 };
 pub use constants::{
     OPENAI_API_BASE, OPENAI_CHAT_SEED, OPENAI_COMPATIBLE_CHAT_SEED, OPENAI_VOICE_SEED,

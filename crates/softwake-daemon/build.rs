@@ -1,12 +1,6 @@
 fn main() {
-    tauri_build::build();
-    emit_build_meta("SOFTWAKE_UI");
-}
-
-fn emit_build_meta(prefix: &str) {
     let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into());
-    println!("cargo:rustc-env={prefix}_VERSION={version}");
-
+    println!("cargo:rustc-env=SOFTWAKE_DAEMON_VERSION={version}");
     let sha = std::process::Command::new("git")
         .args(["rev-parse", "--short=7", "HEAD"])
         .output()
@@ -16,18 +10,9 @@ fn emit_build_meta(prefix: &str) {
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "unknown".into());
-    println!("cargo:rustc-env={prefix}_GIT_SHA={sha}");
+    println!("cargo:rustc-env=SOFTWAKE_DAEMON_GIT_SHA={sha}");
     println!("cargo:rerun-if-changed=../../.git/HEAD");
-    println!("cargo:rerun-if-changed=../../.git/refs/heads");
-
-    let built_at = chrono_local_stamp();
-    println!("cargo:rustc-env={prefix}_BUILT_AT={built_at}");
-}
-
-fn chrono_local_stamp() -> String {
-    // Prefer local Bangkok-style stamp without adding chrono dep to build-dependencies.
-    // `date` is available on Linux CI and spencenb.
-    std::process::Command::new("date")
+    let built_at = std::process::Command::new("date")
         .args(["+%Y-%m-%d %H:%M %Z"])
         .output()
         .ok()
@@ -35,5 +20,6 @@ fn chrono_local_stamp() -> String {
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".into())
+        .unwrap_or_else(|| "unknown".into());
+    println!("cargo:rustc-env=SOFTWAKE_DAEMON_BUILT_AT={built_at}");
 }

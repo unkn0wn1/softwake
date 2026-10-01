@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- Chat asks with tools advertised (Soulwright) now **SSE-stream** into the HUD (`phase=streaming`) instead of sitting on Thinking until the full reply; early sentence-boundary TTS cuts dead air before final speak; HUD status poll speeds up to ~150ms during ask/stream.
+- Softwake UI/Settings General and HUD show a **build stamp** (crate version · git sha · built-at); daemon reports `Status.build` for the same check.
+
 ### Added
 
 - Chat **token streaming** into the HUD bubble (`phase=streaming`) on text-only / finalize rounds; **CancelAsk** / Escape / Cancel aborts in-flight ask (ADR-0048).

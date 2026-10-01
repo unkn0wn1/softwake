@@ -175,6 +175,11 @@ description = "Read voice state and a mock listening level for the HUD capsule."
 commands.allow = ["hud_snapshot"]
 
 [[permission]]
+identifier = "allow-app-build-info"
+description = "Allow reading the Softwake UI build stamp"
+commands.allow = ["app_build_info"]
+
+[[permission]]
 identifier = "allow-hud-ask"
 description = "Submit a typed line from the HUD (wake then ask from sleep)."
 commands.allow = ["hud_ask"]

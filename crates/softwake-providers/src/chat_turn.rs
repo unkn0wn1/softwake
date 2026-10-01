@@ -150,22 +150,23 @@ pub fn complete_chat_turn<T: Transport>(
     parse_chat_turn(transport.post_json_bearer(&url, bearer, &body.to_string()))
 }
 
-/// Stream a **text-only** chat turn (`stream: true`, no `tools`).
+/// Stream a chat turn (`stream: true`) with optional `tools` (ADR-0048 / stream-feel).
 ///
-/// Used for the tool-loop finalize round and tool-free asks (ADR-0048).
-/// `on_delta` receives accumulated text; return `false` to cancel early.
+/// Content deltas invoke `on_delta` with accumulated assistant text. Tool-call
+/// fragments are merged by `index`. Return `false` from `on_delta` to cancel.
 ///
 /// # Errors
 ///
-/// [`ChatError`] on transport failure or empty final text.
-pub fn complete_chat_turn_text_stream<T: Transport>(
+/// [`ChatError`] on transport failure, empty Message, or empty `tool_calls`.
+pub fn complete_chat_turn_stream<T: Transport>(
     transport: &T,
     prepared: &PreparedChat,
     bearer: &str,
     system: &str,
     messages: &[WireMessage],
+    tools: &[Value],
     mut on_delta: impl FnMut(&str) -> bool,
-) -> Result<String, ChatError> {
+) -> Result<ChatTurn, ChatError> {
     let url = format!("{}/chat/completions", prepared.api_base);
     let mut wire = Vec::with_capacity(messages.len() + 1);
     wire.push(json!({"role": "system", "content": system}));
@@ -179,8 +180,13 @@ pub fn complete_chat_turn_text_stream<T: Transport>(
         "stream": true,
     });
     crate::reasoning::insert_reasoning_effort(&mut body, &prepared.reasoning_effort);
+    if !tools.is_empty() {
+        body["tools"] = Value::Array(tools.to_vec());
+    }
     let mut assembled = String::new();
+    let mut call_bufs: Vec<StreamToolCallBuf> = Vec::new();
     let result = transport.post_json_bearer_stream(&url, bearer, &body.to_string(), &mut |event| {
+        apply_tool_call_deltas(event, &mut call_bufs);
         if let Some(piece) = crate::chat::delta_content_from_sse_data(event) {
             assembled.push_str(&piece);
             if !on_delta(&assembled) {
@@ -190,18 +196,123 @@ pub fn complete_chat_turn_text_stream<T: Transport>(
         true
     });
     match result {
-        Ok(()) => {
-            let trimmed = assembled.trim();
+        Ok(()) => finish_streamed_turn(&assembled, call_bufs),
+        Err(TransportError::Failed { message })
+            if message.contains("401") || message.contains("403") =>
+        {
+            Err(ChatError::Rejected)
+        }
+        Err(TransportError::Failed { .. } | TransportError::NoRoute { .. }) => {
+            Err(ChatError::Unreachable)
+        }
+    }
+}
+
+/// Stream a **text-only** chat turn (`stream: true`, no `tools`).
+///
+/// Wrapper over [`complete_chat_turn_stream`] for tool-free asks / finalize.
+///
+/// # Errors
+///
+/// [`ChatError`] on transport failure or empty final text.
+pub fn complete_chat_turn_text_stream<T: Transport>(
+    transport: &T,
+    prepared: &PreparedChat,
+    bearer: &str,
+    system: &str,
+    messages: &[WireMessage],
+    on_delta: impl FnMut(&str) -> bool,
+) -> Result<String, ChatError> {
+    match complete_chat_turn_stream(transport, prepared, bearer, system, messages, &[], on_delta)? {
+        ChatTurn::Message(text) => Ok(text),
+        ChatTurn::ToolCalls { content, .. } => {
+            let trimmed = content.unwrap_or_default();
+            let trimmed = trimmed.trim();
             if trimmed.is_empty() {
                 Err(ChatError::Empty)
             } else {
                 Ok(trimmed.to_owned())
             }
         }
-        Err(TransportError::Failed { .. } | TransportError::NoRoute { .. }) => {
-            Err(ChatError::Unreachable)
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct StreamToolCallBuf {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+fn apply_tool_call_deltas(data: &str, bufs: &mut Vec<StreamToolCallBuf>) {
+    let Ok(value) = serde_json::from_str::<Value>(data) else {
+        return;
+    };
+    let Some(calls) = value
+        .pointer("/choices/0/delta/tool_calls")
+        .and_then(Value::as_array)
+    else {
+        return;
+    };
+    for call in calls {
+        let index = call
+            .get("index")
+            .and_then(Value::as_u64)
+            .and_then(|v| usize::try_from(v).ok())
+            .unwrap_or(0);
+        while bufs.len() <= index {
+            bufs.push(StreamToolCallBuf::default());
+        }
+        let slot = &mut bufs[index];
+        if let Some(id) = call.get("id").and_then(Value::as_str) {
+            if !id.is_empty() {
+                id.clone_into(&mut slot.id);
+            }
+        }
+        if let Some(name) = call.pointer("/function/name").and_then(Value::as_str) {
+            if !name.is_empty() {
+                slot.name.push_str(name);
+            }
+        }
+        if let Some(args) = call.pointer("/function/arguments").and_then(Value::as_str) {
+            slot.arguments.push_str(args);
         }
     }
+}
+
+fn finish_streamed_turn(
+    assembled: &str,
+    call_bufs: Vec<StreamToolCallBuf>,
+) -> Result<ChatTurn, ChatError> {
+    let calls: Vec<AssistantToolCall> = call_bufs
+        .into_iter()
+        .filter(|buf| !buf.id.is_empty() && !buf.name.is_empty())
+        .map(|buf| AssistantToolCall {
+            id: buf.id,
+            name: buf.name,
+            arguments: if buf.arguments.is_empty() {
+                "{}".to_owned()
+            } else {
+                buf.arguments
+            },
+        })
+        .collect();
+    if !calls.is_empty() {
+        let content = {
+            let trimmed = assembled.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_owned())
+            }
+        };
+        return Ok(ChatTurn::ToolCalls { content, calls });
+    }
+    let trimmed = assembled.trim();
+    if trimmed.is_empty() {
+        return Err(ChatError::Empty);
+    }
+    Ok(ChatTurn::Message(trimmed.to_owned()))
 }
 
 fn wire_message_json(message: &WireMessage) -> Value {
@@ -325,7 +436,8 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        AssistantToolCall, ChatTurn, WireMessage, complete_chat_turn, wire_from_chat_messages,
+        AssistantToolCall, ChatTurn, WireMessage, complete_chat_turn, complete_chat_turn_stream,
+        wire_from_chat_messages,
     };
     use crate::chat::{ChatMessage, PreparedChat};
     use crate::ids::ProviderId;
@@ -507,5 +619,72 @@ mod tests {
         assert_eq!(wire.len(), 2);
         assert_eq!(wire[0], WireMessage::user("u"));
         assert_eq!(wire[1], WireMessage::assistant("a"));
+    }
+    #[test]
+    fn complete_chat_turn_stream_assembles_text_with_tools_advertised() {
+        let transport = crate::MockTransport::default().with_stream_events([
+            r#"{"choices":[{"delta":{"content":"Hel"}}]}"#,
+            r#"{"choices":[{"delta":{"content":"lo"}}]}"#,
+        ]);
+        let tools = vec![json!({
+            "type": "function",
+            "function": {"name": "echo", "description": "Echo", "parameters": {"type": "object"}}
+        })];
+        let mut seen = Vec::new();
+        let turn = complete_chat_turn_stream(
+            &transport,
+            &PreparedChat {
+                provider: ProviderId::XaiKey,
+                family: ProviderFamily::Xai,
+                api_base: "https://api.x.ai/v1".into(),
+                model: "grok-test".into(),
+                reasoning_effort: String::new(),
+            },
+            "sk-test",
+            "sys",
+            &[WireMessage::user("hi")],
+            &tools,
+            |partial| {
+                seen.push(partial.to_owned());
+                true
+            },
+        )
+        .expect("stream");
+        assert_eq!(turn, ChatTurn::Message("Hello".to_owned()));
+        assert_eq!(seen, vec!["Hel".to_owned(), "Hello".to_owned()]);
+    }
+
+    #[test]
+    fn complete_chat_turn_stream_merges_tool_call_deltas() {
+        let transport = crate::MockTransport::default().with_stream_events([
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"echo","arguments":"{\"t\":"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"hi\"}"}}]}}]}"#,
+        ]);
+        let turn = complete_chat_turn_stream(
+            &transport,
+            &PreparedChat {
+                provider: ProviderId::XaiKey,
+                family: ProviderFamily::Xai,
+                api_base: "https://api.x.ai/v1".into(),
+                model: "grok-test".into(),
+                reasoning_effort: String::new(),
+            },
+            "sk-test",
+            "sys",
+            &[WireMessage::user("hi")],
+            &[],
+            |_| true,
+        )
+        .expect("stream tools");
+        match turn {
+            ChatTurn::ToolCalls { content, calls } => {
+                assert!(content.is_none());
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].id, "call_1");
+                assert_eq!(calls[0].name, "echo");
+                assert_eq!(calls[0].arguments, r#"{"t":"hi"}"#);
+            }
+            ChatTurn::Message(_) => panic!("expected tool calls"),
+        }
     }
 }

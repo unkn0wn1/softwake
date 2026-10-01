@@ -10,8 +10,8 @@
 use serde_json::Value;
 use softwake_providers::ChatMessage;
 use softwake_providers::{
-    AssistantToolCall, ChatTurn, PreparedChat, Transport, WireMessage, complete_chat_turn,
-    complete_chat_turn_text_stream, wire_from_chat_messages,
+    AssistantToolCall, ChatTurn, PreparedChat, Transport, WireMessage, complete_chat_turn_stream,
+    wire_from_chat_messages,
 };
 use softwake_tools::tool_args_from_json;
 
@@ -109,34 +109,25 @@ pub(crate) fn run_tool_loop_with_hooks<T: Transport>(
         let last = round + 1 == MAX_TOOL_ROUNDS;
         // Final round omits tools so the model must emit text (ADR-0047).
         let round_tools: &[Value] = if last { &[] } else { tools };
-        // Text-only rounds stream token deltas (ADR-0048). Tool rounds stay non-stream.
-        if round_tools.is_empty() {
-            if hooks.is_cancelled.as_ref().is_some_and(|f| f()) {
-                return Ok(ToolLoopOk::Message(soft_finalize(&wire, None)));
-            }
-            let text = match complete_chat_turn_text_stream(
-                transport,
-                prepared,
-                bearer,
-                system,
-                &wire,
-                |partial| {
-                    if let Some(cb) = hooks.on_delta.as_mut() {
-                        cb(partial);
-                    }
-                    !hooks.is_cancelled.as_ref().is_some_and(|f| f())
-                },
-            ) {
-                Ok(text) => text,
-                Err(error) if last && matches!(error, softwake_providers::ChatError::Empty) => {
-                    soft_finalize(&wire, None)
-                }
-                Err(error) => return Err(error.to_string()),
-            };
-            return Ok(ToolLoopOk::Message(text));
+        if hooks.is_cancelled.as_ref().is_some_and(|f| f()) {
+            return Ok(ToolLoopOk::Message(soft_finalize(&wire, None)));
         }
-        let turn = match complete_chat_turn(transport, prepared, bearer, system, &wire, round_tools)
-        {
+        // Every round streams (incl. when tools are advertised) so Soulwright
+        // text replies grow the HUD mid-ask (ADR-0048 stream-feel).
+        let turn = match complete_chat_turn_stream(
+            transport,
+            prepared,
+            bearer,
+            system,
+            &wire,
+            round_tools,
+            |partial| {
+                if let Some(cb) = hooks.on_delta.as_mut() {
+                    cb(partial);
+                }
+                !hooks.is_cancelled.as_ref().is_some_and(|f| f())
+            },
+        ) {
             Ok(turn) => turn,
             Err(error) if last && matches!(error, softwake_providers::ChatError::Empty) => {
                 return Ok(ToolLoopOk::Message(soft_finalize(&wire, None)));

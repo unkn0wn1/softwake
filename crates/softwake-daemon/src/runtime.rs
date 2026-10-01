@@ -96,6 +96,8 @@ pub(crate) struct Runtime {
     turn_phase: Option<String>,
     /// Cooperative cancel for in-flight ask/stream (set by `CancelAsk` without lock).
     ask_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Char offset already handed to early TTS for the in-flight ask (ADR-0048 stream-feel).
+    ask_tts_spoken: usize,
     /// Shared with serve `last_status` so polls see reply/phase mid-ask (before TTS returns).
     status_cache: Option<std::sync::Arc<std::sync::Mutex<Option<Status>>>>,
     /// State-announcement prompts recorded in tests. Production speaks them off-thread.
@@ -198,6 +200,7 @@ impl Runtime {
             user_mic_muted: false,
             turn_phase: None,
             ask_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            ask_tts_spoken: 0,
             status_cache: None,
             #[cfg(test)]
             announced_prompts: Vec::new(),
@@ -1312,8 +1315,18 @@ impl Runtime {
         };
         let (system, context) = prepared_ask;
         let messages = self.session.messages().to_vec();
+        self.ask_tts_spoken = 0;
+        self.ask_cancel
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        // Leave Thinking ASAP — HUD polls see Writing… before the first token.
+        self.set_turn_phase(Some("streaming"));
+        self.publish_live(Some("…".to_owned()), Some("streaming".to_owned()));
         let cancel = std::sync::Arc::clone(&self.ask_cancel);
         let status_cache = self.status_cache.clone();
+        let spoken_chars = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let spoken_for_delta = std::sync::Arc::clone(&spoken_chars);
+        let profile_for_tts = self.soul.profile_log_token();
+        let verbosity_for_tts = self.verbosity;
         let loop_ok = {
             // Update the shared status cache only (no &mut self) so invoke can
             // still borrow the runtime for tool calls while tokens stream.
@@ -1325,6 +1338,23 @@ impl Runtime {
                             status.detail = Some("streaming".to_owned());
                             status.phase = Some("streaming".to_owned());
                         }
+                    }
+                }
+                let already = spoken_for_delta.load(std::sync::atomic::Ordering::SeqCst);
+                let (next, chunk) = crate::early_tts::take_new_speech(partial, already);
+                if let Some(line) = chunk {
+                    spoken_for_delta.store(next, std::sync::atomic::Ordering::SeqCst);
+                    #[cfg(not(test))]
+                    {
+                        crate::announce::spawn_fixed_line(
+                            line,
+                            profile_for_tts.clone(),
+                            verbosity_for_tts,
+                        );
+                    }
+                    #[cfg(test)]
+                    {
+                        let _ = (line, &profile_for_tts, verbosity_for_tts);
                     }
                 }
             };
@@ -1342,6 +1372,7 @@ impl Runtime {
                 },
             )
         };
+        self.ask_tts_spoken = spoken_chars.load(std::sync::atomic::Ordering::SeqCst);
         self.finish_tool_loop_ask(loop_ok, context)
     }
 
@@ -1426,8 +1457,17 @@ impl Runtime {
         self.publish_live(Some(reply.clone()), Some("speaking".to_owned()));
         crate::telegram::fanout_ask_reply(&profile_id, &reply);
         if crate::telegram::desktop_wants_ask_voice(&profile_id) {
-            self.speak_if_configured(&reply);
+            let spoken = self.ask_tts_spoken;
+            self.ask_tts_spoken = 0;
+            let rest = crate::early_tts::slice_chars(&reply, spoken, reply.chars().count());
+            let rest = rest.trim();
+            if rest.is_empty() {
+                self.last_speech_note = None;
+            } else {
+                self.speak_if_configured(rest);
+            }
         } else {
+            self.ask_tts_spoken = 0;
             self.last_speech_note = None;
         }
         let mut detail = self.last_speech_note.clone();
@@ -2422,6 +2462,7 @@ impl Runtime {
             voice_test: self.voice_test,
             mic_muted: self.user_mic_muted,
             phase: self.turn_phase.clone(),
+            build: Some(crate::build_stamp()),
         }
     }
 
