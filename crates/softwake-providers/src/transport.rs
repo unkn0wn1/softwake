@@ -179,17 +179,74 @@ pub trait Transport {
             serde_json::from_str(&response.body).map_err(|_| TransportError::Failed {
                 message: "chat stream response was not JSON".into(),
             })?;
-        let content = value
-            .pointer("/choices/0/message/content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let event = serde_json::json!({
-            "choices": [{"delta": {"content": content}}]
-        })
-        .to_string();
-        let _ = on_event(&event);
+        // Synthesize SSE deltas from a non-stream message so unit mocks work
+        // for both plain text and tool_calls (stream-feel / ADR-0048).
+        for event in synthesize_sse_from_message(&value) {
+            if !on_event(&event) {
+                break;
+            }
+        }
         Ok(())
     }
+}
+
+/// Build SSE `data:` JSON objects from a full chat `message` (test/fallback).
+fn synthesize_sse_from_message(value: &serde_json::Value) -> Vec<String> {
+    let mut events = Vec::new();
+    let message = value.pointer("/choices/0/message");
+    let content = message
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("");
+    if !content.is_empty() {
+        events.push(
+            serde_json::json!({
+                "choices": [{"delta": {"content": content}}]
+            })
+            .to_string(),
+        );
+    }
+    if let Some(calls) = message
+        .and_then(|m| m.get("tool_calls"))
+        .and_then(|c| c.as_array())
+    {
+        for (index, call) in calls.iter().enumerate() {
+            let id = call.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let name = call
+                .pointer("/function/name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let arguments = match call.pointer("/function/arguments") {
+                Some(serde_json::Value::String(s)) => s.clone(),
+                Some(other) => other.to_string(),
+                None => String::new(),
+            };
+            events.push(
+                serde_json::json!({
+                    "choices": [{
+                        "delta": {
+                            "tool_calls": [{
+                                "index": index,
+                                "id": id,
+                                "type": "function",
+                                "function": {"name": name, "arguments": arguments}
+                            }]
+                        }
+                    }]
+                })
+                .to_string(),
+            );
+        }
+    }
+    if events.is_empty() {
+        events.push(
+            serde_json::json!({
+                "choices": [{"delta": {"content": ""}}]
+            })
+            .to_string(),
+        );
+    }
+    events
 }
 
 /// In-memory routes for unit tests. Does not open a socket.
@@ -463,15 +520,13 @@ impl Transport for MockTransport {
             serde_json::from_str(&response.body).map_err(|_| TransportError::Failed {
                 message: "chat stream response was not JSON".into(),
             })?;
-        let content = value
-            .pointer("/choices/0/message/content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let event = serde_json::json!({
-            "choices": [{"delta": {"content": content}}]
-        })
-        .to_string();
-        let _ = on_event(&event);
+        // Synthesize SSE deltas from a non-stream message so unit mocks work
+        // for both plain text and tool_calls (stream-feel / ADR-0048).
+        for event in synthesize_sse_from_message(&value) {
+            if !on_event(&event) {
+                break;
+            }
+        }
         Ok(())
     }
 }

@@ -613,3 +613,9 @@ button.btn-primary.btn-compact {
   margin: 0 0 0.35rem;
   font-size: 0.95rem;
 }
+
+.build-stamp {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  opacity: 0.85;
+}

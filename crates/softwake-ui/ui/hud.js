@@ -1999,6 +1999,47 @@ async function maybeReloadChatFromDisk() {
   }
 }
 
-window.setInterval(refresh, 900);
+// Adaptive status poll: 150ms while ask/stream pending so token deltas paint ASAP.
+let statusPollMs = 900;
+function armStatusPoll(ms) {
+  if (ms === statusPollMs && statusPollTimer) {
+    return;
+  }
+  statusPollMs = ms;
+  if (statusPollTimer) {
+    window.clearInterval(statusPollTimer);
+  }
+  statusPollTimer = window.setInterval(() => {
+    void refresh();
+    armStatusPoll(talkPending || streamingTurn ? 150 : 900);
+  }, statusPollMs);
+}
+let statusPollTimer = null;
+armStatusPoll(900);
 window.setInterval(() => { void maybeReloadChatFromDisk(); }, 2500);
 raf = requestAnimationFrame(tick);
+
+async function refreshHudBuild() {
+  const el = document.querySelector("#hud-build");
+  if (!el) {
+    return;
+  }
+  try {
+    const info = await invoke("app_build_info");
+    let label = "ui " + (info.label || info.version || "");
+    try {
+      const snap = await invoke("hud_snapshot");
+      if (snap && snap.build) {
+        label += " · d " + snap.build;
+      }
+    } catch (_e) {
+      // ignore
+    }
+    el.textContent = label;
+    el.title = label;
+    el.hidden = false;
+  } catch (_error) {
+    el.hidden = true;
+  }
+}
+void refreshHudBuild();

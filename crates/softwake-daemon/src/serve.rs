@@ -591,6 +591,7 @@ fn publish_thinking(shared: &Shared, detail: &str) {
             voice_test: false,
             mic_muted: false,
             phase: Some("thinking".to_owned()),
+            build: None,
         });
     }
 }
@@ -643,6 +644,7 @@ fn placeholder_status() -> Status {
         voice_test: false,
         mic_muted: false,
         phase: None,
+        build: None,
     }
 }
 

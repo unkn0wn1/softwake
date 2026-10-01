@@ -697,3 +697,18 @@ body {
   flex: 0 0 auto;
   margin-right: 6px;
 }
+
+.hud-build {
+  margin: 0;
+  padding: 0 10px 6px;
+  font-size: 10px;
+  line-height: 1.2;
+  opacity: 0.55;
+  letter-spacing: 0.02em;
+  user-select: text;
+  cursor: default;
+}
+
+.capsule:not(.expanded) .hud-build {
+  display: none;
+}

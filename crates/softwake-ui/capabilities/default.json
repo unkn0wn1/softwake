@@ -18,6 +18,7 @@
     "allow-wake",
     "allow-ask",
     "allow-hud-snapshot",
+    "allow-app-build-info",
     "allow-hud-ask",
     "allow-hud-cancel-ask",
     "allow-hud-set-mic-mute",

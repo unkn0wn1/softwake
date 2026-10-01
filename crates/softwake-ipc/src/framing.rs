@@ -217,6 +217,7 @@ mod tests {
                     voice_test: false,
                     mic_muted: false,
                     phase: None,
+                    build: None,
                 }),
             }),
             line(&ServerMessage::Event {

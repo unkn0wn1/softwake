@@ -1097,6 +1097,7 @@ mod tests {
                         voice_test: false,
                         mic_muted: false,
                         phase: None,
+                        build: None,
                     }),
                 })
                 .expect("response");

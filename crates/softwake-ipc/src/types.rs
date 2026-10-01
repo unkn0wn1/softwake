@@ -423,6 +423,9 @@ pub struct Status {
     /// Additive on protocol generation 1. Absent when idle. Reply text stays on `message`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
+    /// Daemon build stamp (`0.1.0 · abc1234 · built_at`). Additive; absent on older daemons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
 }
 
 #[allow(
@@ -812,6 +815,7 @@ mod tests {
             voice_test: false,
             mic_muted: false,
             phase: None,
+            build: None,
         }
     }
 
@@ -1134,6 +1138,7 @@ mod tests {
             voice_test: false,
             mic_muted: false,
             phase: None,
+            build: None,
         };
         assert_round_trip(&with_pending);
         let pending_json = serde_json::to_string(&with_pending).expect("encode");
@@ -1189,6 +1194,7 @@ mod tests {
             voice_test: false,
             mic_muted: false,
             phase: None,
+            build: None,
         };
         assert_round_trip(&with_level);
         let json = serde_json::to_string(&with_level).expect("encode");
@@ -1213,6 +1219,7 @@ mod tests {
             voice_test: false,
             mic_muted: false,
             phase: None,
+            build: None,
         };
         let json = serde_json::to_string(&without).expect("encode");
         assert!(!json.contains("capture_level"));
@@ -1244,6 +1251,7 @@ mod tests {
             voice_test: false,
             mic_muted: false,
             phase: None,
+            build: None,
         };
         assert_round_trip(&missing);
 
@@ -1269,6 +1277,7 @@ mod tests {
             voice_test: false,
             mic_muted: false,
             phase: None,
+            build: None,
         };
         let json = serde_json::to_string(&ok).expect("encode");
         assert!(json.contains("\"soul\":{\"ok\":true}"));

@@ -20,3 +20,22 @@ Ask/chat used a single non-stream POST. The HUD only saw the final reply after c
 - PROTOCOL_VERSION stays 1 (additive message).
 - Long streams still share the chat HTTP timeout budget.
 - Mic mute alone does not abort; CancelAsk / Escape / Cancel button does.
+
+## Amendment — stream-feel (post slice 1)
+
+Soulwright (and any profile with non-deny tools) always advertises tools, so slice-1’s
+“stream only when `tools` is empty” meant almost every ask stayed on the non-stream
+`complete_chat_turn` path. HUD sat on Thinking until the full reply, then Speaking → TTS
+(dead air). Spencer’s “restarted UI only” still ran the #105 binary; the gap was the path.
+
+Follow-up decisions:
+
+1. **Stream every tool-loop round** via `complete_chat_turn_stream` (optional `tools` + SSE
+   content and `tool_calls` fragment merge). Plain Message replies with tools advertised
+   now grow the HUD mid-ask (`phase=streaming`).
+2. **Publish `streaming` before the first token** so Writing… replaces Thinking ASAP.
+3. **Early TTS** at sentence boundaries during deltas (non-blocking `spawn_fixed_line`);
+   final speak does the remainder only.
+4. **HUD polls ~150ms while ask/stream pending** (900ms idle).
+5. **Visible build stamp** — UI `app_build_info` + Settings General / HUD chrome; daemon
+   `Status.build` (`version · gitsha · built_at`).

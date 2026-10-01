@@ -2637,3 +2637,28 @@ if (chatLockKeyring) {
 }
 
 void refreshChatLock();
+
+async function refreshAppBuild() {
+  const el = document.querySelector("#app-build");
+  if (!el) {
+    return;
+  }
+  try {
+    const info = await invoke("app_build_info");
+    let line = "UI " + (info.label || info.version);
+    try {
+      const st = await invoke("status");
+      if (st && st.build) {
+        line += " · daemon " + st.build;
+      }
+    } catch (_daemonErr) {
+      // daemon optional for UI stamp
+    }
+    el.textContent = "Build: " + line;
+    el.title = line;
+  } catch (error) {
+    el.textContent = "Build: (unavailable)";
+  }
+}
+
+void refreshAppBuild();

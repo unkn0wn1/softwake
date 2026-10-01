@@ -182,6 +182,9 @@ pub struct HudSnapshot {
     /// Turn phase wire value (`listening` / `thinking` / `calling_tools` / `speaking` / `awaiting_approve`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
+    /// Daemon build stamp when the daemon reports one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
     /// Confirm-gated tool waiting for Approve or Deny. Omitted when nothing is waiting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_tool: Option<softwake_ipc::PendingTool>,
@@ -196,6 +199,34 @@ pub struct HudSnapshot {
     pub context_compact_at: Option<u8>,
     /// True when the latest ask compacted older turns.
     pub context_compacted: bool,
+}
+
+/// UI (+ optional daemon) build stamp for Settings / HUD chrome.
+#[derive(Debug, Clone, Serialize)]
+pub struct AppBuildInfo {
+    /// Crate version (`CARGO_PKG_VERSION`).
+    pub version: String,
+    /// Short git sha baked at compile time.
+    pub git_sha: String,
+    /// Local build timestamp string.
+    pub built_at: String,
+    /// One-line label: `0.1.0 · abc1234 · stamp`.
+    pub label: String,
+}
+
+/// Softwake UI build stamp (always available; no daemon required).
+#[tauri::command]
+pub fn app_build_info() -> AppBuildInfo {
+    let version = env!("SOFTWAKE_UI_VERSION").to_owned();
+    let git_sha = env!("SOFTWAKE_UI_GIT_SHA").to_owned();
+    let built_at = env!("SOFTWAKE_UI_BUILT_AT").to_owned();
+    let label = format!("{version} · {git_sha} · {built_at}");
+    AppBuildInfo {
+        version,
+        git_sha,
+        built_at,
+        label,
+    }
 }
 
 /// Status plus a listening level for the HUD capsule.
@@ -225,6 +256,7 @@ pub async fn hud_snapshot() -> Result<HudSnapshot, String> {
             auto_listening: status.auto_listening,
             mic_muted: status.mic_muted,
             phase: status.phase.clone(),
+            build: status.build.clone(),
             pending_tool: status.pending_tool,
             context_used: status.context_used,
             context_limit: status.context_limit,
