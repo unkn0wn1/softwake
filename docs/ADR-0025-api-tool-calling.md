@@ -19,7 +19,9 @@ enabled tools when it needs real results.
    whose Tools Settings permission is not **Deny**.
 3. `complete_chat_turn` may return assistant text or `tool_calls`. The daemon
    runs a multi-turn loop: tool_calls → `Hands::request` → tool role results →
-   continue, capped at six rounds.
+   continue, capped at six rounds. The **final** round omits `tools` so the
+   model must reply in text; if it still does not, Softwake soft-finalizes with
+   best-effort wire content ([ADR-0047](ADR-0047-tool-loop-finalize.md)).
 4. **Always allow** runs immediately (glossary expand still on shell spawn).
    **Ask** stages HUD confirm and stops the loop with a pending sentence.
    **Deny** is omitted from `tools`.

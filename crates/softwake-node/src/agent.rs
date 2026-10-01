@@ -20,6 +20,7 @@ use crate::state::NodeState;
 use crate::telegram;
 
 /// Max assistant→tools→continue rounds (matches daemon `MAX_TOOL_ROUNDS`).
+/// Final round omits tools and soft-finalizes (ADR-0047).
 pub const MAX_TOOL_ROUNDS: usize = 6;
 
 const DEFAULT_MODEL: &str = "grok-4-fast-non-reasoning";
@@ -77,11 +78,16 @@ pub fn run_agent_turn(
     let tools = advertise_chat_tools(&tools_settings);
     let mut messages: Vec<Value> = vec![json!({"role": "user", "content": user_text})];
 
-    for _round in 0..MAX_TOOL_ROUNDS {
-        let turn = chat_turn(&api_key, &system, &messages, &tools)?;
+    for round in 0..MAX_TOOL_ROUNDS {
+        let last = round + 1 == MAX_TOOL_ROUNDS;
+        let round_tools: &[Value] = if last { &[] } else { &tools };
+        let turn = chat_turn(&api_key, &system, &messages, round_tools)?;
         match turn {
             Turn::Message(text) => return Ok(text),
             Turn::ToolCalls { content, calls } => {
+                if last {
+                    return Ok(soft_finalize_messages(&messages, content.as_deref()));
+                }
                 messages.push(json!({
                     "role": "assistant",
                     "content": content,
@@ -125,9 +131,57 @@ pub fn run_agent_turn(
             }
         }
     }
-    Err(format!(
-        "tool loop reached the {MAX_TOOL_ROUNDS}-round cap without a final reply"
-    ))
+    Ok(soft_finalize_messages(&messages, None))
+}
+
+/// Best-effort companion reply when the last round has no clean Message (ADR-0047).
+fn soft_finalize_messages(messages: &[Value], last_content: Option<&str>) -> String {
+    if let Some(text) = last_content.map(str::trim).filter(|s| !s.is_empty()) {
+        return text.to_owned();
+    }
+    for message in messages.iter().rev() {
+        if message.get("role").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        if let Some(text) = message
+            .get("content")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return text.to_owned();
+        }
+    }
+    let mut snippets = Vec::new();
+    for message in messages.iter().rev() {
+        if message.get("role").and_then(Value::as_str) != Some("tool") {
+            continue;
+        }
+        if let Some(text) = message
+            .get("content")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let clipped: String = text.chars().take(240).collect();
+            snippets.push(clipped);
+            if snippets.len() >= 3 {
+                break;
+            }
+        }
+    }
+    snippets.reverse();
+    if snippets.is_empty() {
+        return "Tool budget reached before a final reply.".to_owned();
+    }
+    format!(
+        "Tool budget reached before a full reply. From tool results:
+{}",
+        snippets.join(
+            "
+"
+        )
+    )
 }
 
 struct ToolCall {
