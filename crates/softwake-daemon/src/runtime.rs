@@ -2473,16 +2473,13 @@ impl Runtime {
         self.turn_phase = phase.map(str::to_owned);
     }
 
-    /// Drop live turn phase and a stuck `thinking…` placeholder so GetStatus
+    /// Drop live turn phase and a stuck `thinking…` placeholder so `GetStatus`
     /// cannot resurrect Thinking after reject / short-circuit / sleep.
     fn clear_turn_live(&mut self) {
         self.turn_phase = None;
-        match self.last_status_message.as_deref() {
-            Some("thinking…") | Some("thinking...") => {
-                self.last_status_message = None;
-                self.last_status_detail = None;
-            }
-            _ => {}
+        if let Some("thinking…" | "thinking...") = self.last_status_message.as_deref() {
+            self.last_status_message = None;
+            self.last_status_detail = None;
         }
     }
 
@@ -4372,10 +4369,7 @@ mod tests {
         let status = polled.body.status().expect("status");
         assert_eq!(status.phase, None, "stuck phase={:?}", status.phase);
         assert!(
-            !matches!(
-                status.message.as_deref(),
-                Some("thinking…") | Some("thinking...")
-            ),
+            !matches!(status.message.as_deref(), Some("thinking…" | "thinking...")),
             "stuck thinking message={:?}",
             status.message
         );
