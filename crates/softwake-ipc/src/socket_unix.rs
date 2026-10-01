@@ -481,6 +481,7 @@ impl ServerConnection {
             | ClientMessage::TalkStop { .. }
             | ClientMessage::SetVoiceTest { .. }
             | ClientMessage::SetMicMute { .. }
+            | ClientMessage::CancelAsk { .. }
             | ClientMessage::ReloadKws { .. }
             | ClientMessage::ReloadUtterance { .. }
             | ClientMessage::ReloadPlayback { .. }
@@ -771,6 +772,16 @@ impl Client {
     pub fn set_mic_mute(&mut self, muted: bool) -> Result<Status, CallError> {
         let id = self.allocate_id();
         self.round_trip(&ClientMessage::SetMicMute { id, muted }, id)
+    }
+
+    /// Ask the daemon to abort an in-flight ask/stream (ADR-0048).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] when the daemon is unreachable or rejects.
+    pub fn call_cancel_ask(&mut self) -> Result<Status, CallError> {
+        let id = self.allocate_id();
+        self.round_trip(&ClientMessage::CancelAsk { id }, id)
     }
 
     /// Rebuild the KWS detector from current `softwake.json` / env thresholds.

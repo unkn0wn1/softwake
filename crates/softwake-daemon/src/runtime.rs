@@ -94,6 +94,8 @@ pub(crate) struct Runtime {
     user_mic_muted: bool,
     /// Live turn phase for HUD (`listening`, `thinking`, …).
     turn_phase: Option<String>,
+    /// Cooperative cancel for in-flight ask/stream (set by `CancelAsk` without lock).
+    ask_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Shared with serve `last_status` so polls see reply/phase mid-ask (before TTS returns).
     status_cache: Option<std::sync::Arc<std::sync::Mutex<Option<Status>>>>,
     /// State-announcement prompts recorded in tests. Production speaks them off-thread.
@@ -195,6 +197,7 @@ impl Runtime {
             voice_test: false,
             user_mic_muted: false,
             turn_phase: None,
+            ask_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             status_cache: None,
             #[cfg(test)]
             announced_prompts: Vec::new(),
@@ -408,6 +411,8 @@ impl Runtime {
         if self.session.phase() != SessionPhase::Open {
             return self.chat_rejected("session is closed");
         }
+        self.ask_cancel
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         self.set_turn_phase(Some("thinking"));
         self.publish_live(Some("thinking…".to_owned()), Some("thinking".to_owned()));
         if let Some(outcome) = self.try_shell_ask(text) {
@@ -1307,14 +1312,34 @@ impl Runtime {
         };
         let (system, context) = prepared_ask;
         let messages = self.session.messages().to_vec();
+        let cancel = std::sync::Arc::clone(&self.ask_cancel);
+        let status_cache = self.status_cache.clone();
         let loop_ok = {
-            crate::chat::finish_prepared_chat_tools(
+            // Update the shared status cache only (no &mut self) so invoke can
+            // still borrow the runtime for tool calls while tokens stream.
+            let mut on_delta = move |partial: &str| {
+                if let Some(cache) = &status_cache {
+                    if let Ok(mut guard) = cache.lock() {
+                        if let Some(status) = guard.as_mut() {
+                            status.message = Some(partial.to_owned());
+                            status.detail = Some("streaming".to_owned());
+                            status.phase = Some("streaming".to_owned());
+                        }
+                    }
+                }
+            };
+            let is_cancelled = move || cancel.load(std::sync::atomic::Ordering::SeqCst);
+            crate::chat::finish_prepared_chat_tools_with_hooks(
                 &call,
                 &bearer,
                 &system,
                 &messages,
                 &tools,
                 |name, args| self.invoke_for_chat(name, args),
+                crate::tool_loop::ToolLoopHooks {
+                    on_delta: Some(&mut on_delta),
+                    is_cancelled: Some(&is_cancelled),
+                },
             )
         };
         self.finish_tool_loop_ask(loop_ok, context)
@@ -2467,6 +2492,31 @@ impl Runtime {
         cache: std::sync::Arc<std::sync::Mutex<Option<Status>>>,
     ) {
         self.status_cache = Some(cache);
+    }
+
+    /// Share the cooperative ask-cancel flag with serve (`CancelAsk` sets it without the runtime lock).
+    pub(crate) fn ask_cancel_handle(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        std::sync::Arc::clone(&self.ask_cancel)
+    }
+
+    /// Soft-cancel the in-flight ask/stream. Safe to call while ask holds the runtime lock.
+    pub(crate) fn request_cancel_ask(flag: &std::sync::atomic::AtomicBool) {
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Clear turn phase after `CancelAsk` when the runtime lock is free.
+    pub(crate) fn clear_turn_live_for_cancel(&mut self) {
+        self.clear_turn_live();
+        self.ask_cancel
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Status snapshot for a `CancelAsk` reply when the lock was free.
+    pub(crate) fn snapshot_for_cancel(&self) -> Status {
+        self.snapshot(
+            self.last_status_message.clone(),
+            Some("cancelled".to_owned()),
+        )
     }
 
     fn set_turn_phase(&mut self, phase: Option<&str>) {

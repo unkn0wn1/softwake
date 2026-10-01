@@ -692,3 +692,8 @@ body {
   margin: 0.15rem 0.4rem 0 0;
   accent-color: #7ab0ff;
 }
+
+#ask-cancel {
+  flex: 0 0 auto;
+  margin-right: 6px;
+}

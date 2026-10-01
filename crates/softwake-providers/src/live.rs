@@ -125,6 +125,16 @@ impl Transport for LiveTransport {
         read_bytes(response)
     }
 
+    fn post_json_bearer_stream(
+        &self,
+        url: &str,
+        bearer: &str,
+        body: &str,
+        on_event: &mut dyn FnMut(&str) -> bool,
+    ) -> Result<(), TransportError> {
+        stream_json_bearer(self, url, bearer, body, on_event)
+    }
+
     fn get_bearer_with_headers(
         &self,
         url: &str,
@@ -257,7 +267,55 @@ fn safe_ureq_message(error: &ureq::Error) -> String {
     }
 }
 
-#[cfg(test)]
+fn stream_json_bearer(
+    transport: &LiveTransport,
+    url: &str,
+    bearer: &str,
+    body: &str,
+    on_event: &mut dyn FnMut(&str) -> bool,
+) -> Result<(), TransportError> {
+    use std::io::{BufRead, BufReader};
+
+    let response = take_response(
+        transport
+            .agent
+            .post(url)
+            .set("Authorization", &format!("Bearer {bearer}"))
+            .set("Content-Type", "application/json")
+            .set("Accept", "text/event-stream")
+            .send_string(body),
+    )?;
+    let status = response.status();
+    if !(200..300).contains(&status) {
+        // Drain body for diagnostics without including it in the operator sentence.
+        let _ = response.into_string();
+        return Err(TransportError::Failed {
+            message: format!("chat stream HTTP {status}"),
+        });
+    }
+    let reader = BufReader::new(response.into_reader());
+    for line in reader.lines() {
+        let line = line.map_err(|error| TransportError::Failed {
+            message: format!("chat stream read: {error}"),
+        })?;
+        let trimmed = line.trim_end();
+        let Some(data) = trimmed.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim_start();
+        if data.is_empty() {
+            continue;
+        }
+        if data == "[DONE]" {
+            break;
+        }
+        if !on_event(data) {
+            break;
+        }
+    }
+    Ok(())
+}
+
 mod tests {
     //! Live tests are ignored so default CI stays offline.
 

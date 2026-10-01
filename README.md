@@ -633,3 +633,4 @@ cargo test -p softwake-daemon --features pipewire-capture
 | [docs/ADR-0024-timers-cron.md](docs/ADR-0024-timers-cron.md) | Per-profile timers / cron; confirm-gated `schedule`; Settings → Timers (see also ADR-0036 agent tasks) |
 | [docs/ADR-0029-messengers-telegram.md](docs/ADR-0029-messengers-telegram.md) | Expandable Settings nav; Messengers + Telegram; shared HUD history; dual-login TTS |
 | [docs/ADR-0047-tool-loop-finalize.md](docs/ADR-0047-tool-loop-finalize.md) | Tool-loop last-round omit tools + soft-finalize (no silent 6-cap) |
+| [docs/ADR-0048-chat-stream-barge.md](docs/ADR-0048-chat-stream-barge.md) | Chat SSE token streaming + CancelAsk barge-in |

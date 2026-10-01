@@ -5,6 +5,7 @@ const strip = document.querySelector("#strip");
 const logEl = document.querySelector("#log");
 const liveEl = document.querySelector("#live");
 const form = document.querySelector("#ask-form");
+const cancelBtn = document.querySelector("#ask-cancel");
 const input = document.querySelector("#ask-input");
 const talkBtn = document.querySelector("#talk");
 const pendingCard = document.querySelector("#hud-pending");
@@ -59,6 +60,7 @@ let pointerOver = false;
 let raf = 0;
 let holding = false;
 let talkPending = false;
+let streamingTurn = false;
 let autoListening = false;
 let lastReplyKey = "";
 let refreshInFlight = false;
@@ -787,7 +789,33 @@ function pushAssistant(text, detail, isError) {
   });
 }
 
+function pushOrUpdateStreaming(text) {
+  const clean = (text || "").trim();
+  if (!clean) {
+    return;
+  }
+  streamingTurn = true;
+  setExpanded(true);
+  // Update the last assistant bubble in-place while tokens arrive.
+  if (turns.length && turns[turns.length - 1].role === "assistant" && turns[turns.length - 1].streaming) {
+    turns[turns.length - 1].text = clean;
+    turns[turns.length - 1].ts = Date.now();
+    renderLog();
+    return;
+  }
+  pushTurn({
+    role: "assistant",
+    name: profileName || "Softwake",
+    text: clean,
+    ts: Date.now(),
+    error: false,
+    note: "",
+    streaming: true,
+  });
+}
+
 function isThinking(message) {
+
   return message === "thinking…" || message === "thinking...";
 }
 
@@ -805,6 +833,8 @@ function phaseLabel(phase, detail) {
         : "Calling tools…";
     case "speaking":
       return "Speaking…";
+    case "streaming":
+      return "Writing…";
     case "awaiting_approve":
       return "Waiting for approve…";
     default:
@@ -852,8 +882,20 @@ function clearThinkingLive() {
  * Ask/talk promise settled: never leave talkPending or Thinking stuck.
  * Keep Waiting for approve when a confirm card is up.
  */
+function syncCancelBtn() {
+  if (!cancelBtn) {
+    return;
+  }
+  cancelBtn.hidden = !(talkPending || streamingTurn);
+}
+
 function endTurnUi(status, hadError) {
+
   talkPending = false;
+  streamingTurn = false;
+  if (turns.length && turns[turns.length - 1].streaming) {
+    turns[turns.length - 1].streaming = false;
+  }
   const phase = (status && status.phase) || "";
   const pending = status && status.pending_tool;
   if (hadError) {
@@ -883,6 +925,16 @@ function considerStatus(message, detail, phase) {
     applyPhase(phase, text, detail);
   }
   if (!text) {
+    return;
+  }
+  // Mid-ask token deltas: grow the assistant bubble without waiting for settle.
+  if ((phase === "streaming" || phase === "thinking") && !isThinking(text) && !isPhaseToken(text)) {
+    lastReplyKey = text + "\0" + (detail || "") + "\0" + (phase || "");
+    lastStatusMessage = text;
+    pushOrUpdateStreaming(text);
+    if (phase === "streaming") {
+      setLive("Writing…", false);
+    }
     return;
   }
   const key = text + "\0" + (detail || "") + "\0" + (phase || "");
@@ -1475,6 +1527,7 @@ function endTalk() {
     return;
   }
   talkPending = true;
+  syncCancelBtn();
   paintReleasedMic("thinking…");
   markActivity();
   // Fire-and-forget: never await STT/ask/TTS on the HUD event loop. Bloom rAF
@@ -1703,6 +1756,47 @@ input.addEventListener("keydown", (event) => {
   }
 });
 
+if (cancelBtn) {
+  cancelBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    cancelAsk();
+  });
+}
+
+function cancelAsk() {
+  if (!talkPending && !streamingTurn) {
+    return;
+  }
+  invoke("hud_cancel_ask")
+    .then((status) => {
+      applyPending(status && status.pending_tool);
+      const message = (status && (status.message || status.detail)) || "";
+      if (message && !isThinking(message) && !isPhaseToken(message)) {
+        pushOrUpdateStreaming(message);
+      }
+      setLive("Cancelled", false);
+      endTurnUi(status, false);
+    })
+    .catch((error) => {
+      setLive(errorText(error, "cancel failed"), true);
+      endTurnUi(null, true);
+    })
+    .finally(() => {
+      talkPending = false;
+      streamingTurn = false;
+      markActivity();
+      refresh();
+    });
+}
+
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && (talkPending || streamingTurn)) {
+    event.preventDefault();
+    cancelAsk();
+  }
+});
+
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   const asked = input.value.trim();
@@ -1716,6 +1810,7 @@ form.addEventListener("submit", (event) => {
   lastStatusMessage = "thinking…";
   input.value = "";
   talkPending = true;
+  syncCancelBtn();
   invoke("hud_ask", { text: asked })
     .then((status) => {
       applyPending(status && status.pending_tool);

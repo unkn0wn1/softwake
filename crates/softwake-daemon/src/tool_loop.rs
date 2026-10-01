@@ -11,7 +11,7 @@ use serde_json::Value;
 use softwake_providers::ChatMessage;
 use softwake_providers::{
     AssistantToolCall, ChatTurn, PreparedChat, Transport, WireMessage, complete_chat_turn,
-    wire_from_chat_messages,
+    complete_chat_turn_text_stream, wire_from_chat_messages,
 };
 use softwake_tools::tool_args_from_json;
 
@@ -48,6 +48,14 @@ pub(crate) enum ToolLoopOk {
     },
 }
 
+/// Optional streaming / cancel hooks for text-only rounds (ADR-0048).
+pub(crate) struct ToolLoopHooks<'a> {
+    /// Called with accumulated assistant text after each stream delta.
+    pub on_delta: Option<&'a mut dyn FnMut(&str)>,
+    /// When true, stop the stream and keep the partial text.
+    pub is_cancelled: Option<&'a dyn Fn() -> bool>,
+}
+
 /// Run chat turns until final text, pending confirm, or caps.
 ///
 /// `messages` are the session turns including the new user line (text only).
@@ -64,13 +72,69 @@ pub(crate) fn run_tool_loop<T: Transport>(
     system: &str,
     messages: &[ChatMessage],
     tools: &[Value],
+    invoke: impl FnMut(&str, &[String]) -> ToolInvokeResult,
+) -> Result<ToolLoopOk, String> {
+    run_tool_loop_with_hooks(
+        transport,
+        prepared,
+        bearer,
+        system,
+        messages,
+        tools,
+        invoke,
+        ToolLoopHooks {
+            on_delta: None,
+            is_cancelled: None,
+        },
+    )
+}
+
+/// Tool loop with stream deltas on text-only rounds and cooperative cancel.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors run_tool_loop plus streaming hooks"
+)]
+pub(crate) fn run_tool_loop_with_hooks<T: Transport>(
+    transport: &T,
+    prepared: &PreparedChat,
+    bearer: &str,
+    system: &str,
+    messages: &[ChatMessage],
+    tools: &[Value],
     mut invoke: impl FnMut(&str, &[String]) -> ToolInvokeResult,
+    mut hooks: ToolLoopHooks<'_>,
 ) -> Result<ToolLoopOk, String> {
     let mut wire = wire_from_chat_messages(messages);
     for round in 0..MAX_TOOL_ROUNDS {
         let last = round + 1 == MAX_TOOL_ROUNDS;
         // Final round omits tools so the model must emit text (ADR-0047).
         let round_tools: &[Value] = if last { &[] } else { tools };
+        // Text-only rounds stream token deltas (ADR-0048). Tool rounds stay non-stream.
+        if round_tools.is_empty() {
+            if hooks.is_cancelled.as_ref().is_some_and(|f| f()) {
+                return Ok(ToolLoopOk::Message(soft_finalize(&wire, None)));
+            }
+            let text = match complete_chat_turn_text_stream(
+                transport,
+                prepared,
+                bearer,
+                system,
+                &wire,
+                |partial| {
+                    if let Some(cb) = hooks.on_delta.as_mut() {
+                        cb(partial);
+                    }
+                    !hooks.is_cancelled.as_ref().is_some_and(|f| f())
+                },
+            ) {
+                Ok(text) => text,
+                Err(error) if last && matches!(error, softwake_providers::ChatError::Empty) => {
+                    soft_finalize(&wire, None)
+                }
+                Err(error) => return Err(error.to_string()),
+            };
+            return Ok(ToolLoopOk::Message(text));
+        }
         let turn = match complete_chat_turn(transport, prepared, bearer, system, &wire, round_tools)
         {
             Ok(turn) => turn,

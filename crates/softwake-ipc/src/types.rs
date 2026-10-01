@@ -672,6 +672,15 @@ pub enum ClientMessage {
         /// `true` mutes mic listening.
         muted: bool,
     },
+    /// Hard-abort an in-flight ask / chat stream (cooperative cancel).
+    ///
+    /// Sets a flag the stream loop checks between deltas so `CancelAsk` does not
+    /// need the runtime lock. Additive on protocol generation 1. Partial text
+    /// is kept as the assistant reply when possible.
+    CancelAsk {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+    },
     /// Re-read KWS thresholds from `softwake.json` (then env) and rebuild the
     /// keyword spotter without dropping the serve socket.
     ///

@@ -150,6 +150,60 @@ pub fn complete_chat_turn<T: Transport>(
     parse_chat_turn(transport.post_json_bearer(&url, bearer, &body.to_string()))
 }
 
+/// Stream a **text-only** chat turn (`stream: true`, no `tools`).
+///
+/// Used for the tool-loop finalize round and tool-free asks (ADR-0048).
+/// `on_delta` receives accumulated text; return `false` to cancel early.
+///
+/// # Errors
+///
+/// [`ChatError`] on transport failure or empty final text.
+pub fn complete_chat_turn_text_stream<T: Transport>(
+    transport: &T,
+    prepared: &PreparedChat,
+    bearer: &str,
+    system: &str,
+    messages: &[WireMessage],
+    mut on_delta: impl FnMut(&str) -> bool,
+) -> Result<String, ChatError> {
+    let url = format!("{}/chat/completions", prepared.api_base);
+    let mut wire = Vec::with_capacity(messages.len() + 1);
+    wire.push(json!({"role": "system", "content": system}));
+    for message in messages {
+        wire.push(wire_message_json(message));
+    }
+    let mut body = json!({
+        "model": prepared.model,
+        "max_tokens": CHAT_MAX_TOKENS,
+        "messages": wire,
+        "stream": true,
+    });
+    crate::reasoning::insert_reasoning_effort(&mut body, &prepared.reasoning_effort);
+    let mut assembled = String::new();
+    let result = transport.post_json_bearer_stream(&url, bearer, &body.to_string(), &mut |event| {
+        if let Some(piece) = crate::chat::delta_content_from_sse_data(event) {
+            assembled.push_str(&piece);
+            if !on_delta(&assembled) {
+                return false;
+            }
+        }
+        true
+    });
+    match result {
+        Ok(()) => {
+            let trimmed = assembled.trim();
+            if trimmed.is_empty() {
+                Err(ChatError::Empty)
+            } else {
+                Ok(trimmed.to_owned())
+            }
+        }
+        Err(TransportError::Failed { .. } | TransportError::NoRoute { .. }) => {
+            Err(ChatError::Unreachable)
+        }
+    }
+}
+
 fn wire_message_json(message: &WireMessage) -> Value {
     match message.role {
         WireRole::User => json!({
