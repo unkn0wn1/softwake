@@ -1318,6 +1318,8 @@ impl Runtime {
         self.ask_tts_spoken = 0;
         self.ask_cancel
             .store(false, std::sync::atomic::Ordering::SeqCst);
+        // Drop prior ask's TTS queue / player so early sentences cannot overlap.
+        crate::announce::begin_ask_speech();
         // Leave Thinking ASAP — HUD polls see Writing… before the first token.
         self.set_turn_phase(Some("streaming"));
         self.publish_live(Some("…".to_owned()), Some("streaming".to_owned()));
@@ -1340,7 +1342,12 @@ impl Runtime {
                         }
                     }
                 }
-                let already = spoken_for_delta.load(std::sync::atomic::Ordering::SeqCst);
+                let raw = spoken_for_delta.load(std::sync::atomic::Ordering::SeqCst);
+                // New tool-loop round resets `partial`; clamp so we do not skip it.
+                let already = crate::early_tts::clamp_spoken_to_text(partial, raw);
+                if already != raw {
+                    spoken_for_delta.store(already, std::sync::atomic::Ordering::SeqCst);
+                }
                 let (next, chunk) = crate::early_tts::take_new_speech(partial, already);
                 if let Some(line) = chunk {
                     spoken_for_delta.store(next, std::sync::atomic::Ordering::SeqCst);
@@ -1459,12 +1466,29 @@ impl Runtime {
         if crate::telegram::desktop_wants_ask_voice(&profile_id) {
             let spoken = self.ask_tts_spoken;
             self.ask_tts_spoken = 0;
-            let rest = crate::early_tts::slice_chars(&reply, spoken, reply.chars().count());
-            let rest = rest.trim();
+            let rest = crate::early_tts::remainder_after(&reply, spoken);
             if rest.is_empty() {
+                // Early TTS already covered the reply — do not sync-synth empty
+                // audio or linger on Speaking waiting for a no-op player.
                 self.last_speech_note = None;
+            } else if spoken > 0 {
+                // Queue behind early sentences (no interrupt / no sync dead air).
+                self.last_speech_note = None;
+                #[cfg(not(test))]
+                {
+                    crate::announce::spawn_fixed_line(
+                        rest,
+                        self.soul.profile_log_token(),
+                        self.verbosity,
+                    );
+                }
+                #[cfg(test)]
+                {
+                    let _ = rest;
+                }
             } else {
-                self.speak_if_configured(rest);
+                // No early speech this turn — sync speak (may interrupt prior ask).
+                self.speak_if_configured(&rest);
             }
         } else {
             self.ask_tts_spoken = 0;

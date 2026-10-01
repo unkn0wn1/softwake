@@ -8,6 +8,8 @@
 //! block the daemon, Tauri commands, or the HUD bloom on Eve finishing. A short
 //! reaper thread joins the child (with a timeout) and deletes the temp file.
 //! [`interrupt_playback`] kills the last spawned player so a new ask can cut in.
+//! Early-TTS chains use [`wait_for_playback_idle`] + Spawn with `interrupt: false`
+//! so sentences queue instead of killing each other.
 //!
 //! While a spawned player is alive (and for a short grace after it exits),
 //! [`input_muted`] is true so the daemon can drop mic frames — half-duplex,
@@ -144,6 +146,25 @@ pub fn play_audio(
     timeout: Duration,
     record: &mut Option<PlayedClip>,
 ) -> Result<(), String> {
+    play_audio_with_interrupt(mode, bytes, suffix, timeout, record, true)
+}
+
+/// Like [`play_audio`], but when `interrupt` is false a Spawn does **not** kill
+/// the previous player. Callers that chain early-TTS sentences must
+/// [`wait_for_playback_idle`] first so clips do not overlap.
+///
+/// # Errors
+///
+/// Same failure modes as [`play_audio`]: empty bytes, missing player, or spawn
+/// failure.
+pub fn play_audio_with_interrupt(
+    mode: PlaybackMode,
+    bytes: &[u8],
+    suffix: &str,
+    timeout: Duration,
+    record: &mut Option<PlayedClip>,
+    interrupt: bool,
+) -> Result<(), String> {
     if bytes.is_empty() {
         return Err("The voice service returned no audio.".to_owned());
     }
@@ -155,8 +176,23 @@ pub fn play_audio(
             });
             Ok(())
         }
-        PlaybackMode::Spawn => spawn_player_detached(bytes, suffix, timeout),
+        PlaybackMode::Spawn => spawn_player_detached(bytes, suffix, timeout, interrupt),
     }
+}
+
+/// Block until [`input_muted`] is false (player exited + mute grace), or `timeout`.
+///
+/// Returns `true` when idle, `false` when the deadline expired while still muted.
+#[must_use]
+pub fn wait_for_playback_idle(timeout: Duration) -> bool {
+    let start = Instant::now();
+    while input_muted() {
+        if start.elapsed() >= timeout {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(40));
+    }
+    true
 }
 
 /// Stop the last spawned player, if Softwake still knows its pid.
@@ -179,8 +215,15 @@ pub fn interrupt_playback() {
     }
 }
 
-fn spawn_player_detached(bytes: &[u8], suffix: &str, timeout: Duration) -> Result<(), String> {
-    interrupt_playback();
+fn spawn_player_detached(
+    bytes: &[u8],
+    suffix: &str,
+    timeout: Duration,
+    interrupt: bool,
+) -> Result<(), String> {
+    if interrupt {
+        interrupt_playback();
+    }
     let path = write_temp(bytes, suffix)?;
     let players = player_commands(&path, suffix);
     let mut missing = Vec::new();
@@ -331,6 +374,7 @@ mod tests {
     use super::{
         INPUT_MUTE_TEST_LOCK, PLAYBACK_MUTE_GRACE, PLAYBACK_TIMEOUT, PlaybackMode,
         begin_input_mute, clear_input_mute_for_test, end_input_mute, input_muted, play_audio,
+        wait_for_playback_idle,
     };
     use std::thread;
     use std::time::{Duration, Instant};
@@ -411,6 +455,27 @@ mod tests {
         assert!(input_muted(), "grace keeps mute briefly");
         thread::sleep(PLAYBACK_MUTE_GRACE + Duration::from_millis(50));
         assert!(!input_muted());
+        clear_input_mute_for_test();
+    }
+
+    #[test]
+    fn wait_for_playback_idle_returns_immediately_when_unmuted() {
+        let _guard = INPUT_MUTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        clear_input_mute_for_test();
+        assert!(wait_for_playback_idle(Duration::from_millis(200)));
+    }
+
+    #[test]
+    fn wait_for_playback_idle_times_out_while_muted() {
+        let _guard = INPUT_MUTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        clear_input_mute_for_test();
+        let _gen = begin_input_mute();
+        assert!(input_muted());
+        assert!(!wait_for_playback_idle(Duration::from_millis(80)));
         clear_input_mute_for_test();
     }
 }
