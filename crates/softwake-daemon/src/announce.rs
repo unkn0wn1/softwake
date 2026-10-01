@@ -8,9 +8,13 @@
 //! See [ADR 0022](../../docs/ADR-0022-voice-modes.md).
 
 #[cfg(not(test))]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(not(test))]
 use std::sync::{Mutex, OnceLock};
 #[cfg(not(test))]
 use std::thread;
+#[cfg(not(test))]
+use std::time::Duration;
 
 use softwake_providers::ChatMessage;
 #[cfg(not(test))]
@@ -68,6 +72,27 @@ fn speak_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+/// Bumped at the start of each ask so stale early-TTS queue threads no-op.
+#[cfg(not(test))]
+fn speak_generation() -> &'static AtomicU64 {
+    static GEN: AtomicU64 = AtomicU64::new(1);
+    &GEN
+}
+
+/// Invalidate queued state/early TTS from a prior ask and stop the current player.
+#[cfg(not(test))]
+pub(crate) fn begin_ask_speech() {
+    speak_generation().fetch_add(1, Ordering::SeqCst);
+    softwake_voice::interrupt_playback();
+}
+
+#[cfg(test)]
+pub(crate) fn begin_ask_speech() {}
+
+/// How long a queued clip may wait for the previous player to finish.
+#[cfg(not(test))]
+const QUEUE_IDLE_WAIT: Duration = Duration::from_secs(120);
+
 /// Speak the state line off the runtime lock.
 ///
 /// Tests record the prompt instead of calling this. A missing provider, a
@@ -81,12 +106,20 @@ pub(crate) fn spawn_announcement(
     verbosity: u8,
 ) {
     let prompt = prompt_for(state).to_owned();
+    let speak_gen = speak_generation().load(Ordering::SeqCst);
     let _ = thread::Builder::new()
         .name("softwake-state-voice".to_owned())
         .spawn(move || {
             let _guard = speak_lock()
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if speak_generation().load(Ordering::SeqCst) != speak_gen {
+                return;
+            }
+            let _ = softwake_voice::wait_for_playback_idle(QUEUE_IDLE_WAIT);
+            if speak_generation().load(Ordering::SeqCst) != speak_gen {
+                return;
+            }
             speak_now(&system, state, &prompt, &profile, verbosity);
         });
 }
@@ -95,14 +128,23 @@ pub(crate) fn spawn_announcement(
 /// 15s answer window is not spent waiting on a model.
 #[cfg(not(test))]
 pub(crate) fn spawn_fixed_line(line: String, profile: String, verbosity: u8) {
+    let speak_gen = speak_generation().load(Ordering::SeqCst);
     let _ = thread::Builder::new()
         .name("softwake-state-voice".to_owned())
         .spawn(move || {
             let _guard = speak_lock()
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if speak_generation().load(Ordering::SeqCst) != speak_gen {
+                return;
+            }
+            // Wait for the prior clip to finish — do not interrupt (early TTS queue).
+            let _ = softwake_voice::wait_for_playback_idle(QUEUE_IDLE_WAIT);
+            if speak_generation().load(Ordering::SeqCst) != speak_gen {
+                return;
+            }
             if let Some(ready) = prepare_speaker(&profile, verbosity) {
-                playback(&ready, &line, &profile, verbosity);
+                playback_follow_on(&ready, &line, &profile, verbosity);
             }
         });
 }
@@ -126,7 +168,7 @@ fn speak_now(system: &str, state: VoiceState, prompt: &str, profile: &str, verbo
             _ => fallback_line(state).to_owned(),
         }
     };
-    playback(&ready, &line, profile, verbosity);
+    playback_follow_on(&ready, &line, profile, verbosity);
 }
 
 /// Load chat settings when this profile can speak. Logs and returns `None` otherwise.
@@ -159,8 +201,8 @@ fn prepare_speaker(profile: &str, verbosity: u8) -> Option<crate::chat::DiskChat
 }
 
 #[cfg(not(test))]
-fn playback(ready: &crate::chat::DiskChat, line: &str, profile: &str, verbosity: u8) {
-    if let Err(message) = crate::talk::speak_reply(ready, line) {
+fn playback_follow_on(ready: &crate::chat::DiskChat, line: &str, profile: &str, verbosity: u8) {
+    if let Err(message) = crate::talk::speak_reply_with_interrupt(ready, line, false) {
         let hint = if message.contains("rejected the credentials") {
             format!(
                 "state voice skipped: {message} Re-run Providers Test or re-sign in (xAI OAuth)."

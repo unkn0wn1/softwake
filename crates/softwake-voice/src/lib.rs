@@ -30,7 +30,7 @@ pub use pcm_wav::{TALK_MAX_SAMPLES, TALK_MIN_SAMPLES, TalkBuffer, wav_from_pcm16
 pub use playback::{
     INPUT_MUTE_TEST_LOCK, PLAYBACK_MUTE_GRACE, PLAYBACK_TIMEOUT, PlaybackMode, PlayedClip,
     begin_input_mute, clear_input_mute_for_test, end_input_mute, input_muted, interrupt_playback,
-    play_audio,
+    play_audio, play_audio_with_interrupt, wait_for_playback_idle,
 };
 #[cfg(feature = "sherpa-asr")]
 pub use sherpa_asr::SherpaAsr;

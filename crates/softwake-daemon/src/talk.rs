@@ -10,7 +10,7 @@ use softwake_providers::{ProviderId, family_speaks_xai, resolve_stt_model, resol
 use softwake_providers::{stt_transcribe, tts_synthesize, wav_from_pcm16};
 use softwake_voice::TalkBuffer;
 #[cfg(feature = "live-http")]
-use softwake_voice::{PlaybackMode, play_audio};
+use softwake_voice::{PlaybackMode, play_audio_with_interrupt};
 
 use crate::chat::DiskChat;
 #[cfg(not(feature = "live-http"))]
@@ -100,6 +100,17 @@ pub(crate) fn transcribe_pcm(
 /// A voice, feature, or player sentence. The bearer is not included.
 #[cfg_attr(test, allow(dead_code))] // called only from `#[cfg(not(test))]` speak path
 pub(crate) fn speak_reply(ready: &DiskChat, text: &str) -> Result<(), String> {
+    speak_reply_with_interrupt(ready, text, true)
+}
+
+/// Speak `text`. When `interrupt` is false, do not kill a still-playing clip —
+/// caller must wait for idle first (early-TTS sentence queue).
+#[cfg_attr(test, allow(dead_code))] // called from `#[cfg(not(test))]` announce path
+pub(crate) fn speak_reply_with_interrupt(
+    ready: &DiskChat,
+    text: &str,
+    interrupt: bool,
+) -> Result<(), String> {
     let provider = ready.prepared.provider;
     if !family_speaks_xai(provider) {
         return Ok(());
@@ -109,7 +120,7 @@ pub(crate) fn speak_reply(ready: &DiskChat, text: &str) -> Result<(), String> {
     };
     #[cfg(not(feature = "live-http"))]
     {
-        let _ = (text, voice);
+        let _ = (text, voice, interrupt);
         Err(LIVE_HTTP_DISABLED.to_owned())
     }
     #[cfg(feature = "live-http")]
@@ -126,7 +137,14 @@ pub(crate) fn speak_reply(ready: &DiskChat, text: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
         let mut record = None;
         let timeout = crate::playback_timeout::resolve_tts_playback_timeout();
-        play_audio(PlaybackMode::Spawn, &audio, "mp3", timeout, &mut record)
+        play_audio_with_interrupt(
+            PlaybackMode::Spawn,
+            &audio,
+            "mp3",
+            timeout,
+            &mut record,
+            interrupt,
+        )
     }
 }
 

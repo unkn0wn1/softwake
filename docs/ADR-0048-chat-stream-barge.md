@@ -39,3 +39,22 @@ Follow-up decisions:
 4. **HUD polls ~150ms while ask/stream pending** (900ms idle).
 5. **Visible build stamp** — UI `app_build_info` + Settings General / HUD chrome; daemon
    `Status.build` (`version · gitsha · built_at`).
+
+## Amendment — early TTS cutoffs (post stream-feel)
+
+#106’s sentence-boundary early TTS cut itself off and left Speaking dead air:
+
+1. **Spawn always interrupted** — each early sentence / final remainder called
+   `interrupt_playback`, killing the prior player as soon as the next synth
+   finished. Fix: queue under `speak_lock` with `wait_for_playback_idle` + Spawn
+   `interrupt: false`; bump a speak generation (+ interrupt) at ask start so
+   stale queue items no-op.
+2. **Spoken offset across tool rounds** — `partial` resets per round but the
+   Atomic offset did not, so finish sliced the final reply with a stale index
+   (dropped remainder). Fix: `clamp_spoken_to_text` when `already > len`.
+3. **Mid-clause boundaries** — bare `.` at end-of-partial and short abbreviations
+   (`Dr.`) committed early. Fix: require whitespace after `.!?`; for `.` require
+   next non-ws uppercase and word-before len > 3; finish speaks remainder.
+4. **Speaking dead air** — sync `tts_synthesize` on remainder while interrupting
+   early audio. Fix: empty remainder skips synth; non-empty after early TTS
+   queues via `spawn_fixed_line` (no sync wait).
