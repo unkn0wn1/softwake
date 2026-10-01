@@ -18,7 +18,7 @@ Slice 2 (#95) fired `run_on=companion|auto` schedules on softwake-node but recor
 | Skills | Authored skills mirrored via `PUT /v1/skills` (full replace, max 32) |
 | API key | `SOFTWAKE_NODE_XAI_API_KEY` **or** mirrored vault `xai_api_key` (`PUT /v1/vault/llm`) |
 | Model | `SOFTWAKE_NODE_MODEL` (default `grok-4-fast-non-reasoning`) |
-| Bounds | `MAX_TOOL_ROUNDS = 6`; HTTP read 120s / connect 15s |
+| Bounds | `MAX_TOOL_ROUNDS = 6` (final round omits tools + soft-finalize, [ADR-0047](ADR-0047-tool-loop-finalize.md)); HTTP read 120s / connect 15s |
 | Ask | Pending text into outbox delivery — **never** silent Always-allow |
 | OAuth tools | Refuse with “OAuth stays laptop-local”; continue or stop with clear text |
 | shell AlwaysAllow | Honor with softwake-tools timeout/output cap; Ask → pending |

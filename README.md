@@ -31,7 +31,7 @@ Cargo workspace on stable Rust (edition 2024). Default builds stay offline and m
 - `echo` runs immediately while awake ([ADR 0004](docs/ADR-0004-first-safe-tool.md)).
 - `notify` waits for confirmation, then appends to an in-memory sink.
 - `shell` is confirm-gated and off until Settings → Tools enables it ([ADR 0018](docs/ADR-0018-tools-settings-shell.md), [ADR 0005](docs/ADR-0005-tool-confirmation.md)).
-- When a tool is Always allow or Ask, Softwake also advertises it as a chat function tool so natural asks can invoke it without saying `run …` ([ADR 0025](docs/ADR-0025-api-tool-calling.md)).
+- When a tool is Always allow or Ask, Softwake also advertises it as a chat function tool so natural asks can invoke it without saying `run …` ([ADR 0025](docs/ADR-0025-api-tool-calling.md)). The tool loop’s final round omits tools and soft-finalizes so thrash cannot leave a silent 6-cap error ([ADR 0047](docs/ADR-0047-tool-loop-finalize.md)).
 
 ### Connectors, memory, and policy
 
@@ -632,3 +632,4 @@ cargo test -p softwake-daemon --features pipewire-capture
 | [docs/ADR-0037-memory-write-tools.md](docs/ADR-0037-memory-write-tools.md) | Agent `remember` / `forget` tools for `memory.json` |
 | [docs/ADR-0024-timers-cron.md](docs/ADR-0024-timers-cron.md) | Per-profile timers / cron; confirm-gated `schedule`; Settings → Timers (see also ADR-0036 agent tasks) |
 | [docs/ADR-0029-messengers-telegram.md](docs/ADR-0029-messengers-telegram.md) | Expandable Settings nav; Messengers + Telegram; shared HUD history; dual-login TTS |
+| [docs/ADR-0047-tool-loop-finalize.md](docs/ADR-0047-tool-loop-finalize.md) | Tool-loop last-round omit tools + soft-finalize (no silent 6-cap) |

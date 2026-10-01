@@ -11,6 +11,7 @@
 
 ### Fixed
 
+- Tool loop: final round omits advertised tools and soft-finalizes instead of `tool loop reached the 6-round cap without a final reply` (Soulwright / tool thrash; ADR-0047).
 - HUD strip: thinking/phase, context meter, and composer no longer mash or jump after the first message (`.strip-main` is flex; `#log` owns the grow — hidden siblings cannot steal it).
 - Assistant reply is shown once: pre-TTS status poll and post-TTS ask/talk settle no longer append a duplicate bubble for the same text.
 - Long Settings actions (**Test on Tailnet**, **Install companion**, Providers Test/Save) run off the UI thread with immediate status (`Testing…` / `Starting…` / `Saving…`).

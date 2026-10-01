@@ -1,6 +1,7 @@
 //! Multi-turn chat tool loop: assistant `tool_calls` → Hands → tool results → continue.
 //!
 //! Caps rounds so a model cannot spin forever. Never invents command output.
+//! The final round omits `tools` and soft-finalizes if needed (ADR-0047).
 //! See ADR-0025.
 //!
 //! The loop body runs under `live-http` and in unit tests. Default CI builds keep
@@ -17,6 +18,7 @@ use softwake_tools::tool_args_from_json;
 use crate::dispatch::{PendingToolCall, RequestOutcome};
 
 /// Max assistant→tools→continue rounds per ask (each round is one HTTP POST).
+/// Final round omits tools and soft-finalizes (ADR-0047).
 #[cfg_attr(not(any(test, feature = "live-http")), allow(dead_code))]
 pub(crate) const MAX_TOOL_ROUNDS: usize = 6;
 
@@ -53,7 +55,7 @@ pub(crate) enum ToolLoopOk {
 ///
 /// # Errors
 ///
-/// Provider display sentences, or a round-cap message. Never includes the bearer.
+/// Provider display sentences. Cap path soft-finalizes to a Message (ADR-0047). Never includes the bearer.
 #[cfg_attr(not(any(test, feature = "live-http")), allow(dead_code))]
 pub(crate) fn run_tool_loop<T: Transport>(
     transport: &T,
@@ -66,12 +68,27 @@ pub(crate) fn run_tool_loop<T: Transport>(
 ) -> Result<ToolLoopOk, String> {
     let mut wire = wire_from_chat_messages(messages);
     for round in 0..MAX_TOOL_ROUNDS {
-        let _ = round;
-        let turn = complete_chat_turn(transport, prepared, bearer, system, &wire, tools)
-            .map_err(|error| error.to_string())?;
+        let last = round + 1 == MAX_TOOL_ROUNDS;
+        // Final round omits tools so the model must emit text (ADR-0047).
+        let round_tools: &[Value] = if last { &[] } else { tools };
+        let turn = match complete_chat_turn(transport, prepared, bearer, system, &wire, round_tools)
+        {
+            Ok(turn) => turn,
+            Err(error) if last && matches!(error, softwake_providers::ChatError::Empty) => {
+                return Ok(ToolLoopOk::Message(soft_finalize(&wire, None)));
+            }
+            Err(error) => return Err(error.to_string()),
+        };
         match turn {
             ChatTurn::Message(text) => return Ok(ToolLoopOk::Message(text)),
             ChatTurn::ToolCalls { content, calls } => {
+                if last {
+                    // Empty tools should not yield tool_calls; soft-finalize anyway.
+                    return Ok(ToolLoopOk::Message(soft_finalize(
+                        &wire,
+                        content.as_deref(),
+                    )));
+                }
                 wire.push(WireMessage::assistant_tools(content, calls.clone()));
                 let mut pending_stop: Option<PendingToolCall> = None;
                 for call in &calls {
@@ -115,9 +132,56 @@ pub(crate) fn run_tool_loop<T: Transport>(
             }
         }
     }
-    Err(format!(
-        "tool loop reached the {MAX_TOOL_ROUNDS}-round cap without a final reply"
-    ))
+    Ok(ToolLoopOk::Message(soft_finalize(&wire, None)))
+}
+
+/// Best-effort operator-facing reply when the last round has no clean Message.
+///
+/// Never invents tool stdout — only reuses wire content Softwake already pushed.
+#[cfg_attr(not(any(test, feature = "live-http")), allow(dead_code))]
+fn soft_finalize(wire: &[WireMessage], last_content: Option<&str>) -> String {
+    if let Some(text) = last_content.map(str::trim).filter(|s| !s.is_empty()) {
+        return text.to_owned();
+    }
+    for message in wire.iter().rev() {
+        if message.role != softwake_providers::WireRole::Assistant {
+            continue;
+        }
+        if let Some(text) = message
+            .content
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return text.to_owned();
+        }
+    }
+    let mut snippets = Vec::new();
+    for message in wire.iter().rev() {
+        if message.role != softwake_providers::WireRole::Tool {
+            continue;
+        }
+        if let Some(text) = message
+            .content
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let clipped: String = text.chars().take(240).collect();
+            snippets.push(clipped);
+            if snippets.len() >= 3 {
+                break;
+            }
+        }
+    }
+    snippets.reverse();
+    if snippets.is_empty() {
+        return "Tool budget reached before a final reply.".to_owned();
+    }
+    format!(
+        "Tool budget reached before a full reply. From tool results:\n{}",
+        snippets.join("\n")
+    )
 }
 
 #[cfg_attr(not(any(test, feature = "live-http")), allow(dead_code))]
@@ -163,13 +227,13 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::VecDeque;
 
-    use serde_json::json;
+    use serde_json::{Value, json};
     use softwake_providers::{
         HttpBytes, HttpResponse, MultipartField, PreparedChat, ProviderFamily, ProviderId,
         Transport, TransportError,
     };
 
-    use super::{ToolInvokeResult, ToolLoopOk, chat_user, run_tool_loop};
+    use super::{MAX_TOOL_ROUNDS, ToolInvokeResult, ToolLoopOk, chat_user, run_tool_loop};
     use crate::dispatch::PendingToolCall;
 
     struct QueueTransport {
@@ -395,5 +459,192 @@ mod tests {
             ToolLoopOk::Message(_) => panic!("expected pending"),
         }
         assert_eq!(transport.posts.borrow().len(), 1);
+    }
+
+    fn shell_tool_schema() -> Value {
+        json!({
+            "type": "function",
+            "function": {
+                "name": "shell",
+                "description": "Run shell",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command"]
+                }
+            }
+        })
+    }
+
+    fn tool_call_response(call_id: &str, command: &str) -> HttpResponse {
+        HttpResponse {
+            status: 200,
+            body: json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": [{
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": "shell",
+                                "arguments": format!("{{\"command\":\"{command}\"}}")
+                            }
+                        }]
+                    }
+                }]
+            })
+            .to_string(),
+        }
+    }
+
+    fn text_response(text: &str) -> HttpResponse {
+        HttpResponse {
+            status: 200,
+            body: json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": text
+                    }
+                }]
+            })
+            .to_string(),
+        }
+    }
+
+    #[test]
+    fn last_round_omits_tools_and_returns_final_text() {
+        let tools = vec![shell_tool_schema()];
+        let mut responses = Vec::new();
+        for i in 0..(MAX_TOOL_ROUNDS - 1) {
+            responses.push(tool_call_response(
+                &format!("call_{i}"),
+                &format!("echo r{i}"),
+            ));
+        }
+        responses.push(text_response("Done after tools."));
+        let transport = QueueTransport::new(responses);
+        let invokes = RefCell::new(0usize);
+        let ok = run_tool_loop(
+            &transport,
+            &prepared(),
+            "tok",
+            "sys",
+            &[chat_user("keep going")],
+            &tools,
+            |_name, _args| {
+                *invokes.borrow_mut() += 1;
+                ToolInvokeResult::Ran("stdout:\nok\n".to_owned())
+            },
+        )
+        .expect("loop");
+        assert_eq!(ok, ToolLoopOk::Message("Done after tools.".to_owned()));
+        assert_eq!(*invokes.borrow(), MAX_TOOL_ROUNDS - 1);
+        assert_eq!(transport.posts.borrow().len(), MAX_TOOL_ROUNDS);
+        let last: serde_json::Value =
+            serde_json::from_str(transport.posts.borrow().last().expect("last")).expect("json");
+        assert!(
+            last.get("tools").is_none(),
+            "final round must omit tools: {last}"
+        );
+        let first: serde_json::Value =
+            serde_json::from_str(&transport.posts.borrow()[0]).expect("json");
+        assert!(first.get("tools").is_some(), "earlier rounds keep tools");
+    }
+
+    #[test]
+    fn last_round_tool_calls_soft_finalizes_with_content() {
+        let tools = vec![shell_tool_schema()];
+        let mut responses = Vec::new();
+        for i in 0..(MAX_TOOL_ROUNDS - 1) {
+            responses.push(tool_call_response(
+                &format!("call_{i}"),
+                &format!("echo r{i}"),
+            ));
+        }
+        responses.push(HttpResponse {
+            status: 200,
+            body: json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "Here is the draft soul.md.",
+                        "tool_calls": [{
+                            "id": "call_last",
+                            "type": "function",
+                            "function": {
+                                "name": "shell",
+                                "arguments": "{\"command\":\"echo should-not-run\"}"
+                            }
+                        }]
+                    }
+                }]
+            })
+            .to_string(),
+        });
+        let transport = QueueTransport::new(responses);
+        let invokes = RefCell::new(0usize);
+        let ok = run_tool_loop(
+            &transport,
+            &prepared(),
+            "tok",
+            "sys",
+            &[chat_user("write soul")],
+            &tools,
+            |_name, _args| {
+                *invokes.borrow_mut() += 1;
+                ToolInvokeResult::Ran("stdout:\nok\n".to_owned())
+            },
+        )
+        .expect("soft finalize");
+        assert_eq!(
+            ok,
+            ToolLoopOk::Message("Here is the draft soul.md.".to_owned())
+        );
+        assert_eq!(*invokes.borrow(), MAX_TOOL_ROUNDS - 1);
+        let last: serde_json::Value =
+            serde_json::from_str(transport.posts.borrow().last().expect("last")).expect("json");
+        assert!(last.get("tools").is_none());
+    }
+
+    #[test]
+    fn soft_finalize_uses_tool_snippets_when_no_assistant_text() {
+        let tools = vec![shell_tool_schema()];
+        let mut responses = Vec::new();
+        for i in 0..(MAX_TOOL_ROUNDS - 1) {
+            responses.push(tool_call_response(
+                &format!("call_{i}"),
+                &format!("echo r{i}"),
+            ));
+        }
+        // Last round: empty content tool_calls (defensive).
+        responses.push(tool_call_response("call_last", "echo noop"));
+        let transport = QueueTransport::new(responses);
+        let ok = run_tool_loop(
+            &transport,
+            &prepared(),
+            "tok",
+            "sys",
+            &[chat_user("spin")],
+            &tools,
+            |_name, _args| ToolInvokeResult::Ran("stdout:\nreal-detail\n".to_owned()),
+        )
+        .expect("soft");
+        match ok {
+            ToolLoopOk::Message(msg) => {
+                assert!(
+                    msg.contains("Tool budget reached"),
+                    "expected budget preface: {msg}"
+                );
+                assert!(
+                    msg.contains("real-detail"),
+                    "must reuse wire tool detail: {msg}"
+                );
+                assert!(!msg.contains("6-round cap without a final reply"), "{msg}");
+            }
+            ToolLoopOk::Pending { .. } => panic!("expected message"),
+        }
     }
 }
