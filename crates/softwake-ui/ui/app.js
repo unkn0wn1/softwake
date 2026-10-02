@@ -2838,9 +2838,76 @@ if (mcpSubNew) {
 
 
 let roomsSnap = null;
+let roomsComposingNew = false;
+
+function roomsMembersFromInput() {
+  return (document.querySelector("#room-members")?.value || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function renderRoomsSubnav(snap) {
+  const list = document.querySelector("#rooms-sub-list");
+  if (!list) return;
+  list.innerHTML = "";
+  for (const room of snap.rooms || []) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "profile-chip";
+    btn.setAttribute("role", "option");
+    btn.setAttribute(
+      "aria-selected",
+      !roomsComposingNew && room.id === (snap.selected_id || "") ? "true" : "false"
+    );
+    const title = document.createElement("span");
+    title.className = "profile-chip-label";
+    title.textContent = room.title || room.id;
+    btn.appendChild(title);
+    btn.addEventListener("click", () => {
+      roomsComposingNew = false;
+      refreshRooms(room.id);
+    });
+    li.appendChild(btn);
+    list.appendChild(li);
+  }
+}
+
+function renderRoomsChatLog(snap) {
+  const logEl = document.querySelector("#rooms-chat-log");
+  if (!logEl) return;
+  logEl.innerHTML = "";
+  const linesArr = snap.log || [];
+  if (!linesArr.length) {
+    logEl.textContent = roomsComposingNew
+      ? "New room — save admin fields first, then chat."
+      : "No messages yet. Send as operator to kick the room.";
+    return;
+  }
+  for (const line of linesArr) {
+    const row = document.createElement("div");
+    const kind = line.kind || "say";
+    row.className =
+      "rooms-chat-line " +
+      kind +
+      (line.profile_id === "operator" ? " operator" : "");
+    const who = document.createElement("span");
+    who.className = "who";
+    const label = line.name || line.profile_id || "?";
+    const phase = line.phase ? ` ${line.phase}` : "";
+    const iter = line.iteration != null ? `#${line.iteration}` : "";
+    who.textContent = `[${kind}${iter}${phase}] ${label}`;
+    row.appendChild(who);
+    row.appendChild(document.createTextNode(": " + (line.text || "")));
+    logEl.appendChild(row);
+  }
+  logEl.scrollTop = logEl.scrollHeight;
+}
 
 function applyRoomsSnapshot(snap, statusText) {
   roomsSnap = snap;
+  if (snap && snap.composing_new) roomsComposingNew = true;
   const pathEl = document.querySelector("#rooms-path");
   if (pathEl) pathEl.textContent = "Path: " + (snap.config_hint || "");
   const list = document.querySelector("#rooms-list");
@@ -2849,30 +2916,38 @@ function applyRoomsSnapshot(snap, statusText) {
     for (const room of snap.rooms || []) {
       const opt = document.createElement("option");
       opt.value = room.id;
-      opt.textContent = (room.title || room.id) + " (" + (room.members || []).join(", ") + ")";
-      if (snap.selected_id && room.id === snap.selected_id) opt.selected = true;
+      opt.textContent =
+        (room.title || room.id) + " (" + (room.members || []).join(", ") + ")";
+      if (!roomsComposingNew && snap.selected_id && room.id === snap.selected_id) {
+        opt.selected = true;
+      }
       list.appendChild(opt);
     }
+    if (roomsComposingNew) list.selectedIndex = -1;
   }
+  renderRoomsSubnav(snap);
   const selected = (snap.rooms || []).find((r) => r.id === snap.selected_id);
   const idEl = document.querySelector("#room-id");
   const titleEl = document.querySelector("#room-title");
   const membersEl = document.querySelector("#room-members");
-  if (selected) {
-    if (idEl) idEl.value = selected.id;
+  if (roomsComposingNew) {
+    if (idEl) idEl.readOnly = false;
+  } else if (selected) {
+    if (idEl) {
+      idEl.value = selected.id;
+      idEl.readOnly = true;
+    }
     if (titleEl) titleEl.value = selected.title || "";
     if (membersEl) membersEl.value = (selected.members || []).join(", ");
+  } else {
+    if (idEl) {
+      idEl.value = "";
+      idEl.readOnly = false;
+    }
+    if (titleEl) titleEl.value = "";
+    if (membersEl) membersEl.value = "";
   }
-  const logEl = document.querySelector("#rooms-log");
-  if (logEl) {
-    logEl.textContent = (snap.log || [])
-      .map((line) => {
-        const phase = line.phase ? ` ${line.phase}` : "";
-        const iter = line.iteration != null ? `#${line.iteration}` : "";
-        return `[${line.kind}${iter}${phase}] ${line.profile_id}: ${line.text}`;
-      })
-      .join("\n");
-  }
+  renderRoomsChatLog(snap);
   const status = document.querySelector("#rooms-status");
   if (status) status.textContent = statusText || "";
   const err = document.querySelector("#rooms-error");
@@ -2883,11 +2958,45 @@ async function refreshRooms(selectedId, statusText) {
   try {
     const args = {};
     if (selectedId) args.selectedId = selectedId;
-    applyRoomsSnapshot(await invoke("rooms_snapshot", args), statusText || "");
+    const snap = await invoke("rooms_snapshot", args);
+    roomsComposingNew = false;
+    applyRoomsSnapshot(snap, statusText || "");
   } catch (error) {
     const err = document.querySelector("#rooms-error");
     if (err) err.textContent = errorText(error);
   }
+}
+
+function beginRoomsNew() {
+  roomsComposingNew = true;
+  if (roomsSnap) {
+    roomsSnap = Object.assign({}, roomsSnap, {
+      selected_id: null,
+      log: [],
+      composing_new: true,
+    });
+    applyRoomsSnapshot(roomsSnap, "New room — set id/title/members, then Save.");
+  }
+  const idEl = document.querySelector("#room-id");
+  const titleEl = document.querySelector("#room-title");
+  const membersEl = document.querySelector("#room-members");
+  const list = document.querySelector("#rooms-list");
+  if (list) list.selectedIndex = -1;
+  if (idEl) {
+    idEl.value = "";
+    idEl.readOnly = false;
+    idEl.focus();
+  }
+  if (titleEl) titleEl.value = "";
+  if (membersEl) membersEl.value = "";
+  const chat = document.querySelector("#rooms-chat-log");
+  if (chat) chat.textContent = "New room — save admin fields first, then chat.";
+  const status = document.querySelector("#rooms-status");
+  if (status) status.textContent = "New room — set id/title/members, then Save.";
+  const err = document.querySelector("#rooms-error");
+  if (err) err.textContent = "";
+  const admin = document.querySelector("#rooms-admin");
+  if (admin) admin.open = true;
 }
 
 function showPane(name) {
@@ -2928,7 +3037,12 @@ function showPane(name) {
     refreshTools();
   }
   if (name === "rooms") {
-    refreshRooms(roomsSnap && roomsSnap.selected_id ? roomsSnap.selected_id : null);
+    setSubnavVisible(document.querySelector("#rooms-subnav"), true);
+    if (!roomsComposingNew) {
+      refreshRooms(roomsSnap && roomsSnap.selected_id ? roomsSnap.selected_id : null);
+    }
+  } else {
+    setSubnavVisible(document.querySelector("#rooms-subnav"), false);
   }
   if (name === "skills") {
     refreshSkills();
@@ -2992,37 +3106,19 @@ document.querySelector("#profile-role")?.addEventListener("change", async (ev) =
   }
 });
 document.querySelector("#rooms-list")?.addEventListener("change", (ev) => {
+  roomsComposingNew = false;
   refreshRooms(ev.target.value);
 });
-document.querySelector("#rooms-new")?.addEventListener("click", async () => {
-  const id = (document.querySelector("#room-id")?.value || "").trim();
-  const title = (document.querySelector("#room-title")?.value || "").trim();
-  const members = (document.querySelector("#room-members")?.value || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  try {
-    applyRoomsSnapshot(
-      await invoke("room_create", { id, title, members }),
-      "Room created."
-    );
-  } catch (error) {
-    const err = document.querySelector("#rooms-error");
-    if (err) err.textContent = errorText(error);
-  }
-});
+document.querySelector("#rooms-new")?.addEventListener("click", () => beginRoomsNew());
+document.querySelector("#rooms-sub-new")?.addEventListener("click", () => beginRoomsNew());
 document.querySelector("#rooms-save")?.addEventListener("click", async () => {
   const id = (document.querySelector("#room-id")?.value || "").trim();
   const title = (document.querySelector("#room-title")?.value || "").trim();
-  const members = (document.querySelector("#room-members")?.value || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const members = roomsMembersFromInput();
   try {
-    applyRoomsSnapshot(
-      await invoke("room_update", { id, title, members }),
-      "Room saved."
-    );
+    const snap = await invoke("room_save", { id, title, members });
+    roomsComposingNew = false;
+    applyRoomsSnapshot(snap, "Room saved.");
   } catch (error) {
     const err = document.querySelector("#rooms-error");
     if (err) err.textContent = errorText(error);
@@ -3031,12 +3127,36 @@ document.querySelector("#rooms-save")?.addEventListener("click", async () => {
 document.querySelector("#rooms-delete")?.addEventListener("click", async () => {
   const id = (document.querySelector("#room-id")?.value || "").trim();
   try {
+    roomsComposingNew = false;
     applyRoomsSnapshot(await invoke("room_delete", { id }), "Room deleted.");
   } catch (error) {
     const err = document.querySelector("#rooms-error");
     if (err) err.textContent = errorText(error);
   }
 });
+document.querySelector("#rooms-send")?.addEventListener("click", async () => {
+  const roomId =
+    (roomsSnap && roomsSnap.selected_id) ||
+    (document.querySelector("#rooms-list")?.value || "").trim();
+  const composeText = (document.querySelector("#rooms-compose")?.value || "").trim();
+  try {
+    const snap = await invoke("room_post", { roomId, text: composeText });
+    roomsComposingNew = false;
+    applyRoomsSnapshot(snap, "Posted.");
+    const compose = document.querySelector("#rooms-compose");
+    if (compose) compose.value = "";
+  } catch (error) {
+    const err = document.querySelector("#rooms-error");
+    if (err) err.textContent = errorText(error);
+  }
+});
+document.querySelector("#rooms-refresh")?.addEventListener("click", () => {
+  const id =
+    (roomsSnap && roomsSnap.selected_id) ||
+    (document.querySelector("#rooms-list")?.value || null);
+  refreshRooms(id, "Refreshed.");
+});
+
 
 showPane("status");
 refresh();

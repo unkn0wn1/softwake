@@ -633,3 +633,55 @@ button.btn-primary.btn-compact {
   font-size: 0.85em;
   opacity: 0.85;
 }
+
+/* Rooms chat (ADR-0052) */
+.rooms-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.75rem 0 1rem;
+  min-height: 14rem;
+  flex: 1 1 auto;
+}
+.rooms-chat-log {
+  flex: 1 1 auto;
+  min-height: 10rem;
+  max-height: 22rem;
+  overflow: auto;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  background: color-mix(in oklab, Canvas 88%, CanvasText 12%);
+  border: 1px solid color-mix(in oklab, CanvasText 18%, transparent);
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+}
+.rooms-chat-line {
+  margin: 0 0 0.45rem;
+}
+.rooms-chat-line .who {
+  font-weight: 600;
+}
+.rooms-chat-line.operator .who { color: #6cf; }
+.rooms-chat-line.say .who { color: #9d8; }
+.rooms-chat-line.dm .who,
+.rooms-chat-line.goal_progress .who,
+.rooms-chat-line.system .who { color: #ccc; }
+.rooms-admin {
+  margin-top: 0.5rem;
+}
+.rooms-list-select {
+  width: 100%;
+  max-width: 36rem;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

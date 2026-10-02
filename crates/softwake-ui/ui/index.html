@@ -20,6 +20,10 @@
         <button type="button" class="nav" id="nav-providers" data-pane="providers">Providers</button>
         <button type="button" class="nav" id="nav-tools" data-pane="tools">Tools</button>
         <button type="button" class="nav" id="nav-rooms" data-pane="rooms">Rooms</button>
+        <div id="rooms-subnav" class="nav-sub hidden" hidden>
+          <ul id="rooms-sub-list" class="nav-sub-list" role="listbox" aria-label="Rooms"></ul>
+          <button type="button" class="nav-sub-action btn-compact" id="rooms-sub-new" title="New room">+ New</button>
+        </div>
         <button type="button" class="nav" id="nav-timers" data-pane="timers">Timers</button>
         <div id="timers-subnav" class="nav-sub hidden" hidden>
           <ul id="timers-sub-list" class="nav-sub-list" role="listbox" aria-label="Timers"></ul>
@@ -401,25 +405,35 @@
 
         
         
-        <section id="pane-rooms" class="pane glass hidden" hidden aria-labelledby="rooms-title">
+        <section id="pane-rooms" class="pane glass pane-fill hidden" hidden aria-labelledby="rooms-title">
           <h2 id="rooms-title">Rooms</h2>
-          <p class="meta">Multi-agent rooms (ADR-0052). Operator picks members. Softwake applies light turn cool-down so agents do not pile on. Progress from <code>goal_run</code> and peer DM logs here.</p>
+          <p class="meta">Multi-agent rooms (ADR-0052). Chat below is the operator view. Settings fields create/edit members. Softwake cool-down + single-flight keep agents from piling on; each member decides whether to reply. Your message may include reply policy (e.g. only one reply, named speaker).</p>
           <p id="rooms-path" class="meta"></p>
-          <label for="rooms-list">Rooms</label>
-          <select id="rooms-list" aria-label="Room list" size="6"></select>
-          <label for="room-id">Id</label>
-          <input id="room-id" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="standup" />
-          <label for="room-title">Title</label>
-          <input id="room-title" type="text" maxlength="120" autocomplete="off" />
-          <label for="room-members">Members (profile ids, comma-separated)</label>
-          <input id="room-members" type="text" autocomplete="off" placeholder="default, sally" />
-          <div class="row">
-            <button type="button" class="btn" id="rooms-new">New</button>
-            <button type="button" class="btn" id="rooms-save">Save</button>
-            <button type="button" class="btn" id="rooms-delete">Delete</button>
+          <label for="rooms-list" class="visually-hidden">Rooms</label>
+          <select id="rooms-list" aria-label="Room list" size="4" class="rooms-list-select"></select>
+          <div id="rooms-chat" class="rooms-chat" aria-live="polite">
+            <div id="rooms-chat-log" class="rooms-chat-log" role="log"></div>
+            <label for="rooms-compose">Message as operator</label>
+            <textarea id="rooms-compose" rows="3" maxlength="8000" placeholder="Say something — e.g. “only sally reply” or paste a brief for the room"></textarea>
+            <div class="row">
+              <button type="button" class="btn" id="rooms-send">Send</button>
+              <button type="button" class="btn" id="rooms-refresh">Refresh</button>
+            </div>
           </div>
-          <label for="rooms-log">Log tail</label>
-          <pre id="rooms-log" class="log" aria-live="polite"></pre>
+          <details id="rooms-admin" class="rooms-admin">
+            <summary>Room admin (id, title, members)</summary>
+            <label for="room-id">Id</label>
+            <input id="room-id" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="standup" />
+            <label for="room-title">Title</label>
+            <input id="room-title" type="text" maxlength="120" autocomplete="off" />
+            <label for="room-members">Members (profile ids, comma-separated)</label>
+            <input id="room-members" type="text" autocomplete="off" placeholder="default, sally" />
+            <div class="row">
+              <button type="button" class="btn" id="rooms-new">New</button>
+              <button type="button" class="btn" id="rooms-save">Save</button>
+              <button type="button" class="btn" id="rooms-delete">Delete</button>
+            </div>
+          </details>
           <p id="rooms-status" class="meta" aria-live="polite"></p>
           <p id="rooms-error" class="error" role="alert"></p>
         </section>
