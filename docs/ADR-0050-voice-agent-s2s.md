@@ -33,4 +33,5 @@ Bridging Softwake Hands into Voice Agent `function` tools is a future ADR.
 - Soul “personality” on voice is a truncated prompt, not the acting session.
 - Speaker echo can still confuse server VAD; AEC remains out of scope.
 - Assistant PCM playback requires a working stdin player: FFmpeg 8+ ffplay needs `-ch_layout mono` (not removed `-ac`).
+- First audible audio: the Voice Agent worker opens/writes/flushes PCM on the first `output_audio.delta` (not deferred to HUD status `pump`); players use low-latency stdin flags.
 - Speech speed lives on Providers (xAI); Softwake clamps Settings presets to the xAI API range 0.7–1.5 for TTS and `audio.output.speed`.

@@ -28,7 +28,8 @@ pub(crate) const VOICE_AGENT_S2S_ENV: &str = "SOFTWAKE_VOICE_AGENT_S2S";
 pub(crate) enum BridgeEvent {
     TranscriptDelta(String),
     TranscriptDone(String),
-    AudioDelta(Vec<u8>),
+    /// Worker opened/wrote assistant PCM (playback is in-thread; HUD only).
+    AudioPlaying,
     /// Assistant audio finished (`output_audio.done` / `response.done`).
     AudioDone,
     SpeechStarted,
@@ -57,7 +58,6 @@ pub(crate) struct VoiceAgentBridge {
     join: Option<JoinHandle<()>>,
     /// Accumulated assistant transcript for the current utterance.
     pub(crate) live_transcript: String,
-    player: Option<softwake_voice::PcmPipePlayer>,
     /// True after the first audio delta until audio/response done or barge cancel.
     response_active: bool,
 }
@@ -93,7 +93,6 @@ impl VoiceAgentBridge {
             event_rx,
             join: Some(join),
             live_transcript: String::new(),
-            player: None,
             response_active: false,
         })
     }
@@ -119,51 +118,26 @@ impl VoiceAgentBridge {
 
     /// Cancel in-flight assistant audio on the server and locally.
     pub(crate) fn cancel(&mut self) {
-        if self.response_active || self.player.is_some() {
-            let _ = self.cmd_tx.send(BridgeCmd::Cancel);
-        }
+        // Always nudge the worker: it owns the player and ignores idle cancels.
+        let _ = self.cmd_tx.send(BridgeCmd::Cancel);
         self.response_active = false;
-        if let Some(player) = self.player.take() {
-            player.abort();
-        }
         softwake_voice::interrupt_playback();
         softwake_voice::force_clear_input_mute();
         self.live_transcript.clear();
     }
 
-    /// Drain server events; play PCM; update transcript + HUD phase.
+    /// Drain server events; update transcript + HUD phase.
+    ///
+    /// Assistant PCM is opened/written on the Voice Agent worker as soon as the
+    /// first `output_audio.delta` arrives — not deferred to this HUD poll pump.
     pub(crate) fn pump(&mut self) -> (Option<String>, Option<VaHudPhase>) {
         let mut note = None;
         let mut phase = None;
         loop {
             match self.event_rx.try_recv() {
-                Ok(BridgeEvent::AudioDelta(bytes)) => {
+                Ok(BridgeEvent::AudioPlaying) => {
                     self.response_active = true;
-                    if self.player.is_none() {
-                        match softwake_voice::play_pcm_pipe_start(
-                            softwake_providers::VOICE_AGENT_OUTPUT_RATE_HZ,
-                            softwake_voice::PLAYBACK_TIMEOUT,
-                            false, // do not kill unrelated players mid-stream chunk
-                            false, // keep mic open for server_vad barge
-                        ) {
-                            Ok(player) => {
-                                self.player = Some(player);
-                                phase = Some(VaHudPhase::Speaking);
-                            }
-                            Err(error) => note = Some(error),
-                        }
-                    }
-                    if let Some(player) = self.player.as_mut() {
-                        match player.write_chunk(&bytes) {
-                            Ok(()) => phase = Some(VaHudPhase::Speaking),
-                            Err(error) => {
-                                note = Some(error);
-                                if let Some(dead) = self.player.take() {
-                                    dead.abort();
-                                }
-                            }
-                        }
-                    }
+                    phase = Some(VaHudPhase::Speaking);
                 }
                 Ok(BridgeEvent::TranscriptDelta(delta)) => {
                     self.live_transcript.push_str(&delta);
@@ -174,34 +148,16 @@ impl VoiceAgentBridge {
                         self.live_transcript = text;
                     }
                     note = Some(self.live_transcript.clone());
-                    // Close stdin so ffplay/mpv can drain; Listening once utterance ends.
-                    if let Some(player) = self.player.take() {
-                        player.finish();
-                    }
                     self.response_active = false;
                     phase = Some(VaHudPhase::Listening);
                 }
                 Ok(BridgeEvent::AudioDone) => {
                     self.response_active = false;
-                    if let Some(player) = self.player.take() {
-                        player.finish();
-                    }
                     phase = Some(VaHudPhase::Listening);
                 }
                 Ok(BridgeEvent::SpeechStarted) => {
-                    // Server VAD barge: cut local playback immediately.
-                    let had_playback = if let Some(player) = self.player.take() {
-                        player.abort();
-                        true
-                    } else {
-                        softwake_voice::interrupt_playback();
-                        false
-                    };
+                    // Worker already aborted local PCM + cancelled the response.
                     self.live_transcript.clear();
-                    // Only cancel when the server likely has an in-flight response.
-                    if self.response_active || had_playback {
-                        let _ = self.cmd_tx.send(BridgeCmd::Cancel);
-                    }
                     self.response_active = false;
                     note = Some("listening…".to_owned());
                     phase = Some(VaHudPhase::Listening);
@@ -211,25 +167,16 @@ impl VoiceAgentBridge {
                     if !is_idle_cancel_error(&message) {
                         note = Some(format!("Voice Agent: {message}"));
                         self.response_active = false;
-                        if let Some(player) = self.player.take() {
-                            player.abort();
-                        }
                     }
                 }
                 Ok(BridgeEvent::Stopped) => {
                     self.response_active = false;
-                    if let Some(player) = self.player.take() {
-                        player.abort();
-                    }
                     note = Some("Voice Agent session ended".to_owned());
                     phase = Some(VaHudPhase::Listening);
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     self.response_active = false;
-                    if let Some(player) = self.player.take() {
-                        player.abort();
-                    }
                     note = Some("Voice Agent session ended".to_owned());
                     phase = Some(VaHudPhase::Listening);
                     break;
@@ -244,12 +191,10 @@ impl VoiceAgentBridge {
         self.join.as_ref().is_some_and(|join| !join.is_finished())
     }
 
-    /// Shut down the worker and local player.
+    /// Shut down the worker (it aborts any in-thread player).
     pub(crate) fn stop(mut self) {
         let _ = self.cmd_tx.send(BridgeCmd::Stop);
-        if let Some(player) = self.player.take() {
-            player.abort();
-        }
+        softwake_voice::interrupt_playback();
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
@@ -259,9 +204,7 @@ impl VoiceAgentBridge {
 impl Drop for VoiceAgentBridge {
     fn drop(&mut self) {
         let _ = self.cmd_tx.send(BridgeCmd::Stop);
-        if let Some(player) = self.player.take() {
-            player.abort();
-        }
+        softwake_voice::interrupt_playback();
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
@@ -359,12 +302,18 @@ fn worker_loop(
         return;
     }
 
+    // Play on this thread as soon as the first output_audio.delta arrives —
+    // do not wait for HUD GetStatus → pump() (often 900ms).
+    let mut player: Option<softwake_voice::PcmPipePlayer> = None;
+    let mut response_active = false;
+
     loop {
         // Pump outbound PCM / control first.
         loop {
             match cmd_rx.try_recv() {
                 Ok(BridgeCmd::Pcm(samples)) => {
                     if session.append_pcm16(&samples).is_err() {
+                        abort_va_player(&mut player);
                         let _ = event_tx.send(BridgeEvent::Error(
                             "Voice Agent audio upload failed".to_owned(),
                         ));
@@ -375,15 +324,19 @@ fn worker_loop(
                 }
                 Ok(BridgeCmd::Cancel) => {
                     session.cancel_response();
+                    abort_va_player(&mut player);
+                    response_active = false;
                 }
                 Ok(BridgeCmd::Stop) => {
                     session.cancel_response();
+                    abort_va_player(&mut player);
                     session.close();
                     let _ = event_tx.send(BridgeEvent::Stopped);
                     return;
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
+                    abort_va_player(&mut player);
                     session.close();
                     let _ = event_tx.send(BridgeEvent::Stopped);
                     return;
@@ -397,21 +350,47 @@ fn worker_loop(
                 thread::sleep(Duration::from_millis(5));
             }
             Ok(Some(VoiceAgentEvent::OutputAudioDelta(bytes))) => {
-                let _ = event_tx.send(BridgeEvent::AudioDelta(bytes));
+                let first_chunk = player.is_none();
+                response_active = true;
+                match write_va_audio(&mut player, &bytes) {
+                    Ok(()) => {
+                        // One HUD speaking nudge per utterance — PCM already playing.
+                        if first_chunk {
+                            let _ = event_tx.send(BridgeEvent::AudioPlaying);
+                        }
+                    }
+                    Err(error) => {
+                        let _ = event_tx.send(BridgeEvent::Error(error));
+                    }
+                }
             }
             Ok(Some(VoiceAgentEvent::TranscriptDelta(text))) => {
                 let _ = event_tx.send(BridgeEvent::TranscriptDelta(text));
             }
             Ok(Some(VoiceAgentEvent::TranscriptDone(text))) => {
+                finish_va_player(&mut player);
+                response_active = false;
                 let _ = event_tx.send(BridgeEvent::TranscriptDone(text));
             }
             Ok(Some(VoiceAgentEvent::SpeechStarted)) => {
+                let had = response_active || player.is_some();
+                abort_va_player(&mut player);
+                if had {
+                    session.cancel_response();
+                }
+                response_active = false;
                 let _ = event_tx.send(BridgeEvent::SpeechStarted);
             }
             Ok(Some(VoiceAgentEvent::Error(message))) => {
+                if !is_idle_cancel_error(&message) {
+                    abort_va_player(&mut player);
+                    response_active = false;
+                }
                 let _ = event_tx.send(BridgeEvent::Error(message));
             }
             Ok(Some(VoiceAgentEvent::OutputAudioDone | VoiceAgentEvent::ResponseDone)) => {
+                finish_va_player(&mut player);
+                response_active = false;
                 let _ = event_tx.send(BridgeEvent::AudioDone);
             }
             Ok(Some(
@@ -420,10 +399,52 @@ fn worker_loop(
                 | VoiceAgentEvent::Ignored,
             )) => {}
             Err(_) => {
+                abort_va_player(&mut player);
                 let _ = event_tx.send(BridgeEvent::Error("Voice Agent socket closed".to_owned()));
                 let _ = event_tx.send(BridgeEvent::Stopped);
                 return;
             }
+        }
+    }
+}
+
+#[cfg(feature = "live-http")]
+fn abort_va_player(player: &mut Option<softwake_voice::PcmPipePlayer>) {
+    if let Some(player) = player.take() {
+        player.abort();
+    }
+}
+
+#[cfg(feature = "live-http")]
+fn finish_va_player(player: &mut Option<softwake_voice::PcmPipePlayer>) {
+    if let Some(player) = player.take() {
+        player.finish();
+    }
+}
+
+/// Open the PCM pipe on the first delta; write + flush every chunk.
+#[cfg(feature = "live-http")]
+fn write_va_audio(
+    player: &mut Option<softwake_voice::PcmPipePlayer>,
+    bytes: &[u8],
+) -> Result<(), String> {
+    if player.is_none() {
+        let started = softwake_voice::play_pcm_pipe_start(
+            softwake_providers::VOICE_AGENT_OUTPUT_RATE_HZ,
+            softwake_voice::PLAYBACK_TIMEOUT,
+            false, // do not kill unrelated players mid-stream chunk
+            false, // keep mic open for server_vad barge
+        )?;
+        *player = Some(started);
+    }
+    let Some(active) = player.as_mut() else {
+        return Ok(());
+    };
+    match active.write_chunk(bytes) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            abort_va_player(player);
+            Err(error)
         }
     }
 }

@@ -474,6 +474,7 @@ impl Mp3PipePlayer {
         }
         self.stdin
             .write_all(bytes)
+            .and_then(|()| self.stdin.flush())
             .map_err(|error| format!("could not stream speech audio: {error}"))
     }
 
@@ -654,6 +655,7 @@ impl PcmPipePlayer {
         }
         self.stdin
             .write_all(bytes)
+            .and_then(|()| self.stdin.flush())
             .map_err(|error| format!("could not stream voice audio: {error}"))
     }
 
@@ -701,46 +703,46 @@ impl PcmPipePlayer {
 fn pcm_pipe_player_commands(rate: &str) -> Vec<(&'static str, Vec<String>)> {
     // FFmpeg 8 removed `-ac` from ffplay ("Option not found" → exit 1). Prefer
     // `-ch_layout mono`; keep a legacy `-ac 1` attempt for older builds.
+    // Low-latency flags: Voice Agent deltas are small; default probesize/buffer
+    // made audible start wait for several HUD status polls.
+    let ffplay_low_latency = |channel_args: &[(&str, &str)]| -> Vec<String> {
+        let mut args = vec![
+            "-nodisp".to_owned(),
+            "-autoexit".to_owned(),
+            "-loglevel".to_owned(),
+            "quiet".to_owned(),
+            "-fflags".to_owned(),
+            "nobuffer".to_owned(),
+            "-flags".to_owned(),
+            "low_delay".to_owned(),
+            "-probesize".to_owned(),
+            "32".to_owned(),
+            "-analyzeduration".to_owned(),
+            "0".to_owned(),
+            "-infbuf".to_owned(),
+            "-f".to_owned(),
+            "s16le".to_owned(),
+            "-ar".to_owned(),
+            rate.to_owned(),
+        ];
+        for &(flag, value) in channel_args {
+            args.push(flag.to_owned());
+            args.push(value.to_owned());
+        }
+        args.push("-i".to_owned());
+        args.push("pipe:0".to_owned());
+        args
+    };
     vec![
-        (
-            "ffplay",
-            vec![
-                "-nodisp".to_owned(),
-                "-autoexit".to_owned(),
-                "-loglevel".to_owned(),
-                "quiet".to_owned(),
-                "-f".to_owned(),
-                "s16le".to_owned(),
-                "-ar".to_owned(),
-                rate.to_owned(),
-                "-ch_layout".to_owned(),
-                "mono".to_owned(),
-                "-i".to_owned(),
-                "pipe:0".to_owned(),
-            ],
-        ),
-        (
-            "ffplay",
-            vec![
-                "-nodisp".to_owned(),
-                "-autoexit".to_owned(),
-                "-loglevel".to_owned(),
-                "quiet".to_owned(),
-                "-f".to_owned(),
-                "s16le".to_owned(),
-                "-ar".to_owned(),
-                rate.to_owned(),
-                "-ac".to_owned(),
-                "1".to_owned(),
-                "-i".to_owned(),
-                "pipe:0".to_owned(),
-            ],
-        ),
+        ("ffplay", ffplay_low_latency(&[("-ch_layout", "mono")])),
+        ("ffplay", ffplay_low_latency(&[("-ac", "1")])),
         (
             "mpv",
             vec![
                 "--no-video".to_owned(),
                 "--really-quiet".to_owned(),
+                "--cache=no".to_owned(),
+                "--audio-buffer=0".to_owned(),
                 "--demuxer=rawaudio".to_owned(),
                 format!("--demuxer-rawaudio-rate={rate}"),
                 "--demuxer-rawaudio-format=s16le".to_owned(),
@@ -787,6 +789,19 @@ mod tests {
                 .windows(2)
                 .any(|w| w[0] == "-ac" && w[1] == "1"),
             "legacy -ac fallback missing"
+        );
+        assert!(
+            commands[0]
+                .1
+                .windows(2)
+                .any(|w| w[0] == "-fflags" && w[1] == "nobuffer"),
+            "first-audio needs -fflags nobuffer; got {:?}",
+            commands[0].1
+        );
+        assert!(
+            commands[2].1.iter().any(|a| a == "--cache=no"),
+            "mpv should disable cache for first-audio; got {:?}",
+            commands[2].1
         );
     }
 
