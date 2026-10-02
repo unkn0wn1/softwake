@@ -4,6 +4,11 @@
 
 ### Added
 
+- **Voice Agent continuous S2S (opt-in)** — Settings → General / `softwake.json` `voice_agent_s2s` / `softwaked ctl voice-agent on|off`. Streams mic PCM to xAI `wss://…/v1/realtime` and plays PCM replies with server VAD barge-in ([ADR 0050](docs/ADR-0050-voice-agent-s2s.md)). Softwake Hands stay on text ask. Default off.
+
+
+### Added
+
 - **Soft duplex barge-in** while Eve speaks: elevated mic energy cancels TTS + ask and returns to listen (not AEC; ADR-0049).
 - **Streaming TTS** via xAI WebSocket (`audio.delta` → ffplay/mpv stdin) for lower time-to-first-audio; unary `POST /v1/tts` fallback.
 - CancelAsk / Escape **stops voice instantly** (interrupt player + clear mute).

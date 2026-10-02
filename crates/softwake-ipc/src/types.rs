@@ -413,6 +413,12 @@ pub struct Status {
     /// Additive on protocol generation 1. Older peers omit it. Default off.
     #[serde(default, skip_serializing_if = "is_false")]
     pub voice_test: bool,
+    /// Opt-in xAI Voice Agent continuous S2S mode (settings/env). Additive on protocol 1.
+    ///
+    /// When true and awake with live-http + xAI, mic PCM streams to realtime and
+    /// assistant audio plays locally. Softwake Hands remain on the text ask path.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub voice_agent_s2s: bool,
     /// Operator muted the mic (HUD toggle). Text ask still works; KWS/PTT/free-speech off.
     ///
     /// Additive on protocol generation 1. Older peers omit it. Default off.
@@ -714,6 +720,12 @@ pub enum ClientMessage {
         /// Client-chosen id. The daemon echoes it and does not interpret it.
         id: u64,
     },
+    /// Re-read `voice_agent_s2s` from softwake.json / env and start or stop the
+    /// Voice Agent session when awake. Additive on protocol generation 1.
+    ReloadVoiceAgent {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+    },
     /// Seed the open awake session with prior HUD turns (oldest-first).
     ///
     /// No-op when the session already has messages (daemon plaintext seed or a
@@ -813,6 +825,7 @@ mod tests {
             context_compacted: false,
             context_compact_at: None,
             voice_test: false,
+            voice_agent_s2s: false,
             mic_muted: false,
             phase: None,
             build: None,
@@ -1059,6 +1072,8 @@ mod tests {
         let reload_utterance_json = serde_json::to_string(&reload_utterance).expect("encode");
         assert!(reload_utterance_json.contains("\"type\":\"reload_utterance\""));
         let reload_playback = ClientMessage::ReloadPlayback { id: 17 };
+        let reload_voice = ClientMessage::ReloadVoiceAgent { id: 18 };
+        assert_round_trip(&reload_voice);
         let seed = ClientMessage::SeedChat {
             id: 18,
             turns: vec![super::SeedChatTurn {
@@ -1136,6 +1151,7 @@ mod tests {
             context_compacted: false,
             context_compact_at: None,
             voice_test: false,
+            voice_agent_s2s: false,
             mic_muted: false,
             phase: None,
             build: None,
@@ -1192,6 +1208,7 @@ mod tests {
             context_compacted: false,
             context_compact_at: None,
             voice_test: false,
+            voice_agent_s2s: false,
             mic_muted: false,
             phase: None,
             build: None,
@@ -1217,6 +1234,7 @@ mod tests {
             context_compacted: false,
             context_compact_at: None,
             voice_test: false,
+            voice_agent_s2s: false,
             mic_muted: false,
             phase: None,
             build: None,
@@ -1249,6 +1267,7 @@ mod tests {
             context_compacted: false,
             context_compact_at: None,
             voice_test: false,
+            voice_agent_s2s: false,
             mic_muted: false,
             phase: None,
             build: None,
@@ -1275,6 +1294,7 @@ mod tests {
             context_compacted: false,
             context_compact_at: None,
             voice_test: false,
+            voice_agent_s2s: false,
             mic_muted: false,
             phase: None,
             build: None,

@@ -215,6 +215,7 @@ mod tests {
                     context_compacted: false,
                     context_compact_at: None,
                     voice_test: false,
+                    voice_agent_s2s: false,
                     mic_muted: false,
                     phase: None,
                     build: None,

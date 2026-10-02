@@ -92,6 +92,8 @@
     "allow-kws-thresholds-set",
     "allow-free-speech-silence-snapshot",
     "allow-free-speech-silence-set",
+    "allow-voice-agent-s2s-snapshot",
+    "allow-voice-agent-s2s-set",
     "allow-tts-playback-timeout-snapshot",
     "allow-tts-playback-timeout-set",
     {

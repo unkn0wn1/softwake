@@ -28,6 +28,7 @@ mod settings;
 mod transport;
 mod tts_stream;
 mod voice;
+mod voice_agent;
 
 #[cfg(feature = "live-http")]
 pub mod live;
@@ -112,4 +113,12 @@ pub use tts_stream::{is_audio_done_event, parse_tts_stream_event, tts_stream_url
 pub use voice::{
     TTS_MAX_CHARS, VOICE_LANGUAGE, VoiceHttpError, family_speaks_xai, resolve_stt_model,
     resolve_tts_voice, stt_transcribe, tts_synthesize, tts_voice_roster, wav_from_pcm16,
+};
+#[cfg(feature = "live-http")]
+pub use voice_agent::VoiceAgentSession;
+pub use voice_agent::{
+    VOICE_AGENT_INPUT_RATE_HZ, VOICE_AGENT_INSTRUCTIONS_MAX_CHARS, VOICE_AGENT_MODEL_DEFAULT,
+    VOICE_AGENT_OUTPUT_RATE_HZ, VoiceAgentEvent, clip_voice_agent_instructions,
+    parse_voice_agent_event, pcm16_le_bytes, voice_agent_append_pcm_json, voice_agent_cancel_json,
+    voice_agent_realtime_url, voice_agent_session_update_json,
 };

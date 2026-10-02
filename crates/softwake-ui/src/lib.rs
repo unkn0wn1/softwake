@@ -28,6 +28,7 @@ mod tray;
 mod ui_prefs;
 mod ui_vault;
 mod utterance_prefs;
+mod voice_agent_prefs;
 
 use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
@@ -144,6 +145,8 @@ pub fn run() {
             kws_prefs::kws_thresholds_set,
             utterance_prefs::free_speech_silence_snapshot,
             utterance_prefs::free_speech_silence_set,
+            voice_agent_prefs::voice_agent_s2s_snapshot,
+            voice_agent_prefs::voice_agent_s2s_set,
             playback_prefs::tts_playback_timeout_snapshot,
             playback_prefs::tts_playback_timeout_set,
         ])
@@ -554,6 +557,8 @@ mod tests {
         "kws_thresholds_set",
         "free_speech_silence_snapshot",
         "free_speech_silence_set",
+        "voice_agent_s2s_snapshot",
+        "voice_agent_s2s_set",
         "tts_playback_timeout_snapshot",
         "tts_playback_timeout_set",
     ];
@@ -634,6 +639,8 @@ mod tests {
         "allow-kws-thresholds-set",
         "allow-free-speech-silence-snapshot",
         "allow-free-speech-silence-set",
+        "allow-voice-agent-s2s-snapshot",
+        "allow-voice-agent-s2s-set",
         "allow-tts-playback-timeout-snapshot",
         "allow-tts-playback-timeout-set",
     ];

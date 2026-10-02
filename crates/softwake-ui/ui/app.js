@@ -1604,6 +1604,56 @@ if (voiceTestBox) {
   });
 }
 
+const voiceAgentS2sBox = document.querySelector("#voice-agent-s2s");
+const voiceAgentS2sStatus = document.querySelector("#voice-agent-s2s-status");
+const voiceAgentS2sError = document.querySelector("#voice-agent-s2s-error");
+let voiceAgentS2sEditing = false;
+
+function showVoiceAgentS2sError(error) {
+  if (!voiceAgentS2sError) return;
+  voiceAgentS2sError.textContent =
+    typeof error === "string" ? error : error && error.message ? error.message : "request failed";
+}
+
+function applyVoiceAgentS2sSnapshot(snap) {
+  if (voiceAgentS2sBox && snap && typeof snap.enabled === "boolean" && !voiceAgentS2sEditing) {
+    voiceAgentS2sBox.checked = !!snap.enabled;
+  }
+  if (voiceAgentS2sStatus) {
+    voiceAgentS2sStatus.textContent = (snap && snap.message) || "";
+  }
+}
+
+async function refreshVoiceAgentS2s() {
+  if (!voiceAgentS2sBox) return;
+  try {
+    if (voiceAgentS2sError) voiceAgentS2sError.textContent = "";
+    const snap = await invoke("voice_agent_s2s_snapshot");
+    applyVoiceAgentS2sSnapshot(snap);
+  } catch (error) {
+    showVoiceAgentS2sError(error);
+  }
+}
+
+if (voiceAgentS2sBox) {
+  voiceAgentS2sBox.addEventListener("change", async () => {
+    const enabled = voiceAgentS2sBox.checked;
+    voiceAgentS2sEditing = true;
+    try {
+      if (voiceAgentS2sError) voiceAgentS2sError.textContent = "";
+      const snap = await invoke("voice_agent_s2s_set", { enabled });
+      voiceAgentS2sEditing = false;
+      applyVoiceAgentS2sSnapshot(snap);
+    } catch (error) {
+      voiceAgentS2sEditing = false;
+      showVoiceAgentS2sError(error);
+      refreshVoiceAgentS2s();
+    }
+  });
+  refreshVoiceAgentS2s();
+}
+
+
 function showUiPrefsError(error) {
   if (!uiPrefsError) return;
   uiPrefsError.textContent =

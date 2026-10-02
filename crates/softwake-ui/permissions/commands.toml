@@ -299,6 +299,18 @@ identifier = "allow-free-speech-silence-set"
 description = "Save free-speech end-of-utterance silence and apply it live to the daemon."
 commands.allow = ["free_speech_silence_set"]
 
+
+[[permission]]
+identifier = "allow-voice-agent-s2s-snapshot"
+description = "Read whether Voice Agent continuous S2S is enabled."
+commands.allow = ["voice_agent_s2s_snapshot"]
+
+[[permission]]
+identifier = "allow-voice-agent-s2s-set"
+description = "Enable or disable Voice Agent continuous S2S and reload the daemon."
+commands.allow = ["voice_agent_s2s_set"]
+
+
 [[permission]]
 identifier = "allow-tts-playback-timeout-snapshot"
 description = "Read the TTS playback reaper deadline for Settings General."
