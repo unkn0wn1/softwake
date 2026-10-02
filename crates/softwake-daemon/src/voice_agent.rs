@@ -8,8 +8,9 @@
     dead_code,
     reason = "Voice Agent bridge is exercised under live-http; default CI builds keep the types"
 )]
-use std::sync::mpsc::{Receiver, Sender, TryRecvError};
-use std::thread::JoinHandle;
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use softwake_soul::{load_app_config, resolve_config_dir};
 
