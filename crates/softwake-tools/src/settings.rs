@@ -163,7 +163,10 @@ pub fn default_permission(name: &str) -> Option<ToolPermission> {
         | crate::SOFTWAKE_HIBERNATE_TOOL
         | crate::SOFTWAKE_RESUME_TOOL
         | crate::SOFTWAKE_NEW_SESSION_TOOL
-        | crate::SOFTWAKE_REFRESH_TOOL => Some(ToolPermission::Ask),
+        | crate::SOFTWAKE_REFRESH_TOOL
+        | crate::SOFTWARE_INSTALL_TOOL
+        | crate::AGENT_MESSAGE_TOOL
+        | crate::GOAL_RUN_TOOL => Some(ToolPermission::Ask),
         crate::SHELL_TOOL => Some(ToolPermission::Deny),
         _ => None,
     }

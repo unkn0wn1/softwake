@@ -85,6 +85,17 @@ Tagged builds (`v*`) publish:
 
 Each package includes both `softwaked` and `softwake-ui`. See [docs/releases.md](docs/releases.md) for download, install, the OS feature matrix, and how to cut a tag. Design: [ADR 0019](docs/ADR-0019-multiplatform-releases.md).
 
+
+## Agent team / local power
+
+Softwake profiles can act as a small local team ([ADR 0052](docs/ADR-0052-agent-team-local-power.md)):
+
+- Each profile has an **agent home** under `$XDG_DATA_HOME/softwake/homes/<profile_id>/` (else `~/.local/share/softwake/homes/<profile_id>/`). Confirmed `shell` runs with that directory as cwd and `HOME`.
+- **Allow all** (per profile) turns Ask tools into Always allow for that profile; `software_install` still asks unless that tool is Always allow.
+- **Rooms** (Settings → Rooms): pick member profiles; Softwake applies a short cool-down so agents do not pile on. Progress from `goal_run` and peer DM appends to the room log.
+- **Peer DM** (`agent_message`): message another profile; Softwake wakes it for a oneshot reply without stealing the HUD active profile.
+- **`goal_run`**: first-class goal + acceptance loop (plan → execute → verify) with iteration caps and logged progress. Coding profiles may use a local `grok` CLI backend when available.
+
 ## Cargo features
 
 | Crate | Feature | Default | What it compiles |

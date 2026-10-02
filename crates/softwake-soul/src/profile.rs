@@ -145,12 +145,25 @@ fn default_use_global() -> bool {
     true
 }
 
+fn default_profile_role() -> String {
+    "general".to_owned()
+}
+
+/// Profile role: general assistant.
+pub const PROFILE_ROLE_GENERAL: &str = "general";
+/// Profile role: coding agent (prefer `grok_cli` for `goal_run`).
+pub const PROFILE_ROLE_CODING: &str = "coding";
+
 /// Metadata for one profile (agent name plus global-doc inheritance).
 ///
 /// `use_global_*` defaults **true**. The main profile (`default`, or the
 /// first id when that folder is missing) always renders its own files; the
 /// flags cannot create a cycle. See ADR-0051.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "wire flags for Settings checkboxes; ADR-0051/0052"
+)]
 pub struct ProfileMeta {
     /// Stable folder id under `profiles/`.
     pub id: String,
@@ -165,6 +178,13 @@ pub struct ProfileMeta {
     /// When true, and this profile is not main, render main `rules.md`.
     #[serde(default = "default_use_global")]
     pub use_global_rules: bool,
+    /// When true, Ask-floor tools run as Always allow for this profile (ADR-0052).
+    /// Does not lift registry Deny. Does not auto-approve `software_install`.
+    #[serde(default)]
+    pub allow_all: bool,
+    /// Agent role: `general` (default) or `coding` (prefer `grok_cli` goal backend).
+    #[serde(default = "default_profile_role")]
+    pub role: String,
 }
 
 impl ProfileMeta {
@@ -182,7 +202,15 @@ impl ProfileMeta {
             use_global_user: true,
             use_global_glossary: true,
             use_global_rules: true,
+            allow_all: false,
+            role: default_profile_role(),
         }
+    }
+
+    /// Whether this profile prefers the coding / `grok_cli` goal backend.
+    #[must_use]
+    pub fn is_coding(&self) -> bool {
+        self.role.trim().eq_ignore_ascii_case(PROFILE_ROLE_CODING)
     }
 }
 
@@ -640,14 +668,67 @@ pub fn rename_profile(
     Ok(meta)
 }
 
-/// Create a new profile with a unique id, optional template pack files.
-///
-/// `templates` is a directory containing the four markdown files (repo `soul/`).
-/// When `None`, only `profile.json` is written.
+/// Set `allow_all` on an existing profile (ADR-0052).
 ///
 /// # Errors
 ///
-/// I/O failures.
+/// Unknown profile or write failure.
+pub fn set_allow_all(
+    config_dir: &Path,
+    profile_id: &str,
+    allow_all: bool,
+) -> Result<ProfileMeta, SoulError> {
+    ensure_migrated(config_dir)?;
+    let dir = profile_pack_dir(config_dir, profile_id);
+    if !dir.is_dir() {
+        return Err(SoulError::UnknownProfile {
+            id: profile_id.to_owned(),
+        });
+    }
+    let mut meta = load_profile_meta(&dir);
+    profile_id.clone_into(&mut meta.id);
+    meta.allow_all = allow_all;
+    write_profile_meta(&dir, &meta)?;
+    Ok(meta)
+}
+
+/// Set profile `role` (`general` or `coding`). Unknown spellings become `general`.
+///
+/// # Errors
+///
+/// Unknown profile or write failure.
+pub fn set_profile_role(
+    config_dir: &Path,
+    profile_id: &str,
+    role: &str,
+) -> Result<ProfileMeta, SoulError> {
+    ensure_migrated(config_dir)?;
+    let dir = profile_pack_dir(config_dir, profile_id);
+    if !dir.is_dir() {
+        return Err(SoulError::UnknownProfile {
+            id: profile_id.to_owned(),
+        });
+    }
+    let mut meta = load_profile_meta(&dir);
+    profile_id.clone_into(&mut meta.id);
+    let trimmed = role.trim();
+    meta.role = if trimmed.eq_ignore_ascii_case(PROFILE_ROLE_CODING) {
+        PROFILE_ROLE_CODING.to_owned()
+    } else {
+        PROFILE_ROLE_GENERAL.to_owned()
+    };
+    write_profile_meta(&dir, &meta)?;
+    Ok(meta)
+}
+
+/// Create a new profile with a unique id, optional template pack files.
+///
+/// `templates` is a directory containing the four markdown files (repo `soul/`).
+/// When `None`, a starter pack is written.
+///
+/// # Errors
+///
+/// I/O failures or id allocation failure.
 pub fn create_profile(
     config_dir: &Path,
     name: &str,
@@ -664,6 +745,8 @@ pub fn create_profile(
     }
     let meta = ProfileMeta::new(&id, name);
     write_profile_meta(&dir, &meta)?;
+    // Best-effort agent home (ADR-0052). Pack create still succeeds if data dir unset.
+    let _ = crate::home::ensure_profile_home(&id);
     Ok(meta)
 }
 

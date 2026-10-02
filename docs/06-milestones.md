@@ -75,12 +75,24 @@
    - [x] Optional press-to-talk and listen-while-awake (energy VAD): mic PCM to xAI `/v1/stt`, existing ask, xAI `/v1/tts` voice `eve`; TTS playback is spawn-and-return ([ADR 0007](ADR-0007-awake-stt-tts.md)). Mocks and offline CI stay the default. `live-http` is required for the cloud calls.
 
 
+
+
+## Agent team / local power ([ADR-0052](ADR-0052-agent-team-local-power.md))
+
+- [x] Per-agent homes under `$XDG_DATA_HOME/softwake/homes/<id>/` (else `~/.local/share/softwake/homes/<id>/`); shell cwd/HOME pin
+- [x] Profile `allow_all` + `role` (`general`|`coding`); Settings Profiles controls
+- [x] `software_install` tool + shell-install heuristic (allow_all does not auto-approve installs)
+- [x] Rooms store + log + cool-down; Settings → Rooms
+- [x] Peer DM `agent_message` wakes target profile (oneshot; no active_profile steal)
+- [x] Schedule `agent_task` uses schedule `profile_id` soul/home
+- [x] First-class `goal_run` outer loop (goal + acceptance, caps, progress log; softwake / grok_cli backends)
+
 ## Deferred ideas (do not pull into phase 1)
 
 - Skills hub ([ADR 0014](ADR-0014-skills-hub.md)): Settings Skills page + on-disk Markdown + confirm-gated `skill_save` shipped. Authenticated webhook wake shipped ([ADR 0038](ADR-0038-webhook-wake.md)). Opt-in refine loop remains later.
 - Meeting memory / transcript integration (separate product track; may feed Softwake later)
-- Boring coding-agent harness (separate repo)
-- Multi-conductor / named worker routing (out of scope for Softwake)
+- Boring coding-agent harness (separate repo) — Softwake `goal_run` + optional local `grok` CLI covers in-app coding loops ([ADR-0052](ADR-0052-agent-team-local-power.md)); a separate harness remains optional
+- Multi-conductor / named worker routing beyond rooms / peer DM / goal_run (ADR-0052 covers the team surface)
 
 ## Tools Settings + gated shell ([ADR-0018](ADR-0018-tools-settings-shell.md))
 

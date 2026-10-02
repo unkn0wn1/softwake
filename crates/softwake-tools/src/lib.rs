@@ -13,17 +13,22 @@
 //! Tools Settings choose always allow, ask, or deny. The daemon expands glossary
 //! aliases, then may spawn `/bin/sh -c` via [`shell`]. This crate still does not spawn on invoke.
 
+mod agent_message;
+mod allow_all;
 mod calendar_write;
 mod chat_schema;
 mod cloud_read;
+mod goal;
 mod mcp_config;
 mod messengers;
 mod remote_agent_install;
 mod remote_agents;
+mod rooms;
 mod schedule;
 mod settings;
 mod shell;
 mod softwake_ctl;
+mod software_install;
 
 pub use calendar_write::{
     CalendarCreateArgs, CalendarDeleteArgs, CalendarUpdateArgs, parse_calendar_create_args,
@@ -74,13 +79,32 @@ pub use settings::{
     parse_confirm_policy, parse_tool_permission, resolve_tools_file, resolve_tools_file_from,
     tools_permissions_appendix,
 };
+
+pub use agent_message::{AGENT_MESSAGE_TOOL, AgentMessageArgs, parse_agent_message_args};
+pub use allow_all::grant_with_allow_all;
+pub use goal::{
+    GOAL_DEFAULT_MAX_ITERATIONS, GOAL_HARD_MAX_ITERATIONS, GOAL_RUN_TOOL, GoalBackend,
+    GoalProgressEvent, GoalRunArgs, GoalRunResult, GoalStopReason, acceptance_checks,
+    clamp_goal_iterations, format_goal_result, parse_goal_run_args, select_goal_backend,
+    softwake_plan_prompt, verify_acceptance,
+};
+pub use rooms::{
+    MAX_LOG_TAIL, MAX_ROOM_MEMBERS, MAX_ROOMS, ROOM_COOLDOWN_MS, RoomFile, RoomLogKind,
+    RoomLogLine, append_room_log, create_room, delete_room, list_rooms, load_room,
+    log_goal_progress, mark_room_turn, resolve_rooms_dir, resolve_rooms_state_dir,
+    room_cooldown_elapsed, room_file_path, save_room, tail_room_log, update_room,
+};
 pub use shell::{
     DEFAULT_OUTPUT_CAP, DEFAULT_SHELL_TIMEOUT, ShellError, ShellOutput, format_shell_output,
-    run_shell, run_shell_with,
+    run_shell, run_shell_in, run_shell_with,
 };
 pub use softwake_ctl::{
     SOFTWAKE_CTL_TOOLS, SoftwakeCtlEffect, is_softwake_ctl, parse_softwake_ctl,
     softwake_ctl_is_list,
+};
+pub use software_install::{
+    SOFTWARE_INSTALL_TOOL, format_install_output, grok_cli_available, looks_like_software_install,
+    parse_software_install_args, run_software_install,
 };
 
 /// Name of the safe tool. Behaviour matches phase 1.
@@ -289,7 +313,22 @@ const PHASE2: &[ToolMeta] = &[
     ToolMeta {
         name: SHELL_TOOL,
         risk: ToolRisk::Confirm,
-        description: "Run a shell command after confirm. Off until enabled in Tools Settings.",
+        description: "Run a shell command after confirm in the active profile agent home (ADR-0052). Off until enabled in Tools Settings.",
+    },
+    ToolMeta {
+        name: SOFTWARE_INSTALL_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Install software (apt/brew/cargo/npm -g/…). Always asks unless this tool is Always allow; profile allow_all does not auto-approve.",
+    },
+    ToolMeta {
+        name: AGENT_MESSAGE_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Message another Softwake profile and wake it to reply (peer DM). Optional room_id logs the exchange.",
+    },
+    ToolMeta {
+        name: GOAL_RUN_TOOL,
+        risk: ToolRisk::Confirm,
+        description: "Run Softwake goal loop: goal + acceptance, plan/execute/verify until happy or stop (caps, human gate, progress log). Backend softwake or grok_cli.",
     },
     ToolMeta {
         name: SKILL_SAVE_TOOL,
@@ -840,17 +879,17 @@ fn echo_detail(args: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CALENDAR_CREATE_TOOL, CALENDAR_DELETE_TOOL, CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL,
-        CALENDAR_UPDATE_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL, ECHO_TOOL,
-        EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, EmailSendArgs,
-        FORGET_TOOL, ForgetArgs, NOTIFY_TOOL, REMEMBER_TOOL, SCHEDULE_TOOL, SHELL_TOOL,
-        SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL, SOFTWAKE_HIBERNATE_TOOL,
-        SOFTWAKE_LIST_MODELS_TOOL, SOFTWAKE_LIST_PROFILES_TOOL, SOFTWAKE_LIST_REASONING_TOOL,
-        SOFTWAKE_LIST_VOICES_TOOL, SOFTWAKE_NEW_SESSION_TOOL, SOFTWAKE_REFRESH_TOOL,
-        SOFTWAKE_RESUME_TOOL, SOFTWAKE_SET_MODEL_TOOL, SOFTWAKE_SET_PROFILE_TOOL,
-        SOFTWAKE_SET_REASONING_TOOL, SOFTWAKE_SET_VOICE_TOOL, SOFTWAKE_SLEEP_TOOL,
-        SOFTWAKE_STATUS_TOOL, ToolError, ToolRegistry, ToolResult, ToolRisk, parse_email_send_args,
-        parse_forget_args, parse_remember_args,
+        AGENT_MESSAGE_TOOL, CALENDAR_CREATE_TOOL, CALENDAR_DELETE_TOOL, CALENDAR_GET_TOOL,
+        CALENDAR_LIST_TOOL, CALENDAR_UPDATE_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL,
+        DRIVE_SEARCH_TOOL, ECHO_TOOL, EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL,
+        EMAIL_SEND_TOOL, EmailSendArgs, FORGET_TOOL, ForgetArgs, GOAL_RUN_TOOL, NOTIFY_TOOL,
+        REMEMBER_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL,
+        SOFTWAKE_HIBERNATE_TOOL, SOFTWAKE_LIST_MODELS_TOOL, SOFTWAKE_LIST_PROFILES_TOOL,
+        SOFTWAKE_LIST_REASONING_TOOL, SOFTWAKE_LIST_VOICES_TOOL, SOFTWAKE_NEW_SESSION_TOOL,
+        SOFTWAKE_REFRESH_TOOL, SOFTWAKE_RESUME_TOOL, SOFTWAKE_SET_MODEL_TOOL,
+        SOFTWAKE_SET_PROFILE_TOOL, SOFTWAKE_SET_REASONING_TOOL, SOFTWAKE_SET_VOICE_TOOL,
+        SOFTWAKE_SLEEP_TOOL, SOFTWAKE_STATUS_TOOL, SOFTWARE_INSTALL_TOOL, ToolError, ToolRegistry,
+        ToolResult, ToolRisk, parse_email_send_args, parse_forget_args, parse_remember_args,
     };
 
     fn registry() -> ToolRegistry {
@@ -882,6 +921,9 @@ mod tests {
                 (DRIVE_SEARCH_TOOL, ToolRisk::Confirm),
                 (DRIVE_GET_TOOL, ToolRisk::Confirm),
                 (SHELL_TOOL, ToolRisk::Confirm),
+                (SOFTWARE_INSTALL_TOOL, ToolRisk::Confirm),
+                (AGENT_MESSAGE_TOOL, ToolRisk::Confirm),
+                (GOAL_RUN_TOOL, ToolRisk::Confirm),
                 (SKILL_SAVE_TOOL, ToolRisk::Confirm),
                 (SKILL_LIST_TOOL, ToolRisk::Confirm),
                 (SKILL_GET_TOOL, ToolRisk::Confirm),

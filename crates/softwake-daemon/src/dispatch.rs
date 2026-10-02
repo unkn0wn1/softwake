@@ -38,19 +38,23 @@ use softwake_skills::{
 use softwake_soul::Glossary;
 use softwake_state::{Machine, StateError, VoiceState};
 use softwake_tools::{
-    CALENDAR_CREATE_TOOL, CALENDAR_DELETE_TOOL, CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL,
-    CALENDAR_UPDATE_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL, EMAIL_GET_TOOL,
-    EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, FORGET_TOOL, FileToolsSettings,
-    ForgetArgs, NOTIFY_TOOL, REMEMBER_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL,
-    SKILL_LIST_TOOL, SKILL_SAVE_TOOL, ScheduleAction, SoftwakeCtlEffect, ToolError, ToolPermission,
-    ToolRegistry, ToolResult, ToolRisk, ToolsSettings, apply_action, format_shell_output,
-    invalid_args_message, is_softwake_ctl, load_schedules, now_ms, parse_calendar_create_args,
-    parse_calendar_delete_args, parse_calendar_get_args, parse_calendar_list_args,
-    parse_calendar_update_args, parse_drive_get_args, parse_drive_list_args,
-    parse_drive_search_args, parse_email_get_args, parse_email_list_args, parse_email_search_args,
-    parse_email_send_args, parse_forget_args, parse_remember_args, parse_schedule_args,
-    parse_skill_get_args, parse_skill_list_args, parse_skill_save_args, parse_softwake_ctl,
-    resolve_active_schedules_file, resolve_tools_file, run_shell, save_schedules,
+    AGENT_MESSAGE_TOOL, AgentMessageArgs, CALENDAR_CREATE_TOOL, CALENDAR_DELETE_TOOL,
+    CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL, CALENDAR_UPDATE_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL,
+    DRIVE_SEARCH_TOOL, EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL,
+    FORGET_TOOL, FileToolsSettings, ForgetArgs, GOAL_RUN_TOOL, GoalRunArgs, NOTIFY_TOOL,
+    REMEMBER_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL,
+    SOFTWARE_INSTALL_TOOL, ScheduleAction, SoftwakeCtlEffect, ToolError, ToolPermission,
+    ToolRegistry, ToolResult, ToolRisk, ToolsSettings, apply_action, format_install_output,
+    format_shell_output, grant_with_allow_all, invalid_args_message, is_softwake_ctl,
+    load_schedules, looks_like_software_install, now_ms, parse_agent_message_args,
+    parse_calendar_create_args, parse_calendar_delete_args, parse_calendar_get_args,
+    parse_calendar_list_args, parse_calendar_update_args, parse_drive_get_args,
+    parse_drive_list_args, parse_drive_search_args, parse_email_get_args, parse_email_list_args,
+    parse_email_search_args, parse_email_send_args, parse_forget_args, parse_goal_run_args,
+    parse_remember_args, parse_schedule_args, parse_skill_get_args, parse_skill_list_args,
+    parse_skill_save_args, parse_softwake_ctl, parse_software_install_args,
+    resolve_active_schedules_file, resolve_tools_file, run_shell_in, run_software_install,
+    save_schedules,
 };
 
 use crate::cloud_tools::{
@@ -269,6 +273,15 @@ struct Pending {
     description: String,
 }
 
+/// Staged agent-team side effect for Runtime to apply after Hands ran/confirmed (ADR-0052).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TeamEffect {
+    /// Peer DM wake.
+    AgentMessage(AgentMessageArgs),
+    /// Goal-oriented outer loop.
+    GoalRun(GoalRunArgs),
+}
+
 /// Policy engine, registries, one pending confirmation, the notification sink, the email outbox, and the tool log.
 #[derive(Debug)]
 pub(crate) struct Hands {
@@ -282,6 +295,12 @@ pub(crate) struct Hands {
     pending: Option<Pending>,
     /// Softwake ctl side effect staged by the last successful softwake_* run.
     ctl_effect: Option<SoftwakeCtlEffect>,
+    /// Peer DM / `goal_run` effect for Runtime (ADR-0052).
+    team_effect: Option<TeamEffect>,
+    /// Profile id for shell home pin + `allow_all` (ADR-0052).
+    acting_profile_id: Option<String>,
+    /// Cached `allow_all` for acting profile.
+    acting_allow_all: bool,
     sink: VecDeque<String>,
     log: VecDeque<ToolLogEntry>,
     next_seq: u64,
@@ -314,6 +333,9 @@ impl Hands {
             tools_settings_override: None,
             pending: None,
             ctl_effect: None,
+            team_effect: None,
+            acting_profile_id: None,
+            acting_allow_all: false,
             sink: VecDeque::new(),
             log: VecDeque::new(),
             next_seq: 0,
@@ -344,6 +366,29 @@ impl Hands {
     /// Take a Softwake ctl effect produced by the last softwake_* tool run.
     pub(crate) fn take_ctl_effect(&mut self) -> Option<SoftwakeCtlEffect> {
         self.ctl_effect.take()
+    }
+
+    /// Take a team effect (peer DM / `goal_run`) produced by the last tool run.
+    pub(crate) fn take_team_effect(&mut self) -> Option<TeamEffect> {
+        self.team_effect.take()
+    }
+
+    /// Set the acting profile for home pin + `allow_all` (ADR-0052).
+    pub(crate) fn set_acting_profile(&mut self, profile_id: Option<String>, allow_all: bool) {
+        self.acting_profile_id = profile_id;
+        self.acting_allow_all = allow_all;
+    }
+
+    /// Acting profile id when set.
+    #[must_use]
+    pub(crate) fn acting_profile_id(&self) -> Option<&str> {
+        self.acting_profile_id.as_deref()
+    }
+
+    /// Current `allow_all` latch (for restore after `oneshot_as_profile`).
+    #[must_use]
+    pub(crate) fn acting_allow_all_for_restore(&self) -> bool {
+        self.acting_allow_all
     }
 
     /// Override Tools Settings (tests). `None` restores disk loads.
@@ -625,6 +670,7 @@ impl Hands {
         } else {
             return PolicyDecision::Deny;
         };
+        let grant = grant_with_allow_all(self.acting_allow_all, name, grant);
         effective_tool_decision(
             policy_floor(risk),
             grant,
@@ -642,6 +688,22 @@ impl Hands {
     fn run_now(&mut self, name: &str, args: &[String]) -> Result<RequestOutcome, DispatchError> {
         if name == SHELL_TOOL {
             return self.run_shell_expanded(args, true);
+        }
+        if name == SOFTWARE_INSTALL_TOOL {
+            return self.run_software_install_expanded(args, true);
+        }
+        if name == AGENT_MESSAGE_TOOL || name == GOAL_RUN_TOOL {
+            let detail = self.stage_team_effect(name, args)?;
+            self.record(
+                name,
+                Some(ToolRisk::Safe),
+                ToolOutcome::Ran,
+                Some(detail.clone()),
+            );
+            return Ok(RequestOutcome::Ran(RanTool {
+                name: name.to_owned(),
+                detail,
+            }));
         }
         let detail = self.execute_registry(name, args)?;
         self.record(
@@ -674,6 +736,9 @@ impl Hands {
         }
         if name == SHELL_TOOL {
             return self.run_shell_expanded(args, false);
+        }
+        if name == SOFTWARE_INSTALL_TOOL {
+            return self.run_software_install_expanded(args, false);
         }
         if name == EMAIL_SEND_TOOL {
             if let Err(error) = parse_email_send_args(args) {
@@ -745,6 +810,10 @@ impl Hands {
             });
         }
         let echo = self.glossary.confirm_echo(&original);
+        if looks_like_software_install(&echo.expanded) {
+            // Route to software_install (allow_all does not auto-approve that tool).
+            return self.run_software_install_expanded(std::slice::from_ref(&echo.expanded), false);
+        }
         if !always_allow
             && self
                 .tools_settings()
@@ -828,6 +897,12 @@ impl Hands {
         }
         if name == SHELL_TOOL {
             return self.spawn_shell(&args.join(" "));
+        }
+        if name == SOFTWARE_INSTALL_TOOL {
+            return self.spawn_software_install(&args.join(" "));
+        }
+        if name == AGENT_MESSAGE_TOOL || name == GOAL_RUN_TOOL {
+            return self.stage_team_effect(name, args);
         }
         if name == SKILL_SAVE_TOOL {
             return self.save_skill_row(args);
@@ -1280,13 +1355,24 @@ impl Hands {
         }
     }
 
-    /// Spawn `/bin/sh -c` on an already expanded command. Does not log the command line.
+    /// Spawn `/bin/sh -c` on an already expanded command in the acting profile home.
     fn spawn_shell(&mut self, command: &str) -> Result<String, DispatchError> {
         let args = vec![command.to_owned()];
         if let Err(error) = self.registry.invoke_confirmed(SHELL_TOOL, &args) {
             return Err(self.fail_tool(error));
         }
-        match run_shell(command) {
+        let (cwd, env_pairs) = self.shell_home_env();
+        let env_refs: Vec<(&str, &str)> = env_pairs
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        match run_shell_in(
+            command,
+            cwd.as_deref(),
+            &env_refs,
+            softwake_tools::DEFAULT_SHELL_TIMEOUT,
+            softwake_tools::DEFAULT_OUTPUT_CAP,
+        ) {
             Ok(output) => Ok(format_shell_output(&output)),
             Err(error) => {
                 let message = error.to_string();
@@ -1299,6 +1385,111 @@ impl Hands {
                 Err(DispatchError::Shell { message })
             }
         }
+    }
+
+    fn shell_home_env(&self) -> (Option<std::path::PathBuf>, Vec<(String, String)>) {
+        let Some(profile_id) = self.acting_profile_id.as_deref() else {
+            return (None, Vec::new());
+        };
+        match softwake_soul::ensure_profile_home(profile_id) {
+            Ok(home) => {
+                let home_s = home.to_string_lossy().into_owned();
+                (
+                    Some(home),
+                    vec![
+                        ("HOME".into(), home_s.clone()),
+                        ("SOFTWAKE_AGENT_HOME".into(), home_s),
+                        ("SOFTWAKE_PROFILE_ID".into(), profile_id.to_owned()),
+                    ],
+                )
+            }
+            Err(_) => (None, Vec::new()),
+        }
+    }
+
+    fn run_software_install_expanded(
+        &mut self,
+        args: &[String],
+        always_allow: bool,
+    ) -> Result<RequestOutcome, DispatchError> {
+        let command = parse_software_install_args(args);
+        if command.trim().is_empty() {
+            return Err(DispatchError::InvalidArgs {
+                name: SOFTWARE_INSTALL_TOOL.to_owned(),
+                detail: invalid_args_message(SOFTWARE_INSTALL_TOOL),
+            });
+        }
+        // allow_all never auto-approves installs; always_allow only when operator grant is AlwaysAllow.
+        if !always_allow {
+            let description = format!("Install software: {command}");
+            return Ok(self.store_pending(SOFTWARE_INSTALL_TOOL, vec![command], description));
+        }
+        let detail = self.spawn_software_install(&command)?;
+        self.record(
+            SOFTWARE_INSTALL_TOOL,
+            Some(ToolRisk::Safe),
+            ToolOutcome::Ran,
+            Some(detail.clone()),
+        );
+        Ok(RequestOutcome::Ran(RanTool {
+            name: SOFTWARE_INSTALL_TOOL.to_owned(),
+            detail,
+        }))
+    }
+
+    fn spawn_software_install(&mut self, command: &str) -> Result<String, DispatchError> {
+        let args = vec![command.to_owned()];
+        if let Err(error) = self.registry.invoke_confirmed(SOFTWARE_INSTALL_TOOL, &args) {
+            return Err(self.fail_tool(error));
+        }
+        let (cwd, env_pairs) = self.shell_home_env();
+        let env_refs: Vec<(&str, &str)> = env_pairs
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        match run_software_install(command, cwd.as_deref(), &env_refs) {
+            Ok(output) => Ok(format_install_output(&output)),
+            Err(error) => {
+                let message = error.to_string();
+                self.record(
+                    SOFTWARE_INSTALL_TOOL,
+                    Some(ToolRisk::Confirm),
+                    ToolOutcome::Unknown,
+                    Some(message.clone()),
+                );
+                Err(DispatchError::Shell { message })
+            }
+        }
+    }
+
+    fn stage_team_effect(&mut self, name: &str, args: &[String]) -> Result<String, DispatchError> {
+        if name == AGENT_MESSAGE_TOOL {
+            let parsed =
+                parse_agent_message_args(args).map_err(|detail| DispatchError::InvalidArgs {
+                    name: AGENT_MESSAGE_TOOL.to_owned(),
+                    detail,
+                })?;
+            if let Err(error) = self.registry.invoke_confirmed(AGENT_MESSAGE_TOOL, args) {
+                return Err(self.fail_tool(error));
+            }
+            self.team_effect = Some(TeamEffect::AgentMessage(parsed));
+            return Ok("agent_message: waking peer…".to_owned());
+        }
+        if name == GOAL_RUN_TOOL {
+            let parsed =
+                parse_goal_run_args(args).map_err(|detail| DispatchError::InvalidArgs {
+                    name: GOAL_RUN_TOOL.to_owned(),
+                    detail,
+                })?;
+            if let Err(error) = self.registry.invoke_confirmed(GOAL_RUN_TOOL, args) {
+                return Err(self.fail_tool(error));
+            }
+            self.team_effect = Some(TeamEffect::GoalRun(parsed));
+            return Ok("goal_run: starting…".to_owned());
+        }
+        Err(DispatchError::Unknown {
+            name: name.to_owned(),
+        })
     }
 
     fn fail_tool(&mut self, error: ToolError) -> DispatchError {
