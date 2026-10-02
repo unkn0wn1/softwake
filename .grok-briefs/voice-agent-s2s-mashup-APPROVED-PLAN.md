@@ -2,6 +2,7 @@
 
 **Base:** main `bf2e74d` (#112)  
 **Branch:** `fix/s2s-audio-mashup`  
+**PR:** https://github.com/unkn0wn1/softwake/pull/113  
 **Symptom:** Barge-in usually works; sometimes the new reply plays while the previous sentence continues (two overlapping voices).
 
 ## Root cause
@@ -14,7 +15,7 @@
 1. Harden `interrupt_playback`: SIGKILL, poll until pid gone (~150ms), short sink settle when a kill happened.
 2. `abort_va_player`: always `interrupt_playback()` even when Option is `None` (covers finish-orphaned player).
 3. First open in `write_va_audio`: `interrupt: true` so a new utterance never starts beside a draining prior player.
-4. CHANGELOG + ADR-0050 note; unit test that interrupt clears remembered pid when process already gone.
+4. CHANGELOG + ADR-0050 note; unit test that interrupt is a no-op when no player remembered.
 
 ## Out of scope
 - AEC; Softwake Hands on S2S; HUD poll changes; service restart.
