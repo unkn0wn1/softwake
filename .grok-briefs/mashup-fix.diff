@@ -50,7 +50,7 @@ index f2dc47d..cda5536 100644
 -/// Best-effort. Used before a new reply so Eve does not overlap herself.
 +/// Hard-kill (SIGKILL) + brief drain so a barge / new Voice Agent reply never
 +/// overlaps a `finish()`-orphaned ffplay/mpv still flushing its sink buffer.
-pub fn interrupt_playback() {
+ pub fn interrupt_playback() {
      let pid = {
          let mut guard = LAST_PLAYER
 @@ -217,14 +218,33 @@ pub fn interrupt_playback() {
