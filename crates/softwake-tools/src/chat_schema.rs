@@ -7,15 +7,16 @@ use serde_json::{Value, json};
 
 use crate::settings::{ToolPermission, ToolsSettings};
 use crate::{
-    CALENDAR_CREATE_TOOL, CALENDAR_DELETE_TOOL, CALENDAR_GET_TOOL, CALENDAR_LIST_TOOL,
-    CALENDAR_UPDATE_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL, ECHO_TOOL,
-    EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, FORGET_TOOL, NOTIFY_TOOL,
-    REMEMBER_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL, SKILL_LIST_TOOL, SKILL_SAVE_TOOL,
-    SOFTWAKE_HIBERNATE_TOOL, SOFTWAKE_LIST_MODELS_TOOL, SOFTWAKE_LIST_PROFILES_TOOL,
-    SOFTWAKE_LIST_REASONING_TOOL, SOFTWAKE_LIST_VOICES_TOOL, SOFTWAKE_NEW_SESSION_TOOL,
-    SOFTWAKE_REFRESH_TOOL, SOFTWAKE_RESUME_TOOL, SOFTWAKE_SET_MODEL_TOOL,
-    SOFTWAKE_SET_PROFILE_TOOL, SOFTWAKE_SET_REASONING_TOOL, SOFTWAKE_SET_VOICE_TOOL,
-    SOFTWAKE_SLEEP_TOOL, SOFTWAKE_STATUS_TOOL, ToolRegistry,
+    AGENT_MESSAGE_TOOL, CALENDAR_CREATE_TOOL, CALENDAR_DELETE_TOOL, CALENDAR_GET_TOOL,
+    CALENDAR_LIST_TOOL, CALENDAR_UPDATE_TOOL, DRIVE_GET_TOOL, DRIVE_LIST_TOOL, DRIVE_SEARCH_TOOL,
+    ECHO_TOOL, EMAIL_GET_TOOL, EMAIL_LIST_TOOL, EMAIL_SEARCH_TOOL, EMAIL_SEND_TOOL, FORGET_TOOL,
+    GOAL_RUN_TOOL, NOTIFY_TOOL, REMEMBER_TOOL, SCHEDULE_TOOL, SHELL_TOOL, SKILL_GET_TOOL,
+    SKILL_LIST_TOOL, SKILL_SAVE_TOOL, SOFTWAKE_HIBERNATE_TOOL, SOFTWAKE_LIST_MODELS_TOOL,
+    SOFTWAKE_LIST_PROFILES_TOOL, SOFTWAKE_LIST_REASONING_TOOL, SOFTWAKE_LIST_VOICES_TOOL,
+    SOFTWAKE_NEW_SESSION_TOOL, SOFTWAKE_REFRESH_TOOL, SOFTWAKE_RESUME_TOOL,
+    SOFTWAKE_SET_MODEL_TOOL, SOFTWAKE_SET_PROFILE_TOOL, SOFTWAKE_SET_REASONING_TOOL,
+    SOFTWAKE_SET_VOICE_TOOL, SOFTWAKE_SLEEP_TOOL, SOFTWAKE_STATUS_TOOL, SOFTWARE_INSTALL_TOOL,
+    ToolRegistry,
 };
 
 /// Build the `tools` array for one chat/completions request.
@@ -55,6 +56,37 @@ fn parameters_for(name: &str) -> Value {
                 }
             },
             "required": ["command"]
+        }),
+        SOFTWARE_INSTALL_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "Install command or package list (apt/brew/cargo/npm -g/…)."
+                }
+            },
+            "required": ["command"]
+        }),
+        AGENT_MESSAGE_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "to": { "type": "string", "description": "Target profile id or agent name." },
+                "text": { "type": "string", "description": "Message to send; target wakes to reply." },
+                "room_id": { "type": "string", "description": "Optional room id for logging." }
+            },
+            "required": ["to", "text"]
+        }),
+        GOAL_RUN_TOOL => json!({
+            "type": "object",
+            "properties": {
+                "goal": { "type": "string", "description": "What success looks like." },
+                "acceptance": { "type": "string", "description": "Measurable checks: newline-separated shell commands that must exit 0 in the agent home." },
+                "max_iterations": { "type": "integer", "description": "Iteration cap (default 8, max 32)." },
+                "backend": { "type": "string", "description": "softwake (default) or grok_cli." },
+                "room_id": { "type": "string", "description": "Optional room for progress log." },
+                "profile_id": { "type": "string", "description": "Owning profile id (default: caller)." }
+            },
+            "required": ["goal", "acceptance"]
         }),
         ECHO_TOOL => json!({
             "type": "object",
@@ -392,6 +424,51 @@ pub fn tool_args_from_json(name: &str, arguments: &str) -> Result<Vec<String>, S
                 return Err("shell needs command".to_owned());
             }
             Ok(vec![command])
+        }
+        SOFTWARE_INSTALL_TOOL => {
+            let command = string_field(obj, "command")
+                .ok_or_else(|| "software_install needs command".to_owned())?;
+            if command.trim().is_empty() {
+                return Err("software_install needs command".to_owned());
+            }
+            Ok(vec![command])
+        }
+        AGENT_MESSAGE_TOOL => {
+            let to = string_field(obj, "to").ok_or_else(|| "agent_message needs to".to_owned())?;
+            let text =
+                string_field(obj, "text").ok_or_else(|| "agent_message needs text".to_owned())?;
+            let mut out = vec![to, text];
+            if let Some(room) = string_field(obj, "room_id") {
+                if !room.is_empty() {
+                    out.push(format!("room_id={room}"));
+                }
+            }
+            Ok(out)
+        }
+        GOAL_RUN_TOOL => {
+            let goal = string_field(obj, "goal").ok_or_else(|| "goal_run needs goal".to_owned())?;
+            let acceptance = string_field(obj, "acceptance")
+                .ok_or_else(|| "goal_run needs acceptance".to_owned())?;
+            let mut map = serde_json::Map::new();
+            map.insert("goal".into(), serde_json::Value::String(goal));
+            map.insert("acceptance".into(), serde_json::Value::String(acceptance));
+            if let Some(n) = obj
+                .get("max_iterations")
+                .and_then(serde_json::Value::as_u64)
+            {
+                map.insert("max_iterations".into(), serde_json::json!(n));
+            }
+            if let Some(b) = string_field(obj, "backend") {
+                map.insert("backend".into(), serde_json::Value::String(b));
+            }
+            if let Some(r) = string_field(obj, "room_id") {
+                map.insert("room_id".into(), serde_json::Value::String(r));
+            }
+            if let Some(r) = string_field(obj, "profile_id") {
+                map.insert("profile_id".into(), serde_json::Value::String(r));
+            }
+            let raw = serde_json::Value::Object(map).to_string();
+            Ok(vec![raw])
         }
         ECHO_TOOL => {
             if let Some(text) = string_field(obj, "text") {

@@ -231,6 +231,7 @@ impl Runtime {
         }
         // Serve starts in sleep, so the probe is on even at verbosity 0.
         runtime.sync_near_miss_probe();
+        runtime.sync_acting_profile(None);
         Ok(runtime)
     }
 
@@ -511,6 +512,66 @@ impl Runtime {
         }
     }
 
+    /// Sync Hands acting profile (home + `allow_all`) from disk active profile or override.
+    pub(crate) fn sync_acting_profile(&mut self, profile_id: Option<&str>) {
+        let id = profile_id
+            .map(str::to_owned)
+            .or_else(crate::hud_chat_write::active_profile_id)
+            .unwrap_or_else(|| "default".into());
+        let allow_all = crate::team::resolve_profile_meta(&id).is_ok_and(|m| m.allow_all);
+        self.hands.set_acting_profile(Some(id), allow_all);
+    }
+
+    /// Oneshot completion using a specific profile's instructions (peer DM / `agent_task` / goal).
+    ///
+    /// Does not change HUD `active_profile`. Pins Hands acting profile for the call.
+    pub(crate) fn oneshot_as_profile(
+        &mut self,
+        profile_id: &str,
+        instructions: &str,
+        allow_all: bool,
+        text: &str,
+    ) -> Result<String, String> {
+        let prev_id = self.hands.acting_profile_id().map(str::to_owned);
+        let prev_allow = self.hands.acting_allow_all_for_restore();
+        self.hands
+            .set_acting_profile(Some(profile_id.to_owned()), allow_all);
+        let result = self.messenger_ask_oneshot_with_system(instructions, text);
+        // restore
+        self.hands.set_acting_profile(prev_id, prev_allow);
+        result
+    }
+
+    fn messenger_ask_oneshot_with_system(
+        &mut self,
+        pack: &str,
+        text: &str,
+    ) -> Result<String, String> {
+        let ready = crate::chat::load_disk_chat()?;
+        crate::chat::gate_live_http(&ready.prepared, &ready.bearer, text)?;
+        let memory =
+            crate::chat::appendix_for_ask(text, Option::<&softwake_memory::MockMemory>::None);
+        let tools_settings = self.hands.tools_settings();
+        let appendix = crate::chat::system_appendix(&memory, &tools_settings);
+        let system = softwake_session::assemble_system(pack, &appendix);
+        let mut tools = softwake_tools::advertise_chat_tools(&tools_settings);
+        crate::mcp_bridge::append_mcp_chat_tools(&tools_settings, &mut tools);
+        let turns = vec![softwake_session::SessionMessage::user(text)];
+        let loop_ok = crate::chat::finish_prepared_chat_tools(
+            &ready.prepared,
+            &ready.bearer,
+            &system,
+            &turns,
+            &tools,
+            |name, args| self.invoke_for_chat(name, args),
+        );
+        match loop_ok {
+            Ok(crate::tool_loop::ToolLoopOk::Message(reply)) => Ok(reply),
+            Ok(crate::tool_loop::ToolLoopOk::Pending { message, .. }) => Ok(message),
+            Err(e) => Err(e),
+        }
+    }
+
     fn messenger_ask_oneshot(&mut self, text: &str) -> Result<String, String> {
         let ready = crate::chat::load_disk_chat()?;
         let pack = if let Some(applied) = self.soul.applied_instructions() {
@@ -678,8 +739,10 @@ impl Runtime {
         entry: &softwake_tools::ScheduleEntry,
     ) {
         let prompt = softwake_tools::agent_task_user_prompt(entry);
-        let summary = match self.messenger_ask_oneshot(&prompt) {
-            Ok(text) => text,
+        let summary = match crate::team::load_profile_instructions(profile_id) {
+            Ok((meta, instructions)) => self
+                .oneshot_as_profile(profile_id, &instructions, meta.allow_all, &prompt)
+                .unwrap_or_else(|err| format!("agent task failed: {err}")),
             Err(err) => format!("agent task failed: {err}"),
         };
         let notify = softwake_tools::fire_agent_notify_line(&entry.title, &summary);
@@ -1008,8 +1071,22 @@ impl Runtime {
                 Ok(detail) => crate::tool_loop::ToolInvokeResult::Ran(detail),
                 Err(message) => crate::tool_loop::ToolInvokeResult::Failed(message),
             }
+        } else if let Some(effect) = self.hands.take_team_effect() {
+            match self.apply_team_effect(effect) {
+                Ok(detail) => crate::tool_loop::ToolInvokeResult::Ran(detail),
+                Err(message) => crate::tool_loop::ToolInvokeResult::Failed(message),
+            }
         } else {
             result
+        }
+    }
+
+    fn apply_team_effect(&mut self, effect: crate::dispatch::TeamEffect) -> Result<String, String> {
+        match effect {
+            crate::dispatch::TeamEffect::AgentMessage(args) => {
+                crate::team::run_agent_message(self, &args)
+            }
+            crate::dispatch::TeamEffect::GoalRun(args) => crate::team::run_goal(self, &args),
         }
     }
 
@@ -1218,6 +1295,7 @@ impl Runtime {
         if let Some(pack) = self.soul.pack() {
             self.hands.set_glossary(pack.aliases().clone());
         }
+        self.sync_acting_profile(None);
     }
 
     fn chat_rejected(&mut self, message: &str) -> Outcome {
@@ -1782,6 +1860,14 @@ impl Runtime {
             Ok(mut confirmed) => {
                 if let Some(effect) = self.hands.take_ctl_effect() {
                     match self.apply_ctl_effect(effect) {
+                        Ok(detail) => confirmed.detail = detail,
+                        Err(message) => {
+                            return Self::rejected(softwake_ipc::IpcError::protocol(message));
+                        }
+                    }
+                }
+                if let Some(effect) = self.hands.take_team_effect() {
+                    match self.apply_team_effect(effect) {
                         Ok(detail) => confirmed.detail = detail,
                         Err(message) => {
                             return Self::rejected(softwake_ipc::IpcError::protocol(message));

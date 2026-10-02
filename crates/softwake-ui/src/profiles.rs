@@ -13,7 +13,7 @@ use softwake_soul::{
     create_profile, ensure_migrated, list_profiles, load_app_config, load_profile_meta,
     profile_name_in, profile_owner_from_pack_dir, profile_pack_dir, rename_profile,
     resolve_config_dir, resolve_main_profile_id, resolve_soul_dir, set_active_profile,
-    set_global_doc_flags, try_load_effective,
+    set_allow_all, set_global_doc_flags, set_profile_role, try_load_effective,
 };
 
 use crate::pack::{self, PackSnapshot};
@@ -60,6 +60,10 @@ pub struct ProfilesSnapshot {
     pub use_global_glossary: bool,
     /// `use_global_rules` for the selected profile. Main reports true.
     pub use_global_rules: bool,
+    /// Profile `allow_all` (ADR-0052): Ask tools auto-run except `software_install`.
+    pub allow_all: bool,
+    /// Profile role (`general` or `coding`).
+    pub role: String,
     /// Main `user.md` body for the read-only preview.
     pub global_user: String,
     /// Main `rules.md` body for the read-only preview.
@@ -148,6 +152,8 @@ fn snapshot_at(config: &Path, selected_id: &str) -> Result<ProfilesSnapshot, Str
         use_global_user: is_main || meta.use_global_user,
         use_global_glossary: is_main || meta.use_global_glossary,
         use_global_rules: is_main || meta.use_global_rules,
+        allow_all: meta.allow_all,
+        role: meta.role.clone(),
         global_user: global.user,
         global_rules: global.rules,
         global_glossary: global.glossary,
@@ -223,6 +229,20 @@ pub fn profile_set_global_flags(
         use_global_rules,
     )
     .map_err(|error| error.to_string())?;
+    snapshot_at(&config, id.trim())
+}
+
+#[tauri::command]
+pub fn profile_set_allow_all(id: String, allow_all: bool) -> Result<ProfilesSnapshot, String> {
+    let config = config_dir()?;
+    set_allow_all(&config, &id, allow_all).map_err(|error| error.to_string())?;
+    snapshot_at(&config, id.trim())
+}
+
+#[tauri::command]
+pub fn profile_set_role(id: String, role: String) -> Result<ProfilesSnapshot, String> {
+    let config = config_dir()?;
+    set_profile_role(&config, &id, &role).map_err(|error| error.to_string())?;
     snapshot_at(&config, id.trim())
 }
 

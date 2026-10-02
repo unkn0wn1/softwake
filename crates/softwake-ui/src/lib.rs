@@ -21,6 +21,7 @@ mod playback_prefs;
 mod profiles;
 mod providers;
 mod remote_agent;
+mod rooms;
 mod skills;
 mod timers;
 mod tools;
@@ -148,6 +149,12 @@ pub fn run() {
             profiles::profile_set_global_flags,
             profiles::global_docs_snapshot,
             profiles::global_docs_save,
+            profiles::profile_set_allow_all,
+            profiles::profile_set_role,
+            rooms::rooms_snapshot,
+            rooms::room_create,
+            rooms::room_update,
+            rooms::room_delete,
             commands::hud_save_size,
             commands::hud_seed_session,
             commands::hud_drop_session_turns,
@@ -571,6 +578,12 @@ mod tests {
         "show_settings",
         "hud_set_two_way",
         "profile_set_global_flags",
+        "profile_set_allow_all",
+        "profile_set_role",
+        "rooms_snapshot",
+        "room_create",
+        "room_update",
+        "room_delete",
         "global_docs_snapshot",
         "global_docs_save",
         "hud_save_size",
@@ -663,6 +676,12 @@ mod tests {
         "allow-hud-set-two-way",
         "allow-hud-apply-shrunk-size",
         "allow-profile-set-global-flags",
+        "allow-profile-set-allow-all",
+        "allow-profile-set-role",
+        "allow-rooms-snapshot",
+        "allow-room-create",
+        "allow-room-update",
+        "allow-room-delete",
         "allow-global-docs-snapshot",
         "allow-global-docs-save",
         "allow-hud-save-size",

@@ -63,21 +63,44 @@ pub fn run_shell_with(
     timeout: Duration,
     output_cap: usize,
 ) -> Result<ShellOutput, ShellError> {
+    run_shell_in(command, None, &[], timeout, output_cap)
+}
+
+/// Run `command` via `/bin/sh -c` with optional cwd and extra env (ADR-0052 homes).
+///
+/// `extra_env` entries overwrite inherited variables of the same name. Softwake
+/// typically passes `HOME`, `SOFTWAKE_AGENT_HOME`, and `SOFTWAKE_PROFILE_ID`.
+///
+/// # Errors
+///
+/// [`ShellError::EmptyCommand`] or [`ShellError::Spawn`].
+pub fn run_shell_in(
+    command: &str,
+    cwd: Option<&std::path::Path>,
+    extra_env: &[(&str, &str)],
+    timeout: Duration,
+    output_cap: usize,
+) -> Result<ShellOutput, ShellError> {
     let trimmed = command.trim();
     if trimmed.is_empty() {
         return Err(ShellError::EmptyCommand);
     }
     let mut command = Command::new("/bin/sh");
-    let mut child = command
+    command
         .arg("-c")
         .arg(trimmed)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| ShellError::Spawn {
-            message: error.to_string(),
-        })?;
+        .stderr(Stdio::piped());
+    if let Some(dir) = cwd {
+        command.current_dir(dir);
+    }
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().map_err(|error| ShellError::Spawn {
+        message: error.to_string(),
+    })?;
 
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
@@ -210,7 +233,10 @@ pub fn format_shell_output(output: &ShellOutput) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ShellError, ShellOutput, format_shell_output, run_shell};
+    use super::{
+        DEFAULT_OUTPUT_CAP, ShellError, ShellOutput, format_shell_output, run_shell, run_shell_in,
+    };
+    use std::time::Duration;
 
     #[test]
     fn empty_command_is_rejected() {
@@ -218,6 +244,31 @@ mod tests {
             run_shell("  ").expect_err("empty"),
             ShellError::EmptyCommand
         );
+    }
+
+    #[test]
+    fn runs_with_cwd() {
+        let dir = std::env::temp_dir().join(format!(
+            "softwake-shell-cwd-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let out = run_shell_in(
+            "pwd",
+            Some(dir.as_path()),
+            &[("SOFTWAKE_AGENT_HOME", dir.to_str().unwrap_or(""))],
+            Duration::from_secs(5),
+            DEFAULT_OUTPUT_CAP,
+        )
+        .expect("pwd");
+        assert!(!out.timed_out);
+        assert!(
+            out.stdout
+                .contains(dir.file_name().unwrap().to_str().unwrap())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -10,7 +10,7 @@ const confirmBtn = document.querySelector("#confirm");
 const cancelBtn = document.querySelector("#cancel");
 const navStatus = document.querySelector("#nav-status");
 
-const panes = ["general", "global", "profiles", "providers", "tools", "timers", "skills", "messengers", "mcp", "remote-agent", "email", "status"];
+const panes = ["general", "global", "profiles", "providers", "tools", "rooms", "timers", "skills", "messengers", "mcp", "remote-agent", "email", "status"];
 
 const providerSelect = document.querySelector("#provider-select");
 const keyPanel = document.querySelector("#key-panel");
@@ -854,6 +854,10 @@ function applyProfilesSnapshot(snap, statusText) {
   renderProfilesList(snap);
   setProfilesSubnavVisible(true);
   applyGlobalDocControls(snap);
+  const allowAll = document.querySelector("#profile-allow-all");
+  if (allowAll) allowAll.checked = !!snap.allow_all;
+  const role = document.querySelector("#profile-role");
+  if (role) role.value = snap.role === "coding" ? "coding" : "general";
   applyPackSnapshot(snap.pack || {}, statusText || "");
   profilesLoaded = true;
   updateScaffoldButton();
@@ -2832,6 +2836,60 @@ if (mcpSubNew) {
 }
 
 
+
+let roomsSnap = null;
+
+function applyRoomsSnapshot(snap, statusText) {
+  roomsSnap = snap;
+  const pathEl = document.querySelector("#rooms-path");
+  if (pathEl) pathEl.textContent = "Path: " + (snap.config_hint || "");
+  const list = document.querySelector("#rooms-list");
+  if (list) {
+    list.innerHTML = "";
+    for (const room of snap.rooms || []) {
+      const opt = document.createElement("option");
+      opt.value = room.id;
+      opt.textContent = (room.title || room.id) + " (" + (room.members || []).join(", ") + ")";
+      if (snap.selected_id && room.id === snap.selected_id) opt.selected = true;
+      list.appendChild(opt);
+    }
+  }
+  const selected = (snap.rooms || []).find((r) => r.id === snap.selected_id);
+  const idEl = document.querySelector("#room-id");
+  const titleEl = document.querySelector("#room-title");
+  const membersEl = document.querySelector("#room-members");
+  if (selected) {
+    if (idEl) idEl.value = selected.id;
+    if (titleEl) titleEl.value = selected.title || "";
+    if (membersEl) membersEl.value = (selected.members || []).join(", ");
+  }
+  const logEl = document.querySelector("#rooms-log");
+  if (logEl) {
+    logEl.textContent = (snap.log || [])
+      .map((line) => {
+        const phase = line.phase ? ` ${line.phase}` : "";
+        const iter = line.iteration != null ? `#${line.iteration}` : "";
+        return `[${line.kind}${iter}${phase}] ${line.profile_id}: ${line.text}`;
+      })
+      .join("\n");
+  }
+  const status = document.querySelector("#rooms-status");
+  if (status) status.textContent = statusText || "";
+  const err = document.querySelector("#rooms-error");
+  if (err) err.textContent = "";
+}
+
+async function refreshRooms(selectedId, statusText) {
+  try {
+    const args = {};
+    if (selectedId) args.selectedId = selectedId;
+    applyRoomsSnapshot(await invoke("rooms_snapshot", args), statusText || "");
+  } catch (error) {
+    const err = document.querySelector("#rooms-error");
+    if (err) err.textContent = errorText(error);
+  }
+}
+
 function showPane(name) {
   for (const pane of panes) {
     const section = document.querySelector(`#pane-${pane}`);
@@ -2869,6 +2927,9 @@ function showPane(name) {
   if (name === "tools") {
     refreshTools();
   }
+  if (name === "rooms") {
+    refreshRooms(roomsSnap && roomsSnap.selected_id ? roomsSnap.selected_id : null);
+  }
   if (name === "skills") {
     refreshSkills();
   }
@@ -2903,6 +2964,79 @@ refreshUiPrefs();
   const skillsField = skillsList && skillsList.closest("label.field");
   if (skillsField) skillsField.hidden = true;
 })();
+
+
+document.querySelector("#profile-allow-all")?.addEventListener("change", async (ev) => {
+  if (!selectedProfileId) return;
+  try {
+    applyProfilesSnapshot(
+      await invoke("profile_set_allow_all", {
+        id: selectedProfileId,
+        allowAll: !!ev.target.checked,
+      }),
+      ev.target.checked ? "Allow all enabled for this profile." : "Allow all disabled."
+    );
+  } catch (error) {
+    packErrorEl.textContent = errorText(error);
+  }
+});
+document.querySelector("#profile-role")?.addEventListener("change", async (ev) => {
+  if (!selectedProfileId) return;
+  try {
+    applyProfilesSnapshot(
+      await invoke("profile_set_role", { id: selectedProfileId, role: ev.target.value }),
+      "Role saved."
+    );
+  } catch (error) {
+    packErrorEl.textContent = errorText(error);
+  }
+});
+document.querySelector("#rooms-list")?.addEventListener("change", (ev) => {
+  refreshRooms(ev.target.value);
+});
+document.querySelector("#rooms-new")?.addEventListener("click", async () => {
+  const id = (document.querySelector("#room-id")?.value || "").trim();
+  const title = (document.querySelector("#room-title")?.value || "").trim();
+  const members = (document.querySelector("#room-members")?.value || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  try {
+    applyRoomsSnapshot(
+      await invoke("room_create", { id, title, members }),
+      "Room created."
+    );
+  } catch (error) {
+    const err = document.querySelector("#rooms-error");
+    if (err) err.textContent = errorText(error);
+  }
+});
+document.querySelector("#rooms-save")?.addEventListener("click", async () => {
+  const id = (document.querySelector("#room-id")?.value || "").trim();
+  const title = (document.querySelector("#room-title")?.value || "").trim();
+  const members = (document.querySelector("#room-members")?.value || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  try {
+    applyRoomsSnapshot(
+      await invoke("room_update", { id, title, members }),
+      "Room saved."
+    );
+  } catch (error) {
+    const err = document.querySelector("#rooms-error");
+    if (err) err.textContent = errorText(error);
+  }
+});
+document.querySelector("#rooms-delete")?.addEventListener("click", async () => {
+  const id = (document.querySelector("#room-id")?.value || "").trim();
+  try {
+    applyRoomsSnapshot(await invoke("room_delete", { id }), "Room deleted.");
+  } catch (error) {
+    const err = document.querySelector("#rooms-error");
+    if (err) err.textContent = errorText(error);
+  }
+});
 
 showPane("status");
 refresh();

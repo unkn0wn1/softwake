@@ -486,6 +486,36 @@ description = "Save Use global user/glossary/rules flags on a profile."
 commands.allow = ["profile_set_global_flags"]
 
 [[permission]]
+identifier = "allow-profile-set-allow-all"
+description = "Save profile allow_all (ADR-0052)."
+commands.allow = ["profile_set_allow_all"]
+
+[[permission]]
+identifier = "allow-profile-set-role"
+description = "Save profile role general|coding (ADR-0052)."
+commands.allow = ["profile_set_role"]
+
+[[permission]]
+identifier = "allow-rooms-snapshot"
+description = "List Softwake rooms and log tail."
+commands.allow = ["rooms_snapshot"]
+
+[[permission]]
+identifier = "allow-room-create"
+description = "Create a Softwake room."
+commands.allow = ["room_create"]
+
+[[permission]]
+identifier = "allow-room-update"
+description = "Update a Softwake room."
+commands.allow = ["room_update"]
+
+[[permission]]
+identifier = "allow-room-delete"
+description = "Delete a Softwake room."
+commands.allow = ["room_delete"]
+
+[[permission]]
 identifier = "allow-global-docs-snapshot"
 description = "Read the main profile user, rules, and glossary."
 commands.allow = ["global_docs_snapshot"]

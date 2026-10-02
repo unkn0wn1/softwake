@@ -49,6 +49,7 @@ mod skill_intent;
 mod slash;
 mod soul;
 mod talk;
+mod team;
 mod telegram;
 mod tool_loop;
 mod verbose_log;
