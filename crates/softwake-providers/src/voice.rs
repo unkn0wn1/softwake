@@ -201,6 +201,10 @@ fn parse_tts_bytes(response: HttpBytes) -> Result<Vec<u8>, VoiceHttpError> {
     Ok(response.body)
 }
 
+pub(crate) fn clip_chars_for_stream(text: &str, max_chars: usize) -> String {
+    clip_chars(text, max_chars)
+}
+
 fn clip_chars(text: &str, max_chars: usize) -> String {
     let mut out = String::new();
     for (index, ch) in text.chars().enumerate() {

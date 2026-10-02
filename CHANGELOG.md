@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- **Soft duplex barge-in** while Eve speaks: elevated mic energy cancels TTS + ask and returns to listen (not AEC; ADR-0049).
+- **Streaming TTS** via xAI WebSocket (`audio.delta` → ffplay/mpv stdin) for lower time-to-first-audio; unary `POST /v1/tts` fallback.
+- CancelAsk / Escape **stops voice instantly** (interrupt player + clear mute).
+
+### Fixed
+
+
 ### Fixed
 
 - Early TTS no longer cuts mid-sentence: clips queue (wait for prior playback) instead of `interrupt_playback` on every Spawn; tool-round spoken offset clamps so the final remainder is not dropped; sentence split ignores bare EOS periods and short abbreviations; Speaking no longer blocks on empty/overlap remainder synth.

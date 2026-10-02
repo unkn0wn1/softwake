@@ -21,7 +21,9 @@ use softwake_ipc::{Command, Event as WireEvent, IpcError, PendingTool, ResponseB
 use softwake_session::{SessionPhase, TextStubSession};
 use softwake_soul::SoulDir;
 use softwake_state::{CooldownConfig, Effect, Event, Machine, StateError, VoiceState};
-use softwake_voice::{EnergyUtterance, MockStt, MockTts, TextToSpeech, TranscriptEvent};
+use softwake_voice::{
+    BargeDetector, EnergyUtterance, MockStt, MockTts, TextToSpeech, TranscriptEvent,
+};
 use softwake_wake::PhraseHit;
 
 use crate::capture::{CaptureBackend, CaptureKind};
@@ -72,6 +74,8 @@ pub(crate) struct Runtime {
     talk: crate::talk::TalkSession,
     /// Energy-gated free speech while awake (inactive during PTT).
     auto_utt: EnergyUtterance,
+    /// Elevated-energy barge-in while TTS mute is armed (soft duplex).
+    barge: BargeDetector,
     /// Finished free-speech PCM waiting for STT→ask (taken by serve after status).
     pending_auto_pcm: Option<Vec<i16>>,
     /// Wall time when the last ask/TTS finished; free speech stays quiet during cooldown.
@@ -188,6 +192,7 @@ impl Runtime {
             auto_utt: EnergyUtterance::with_silence_frames_end(
                 crate::free_speech::resolve_free_speech_end_silence_frames(),
             ),
+            barge: BargeDetector::default(),
             pending_auto_pcm: None,
             last_voice_activity: None,
             last_status_message: None,
@@ -1878,9 +1883,10 @@ impl Runtime {
         let mut scored = false;
         let mut energy_seen = false;
         let awake = wire_state(self.machine.state()) == WireState::Awake;
-        // Half-duplex: while Eve TTS plays (and a short grace after), drop mic
-        // frames so speakers do not feed free-speech / KWS / PTT.
-        let muted = softwake_voice::input_muted() || self.user_mic_muted;
+        // Soft duplex: TTS still arms half-duplex mute for free-speech / KWS, but
+        // elevated RMS can barge-in (cancel speech + ask). User HUD mute stays hard.
+        let tts_muted = softwake_voice::input_muted();
+        let muted = tts_muted || self.user_mic_muted;
         self.rearm_kws_after_unmute(muted);
         // Fuzzy wake listens only while the clarifier is already armed. Sleep
         // otherwise still drops the auto buffer.
@@ -1907,8 +1913,25 @@ impl Runtime {
             let samples = frame.samples();
             let level = rms_level(samples);
             self.last_capture_level = Some(level);
-            if muted {
-                // Still drain the queue / HUD level; do not treat as user input.
+            let mut barged = false;
+            // Soft-duplex barge while Eve speaks (not when the user muted the HUD mic).
+            if softwake_voice::input_muted() && !self.user_mic_muted {
+                if self.barge.note(level) {
+                    crate::announce::cancel_speech();
+                    Self::request_cancel_ask(&self.ask_cancel);
+                    self.barge.reset();
+                    self.auto_utt.reset();
+                    self.clear_turn_live();
+                    barged = true;
+                    // Fall through: mute cleared — this frame can start free speech.
+                } else {
+                    // Still drain the queue / HUD level; do not treat as user input.
+                    continue;
+                }
+            } else {
+                self.barge.reset();
+            }
+            if self.user_mic_muted {
                 continue;
             }
             if self.talk.is_armed() {
@@ -1917,7 +1940,15 @@ impl Runtime {
             if level >= 0.02 {
                 energy_seen = true;
             }
-            if auto_ok && self.pending_auto_pcm.is_none() {
+            // `auto_ok` was computed before the loop (often false while TTS muted).
+            // After a barge, allow free-speech buffering on this frame.
+            let listen_ok = (auto_ok || barged)
+                && awake
+                && !self.voice_test
+                && !self.talk.is_armed()
+                && self.pending_auto_pcm.is_none()
+                && (barged || !self.in_voice_cooldown());
+            if listen_ok {
                 if let Some(pcm) = self.auto_utt.push_frame(samples, level) {
                     self.pending_auto_pcm = Some(pcm);
                     if awake {

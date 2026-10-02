@@ -58,3 +58,10 @@ Follow-up decisions:
 4. **Speaking dead air** — sync `tts_synthesize` on remainder while interrupting
    early audio. Fix: empty remainder skips synth; non-empty after early TTS
    queues via `spawn_fixed_line` (no sync wait).
+
+## Amendment — CancelAsk kills TTS (ADR-0049)
+
+Slice 1 left playback running after CancelAsk (SSE only). Softwake now calls
+`announce::cancel_speech` from CancelAsk so Escape/Cancel interrupt the player
+and clear half-duplex mute immediately. Soft duplex barge-in and streaming TTS
+are documented in [ADR 0049](ADR-0049-duplex-barge-stream-tts.md).
