@@ -177,6 +177,21 @@
             <input id="voice-test" type="checkbox" />
             <span>Voice test mode</span>
           </label>
+          <label class="field row-check">
+            <input id="voice-agent-s2s" type="checkbox" />
+            <span>Voice Agent continuous S2S (xAI realtime)</span>
+          </label>
+          <p id="voice-agent-s2s-hint" class="meta">
+            Opt-in continuous speech-to-speech via xAI Voice Agent while awake.
+            Mic stays up; server VAD handles barge-in. Uses your Softwake xAI key.
+            Softwake Hands / tool confirms / full soul tool-loop stay on <strong>text ask</strong> only.
+            Default off keeps STT→chat→TTS (+ soft duplex). Saved as
+            <code>voice_agent_s2s</code> in softwake.json. Env
+            <code>SOFTWAKE_VOICE_AGENT_S2S</code> wins when set.
+            Requires a <code>live-http</code> daemon build.
+          </p>
+          <p id="voice-agent-s2s-status" class="meta" role="status"></p>
+          <p id="voice-agent-s2s-error" class="error" role="status"></p>
           <p class="meta">
             Wake, sleep, and deep-sleep phrases still change state, and Softwake still speaks the short state line.
             Microphone speech is not sent to the chat model. Default off.

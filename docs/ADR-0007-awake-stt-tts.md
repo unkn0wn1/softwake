@@ -107,3 +107,4 @@ cargo test -p softwake-voice --features sherpa-tts
 - Default `cargo test --workspace` does not open a microphone, does not download weights, does not call STT or TTS, and does not enable `sherpa-asr`, `sherpa-tts`, or `live-http`.
 - `cargo test -p softwake-providers --features live-http` still uses `MockTransport` for STT and TTS request shape. Ignored live tests stay opt-in.
 - Typed wake/sleep remains the primary voice-state demo ([ADR 0002](ADR-0002-wake-engine-spike.md)).
+- **Amended:** 2026-10-02. Optional xAI Voice Agent continuous S2S behind `voice_agent_s2s` ([ADR 0050](ADR-0050-voice-agent-s2s.md)). Default remains STT→chat→TTS.

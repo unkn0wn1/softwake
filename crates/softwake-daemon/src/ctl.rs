@@ -62,6 +62,11 @@ pub(crate) enum CtlAction {
         /// `None` reads status. `Some` sets the flag for this daemon process.
         enabled: Option<bool>,
     },
+    /// `ctl voice-agent status|on|off`
+    VoiceAgent {
+        /// Subcommand.
+        action: VoiceAgentCtl,
+    },
     /// `ctl webhook status|enable|disable|port`
     Webhook {
         /// Subcommand payload.
@@ -77,6 +82,17 @@ pub(crate) enum CtlAction {
         /// Subcommand payload.
         action: RemoteAgentCtl,
     },
+}
+
+/// Local-disk Voice Agent S2S ctl (+ live reload when daemon is up).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum VoiceAgentCtl {
+    /// Print enabled flag.
+    Status,
+    /// Set `voice_agent_s2s` true and reload.
+    On,
+    /// Set `voice_agent_s2s` false and reload.
+    Off,
 }
 
 /// Local-disk webhook config ctl (no IPC).
@@ -150,6 +166,8 @@ impl CtlAction {
 /// Returns [`CallError`] when the daemon cannot be reached or rejects the command.
 pub(crate) fn run(path: &Path, action: &CtlAction) -> Result<String, CallError> {
     match action {
+        CtlAction::VoiceAgent { action } => run_voice_agent_ctl(action)
+            .map_err(|message| CallError::Rejected(IpcError::protocol(message))),
         CtlAction::Webhook { action } => run_webhook_ctl(action)
             .map_err(|message| CallError::Rejected(IpcError::protocol(message))),
         CtlAction::WebhookSecret { action } => run_webhook_secret_ctl(action)
@@ -175,7 +193,8 @@ pub(crate) fn run(path: &Path, action: &CtlAction) -> Result<String, CallError> 
                     None => call(path, Command::GetStatus)?,
                     Some(enabled) => call_voice_test(path, *enabled)?,
                 },
-                CtlAction::Webhook { .. }
+                CtlAction::VoiceAgent { .. }
+                | CtlAction::Webhook { .. }
                 | CtlAction::WebhookSecret { .. }
                 | CtlAction::RemoteAgent { .. } => unreachable!(),
             };
@@ -346,6 +365,67 @@ fn run_remote_agent_ctl(action: &RemoteAgentCtl) -> Result<String, String> {
         }
     };
     Ok(format!("{text}\n"))
+}
+
+pub(crate) fn run_voice_agent_ctl(action: &VoiceAgentCtl) -> Result<String, String> {
+    let config_dir = softwake_soul::resolve_config_dir(
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .as_deref(),
+        std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
+    match action {
+        VoiceAgentCtl::Status => {
+            let app = softwake_soul::load_app_config(&config_dir).unwrap_or_default();
+            let resolved = crate::voice_agent::resolve_voice_agent_s2s_enabled();
+            Ok(format!(
+                "voice-agent s2s file: {}
+voice-agent s2s resolved: {}
+",
+                if app.voice_agent_s2s { "yes" } else { "no" },
+                if resolved { "yes" } else { "no" },
+            ))
+        }
+        VoiceAgentCtl::On => {
+            softwake_soul::set_voice_agent_s2s(&config_dir, true).map_err(|e| e.to_string())?;
+            let live = call_reload_voice_agent_best_effort();
+            Ok(format!(
+                "voice-agent s2s: on{}
+",
+                if live {
+                    " (reloaded live)"
+                } else {
+                    " (saved; live reload skipped)"
+                }
+            ))
+        }
+        VoiceAgentCtl::Off => {
+            softwake_soul::set_voice_agent_s2s(&config_dir, false).map_err(|e| e.to_string())?;
+            let live = call_reload_voice_agent_best_effort();
+            Ok(format!(
+                "voice-agent s2s: off{}
+",
+                if live {
+                    " (reloaded live)"
+                } else {
+                    " (saved; live reload skipped)"
+                }
+            ))
+        }
+    }
+}
+
+fn call_reload_voice_agent_best_effort() -> bool {
+    let Ok(path) = softwake_ipc::resolve_socket_path(None) else {
+        return false;
+    };
+    let Ok(mut client) = softwake_ipc::Client::connect(&path) else {
+        return false;
+    };
+    client.reload_voice_agent().is_ok()
 }
 
 pub(crate) fn run_webhook_ctl(action: &WebhookCtl) -> Result<String, String> {

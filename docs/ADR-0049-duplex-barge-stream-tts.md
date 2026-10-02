@@ -22,3 +22,7 @@ xAI documents (1) unary `POST /v1/tts`, (2) **streaming TTS WebSocket** (`text.d
 - First audio can start before the full utterance MP3 is buffered.
 - Barge-in can false-trigger from loud speaker echo; thresholds may need Settings later.
 - Voice Agent S2S is explicitly deferred (new ADR when tackled).
+
+## Amendment (2026-10-02)
+
+Voice Agent S2S is no longer deferred: see [ADR 0050](ADR-0050-voice-agent-s2s.md). Soft duplex barge remains the default-path interrupt; S2S mode uses server VAD instead.

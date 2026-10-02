@@ -415,6 +415,7 @@ fn cancel_ask_outcome(shared: &Shared) -> crate::runtime::Outcome {
     // Kill Eve now — CancelAsk used to stop only the SSE reader while audio played on.
     crate::announce::cancel_speech();
     if let Ok(mut runtime) = shared.runtime.try_lock() {
+        runtime.cancel_voice_agent();
         runtime.clear_turn_live_for_cancel();
         return crate::runtime::Outcome {
             body: softwake_ipc::ResponseBody::ok(runtime.snapshot_for_cancel()),
@@ -514,6 +515,10 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
             let outcome = lock(&shared.runtime).reload_utterance();
             reply(shared, tx, id, outcome)
         }
+        Ok(ClientMessage::ReloadVoiceAgent { id }) => {
+            let outcome = lock(&shared.runtime).reload_voice_agent();
+            reply(shared, tx, id, outcome)
+        }
         Ok(ClientMessage::ReloadPlayback { id }) => {
             let outcome = lock(&shared.runtime).reload_playback();
             reply(shared, tx, id, outcome)
@@ -591,6 +596,7 @@ fn publish_thinking(shared: &Shared, detail: &str) {
             context_compacted: false,
             context_compact_at: None,
             voice_test: false,
+            voice_agent_s2s: false,
             mic_muted: false,
             phase: Some("thinking".to_owned()),
             build: None,
@@ -644,6 +650,7 @@ fn placeholder_status() -> Status {
         context_compacted: false,
         context_compact_at: None,
         voice_test: false,
+        voice_agent_s2s: false,
         mic_muted: false,
         phase: None,
         build: None,

@@ -18,6 +18,7 @@
 //! [`force_clear_input_mute`] so the mic opens the moment speech is cut.
 //! Early returns (no TTS, missing player, Record mode) never arm mute.
 //! Streaming TTS writes MP3 chunks into [`Mp3PipePlayer`] (ffplay/mpv stdin).
+//! Voice Agent S2S writes PCM16 LE into [`PcmPipePlayer`] (optional mute arm).
 
 use std::io::Write;
 use std::path::Path;
@@ -534,6 +535,184 @@ fn pipe_player_commands() -> Vec<(&'static str, Vec<String>)> {
                 "--no-video".to_owned(),
                 "--really-quiet".to_owned(),
                 "--demuxer-lavf-format=mp3".to_owned(),
+                "-".to_owned(),
+            ],
+        ),
+    ]
+}
+
+/// Stdin PCM16 LE player for Voice Agent S2S output.
+pub struct PcmPipePlayer {
+    child: Child,
+    stdin: std::process::ChildStdin,
+    pid: u32,
+    mute_generation: Option<u64>,
+    timeout: Duration,
+}
+
+/// Start a raw PCM stdin player at `sample_rate_hz`.
+///
+/// When `arm_input_mute` is false (Voice Agent continuous duplex), Softwake does
+/// **not** gate the mic — server VAD barge-in needs live capture while Eve talks.
+///
+/// # Errors
+///
+/// Missing `ffplay`/`mpv` or a failed spawn returns a HUD-safe sentence.
+pub fn play_pcm_pipe_start(
+    sample_rate_hz: u32,
+    timeout: Duration,
+    interrupt: bool,
+    arm_input_mute: bool,
+) -> Result<PcmPipePlayer, String> {
+    if interrupt {
+        interrupt_playback();
+    }
+    let rate = sample_rate_hz.to_string();
+    let mut missing = Vec::new();
+    for (program, args) in pcm_pipe_player_commands(&rate) {
+        match Command::new(program)
+            .args(&args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                let pid = child.id();
+                let stdin = child
+                    .stdin
+                    .take()
+                    .ok_or_else(|| format!("{program} stdin unavailable"))?;
+                thread::sleep(Duration::from_millis(40));
+                match child.try_wait() {
+                    Ok(Some(status)) if !status.success() => {
+                        clear_pid_if(pid);
+                        return Err(format!(
+                            "{program} exited immediately ({status}). Softwake could not play the reply."
+                        ));
+                    }
+                    Ok(Some(_)) => {
+                        clear_pid_if(pid);
+                        return Err(format!("{program} exited before audio arrived."));
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        clear_pid_if(pid);
+                        return Err(format!("could not check {program}: {error}"));
+                    }
+                }
+                let mute_generation = if arm_input_mute {
+                    Some(begin_input_mute())
+                } else {
+                    None
+                };
+                remember_pid(pid);
+                return Ok(PcmPipePlayer {
+                    child,
+                    stdin,
+                    pid,
+                    mute_generation,
+                    timeout,
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(program);
+            }
+            Err(error) => {
+                return Err(format!("could not start {program}: {error}"));
+            }
+        }
+    }
+    Err(format!(
+        "no audio player found (tried {}). Install ffplay or mpv to hear replies.",
+        missing.join(", ")
+    ))
+}
+
+impl PcmPipePlayer {
+    /// Append one PCM16 LE chunk.
+    ///
+    /// # Errors
+    ///
+    /// Broken pipe when the player was interrupted or exited.
+    pub fn write_chunk(&mut self, bytes: &[u8]) -> Result<(), String> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        self.stdin
+            .write_all(bytes)
+            .map_err(|error| format!("could not stream voice audio: {error}"))
+    }
+
+    /// Close stdin and reap in the background.
+    pub fn finish(self) {
+        let PcmPipePlayer {
+            child,
+            stdin,
+            pid,
+            mute_generation,
+            timeout,
+        } = self;
+        drop(stdin);
+        let _ = thread::Builder::new()
+            .name("softwake-pcm-reaper".to_owned())
+            .spawn(move || {
+                reap_player(child, timeout);
+                clear_pid_if(pid);
+                if let Some(generation) = mute_generation {
+                    end_input_mute(generation);
+                }
+            });
+    }
+
+    /// Abort: kill player; clear mute only when this player armed it.
+    pub fn abort(self) {
+        let PcmPipePlayer {
+            child,
+            stdin,
+            pid,
+            mute_generation,
+            timeout: _,
+        } = self;
+        drop(stdin);
+        let mut child = child;
+        let _ = child.kill();
+        let _ = child.wait();
+        clear_pid_if(pid);
+        if mute_generation.is_some() {
+            force_clear_input_mute();
+        }
+    }
+}
+
+fn pcm_pipe_player_commands(rate: &str) -> Vec<(&'static str, Vec<String>)> {
+    vec![
+        (
+            "ffplay",
+            vec![
+                "-nodisp".to_owned(),
+                "-autoexit".to_owned(),
+                "-loglevel".to_owned(),
+                "quiet".to_owned(),
+                "-f".to_owned(),
+                "s16le".to_owned(),
+                "-ar".to_owned(),
+                rate.to_owned(),
+                "-ac".to_owned(),
+                "1".to_owned(),
+                "-i".to_owned(),
+                "pipe:0".to_owned(),
+            ],
+        ),
+        (
+            "mpv",
+            vec![
+                "--no-video".to_owned(),
+                "--really-quiet".to_owned(),
+                "--demuxer=rawaudio".to_owned(),
+                format!("--demuxer-rawaudio-rate={rate}"),
+                "--demuxer-rawaudio-format=s16le".to_owned(),
+                "--demuxer-rawaudio-channels=1".to_owned(),
                 "-".to_owned(),
             ],
         ),

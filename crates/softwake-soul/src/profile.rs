@@ -3,7 +3,7 @@
 //! Layout under the Softwake config root:
 //!
 //! ```text
-//! softwake.json                 # { "version": 1, "active_profile": "<id>", optional kws_*_milli, free_speech_end_silence_ms, tts_playback_timeout_ms, webhook_enabled, webhook_port }
+//! softwake.json                 # { "version": 1, "active_profile": "<id>", optional kws_*_milli, free_speech_end_silence_ms, tts_playback_timeout_ms, webhook_enabled, webhook_port, voice_agent_s2s }
 //! profiles/<id>/profile.json    # { "id": "<id>", "name": "<agent name>" }
 //! profiles/<id>/{soul,user,rules,glossary}.md
 //! soul/                         # legacy pack; migration source only
@@ -89,6 +89,13 @@ pub struct AppConfig {
     /// Missing key → 8787. Env `SOFTWAKE_WEBHOOK_PORT` wins when the daemon resolves the bind.
     #[serde(default = "default_webhook_port")]
     pub webhook_port: u16,
+    /// Opt-in xAI Voice Agent continuous speech-to-speech while awake.
+    ///
+    /// Missing key → false. Settings → General and `softwaked ctl voice-agent on|off`
+    /// write this key. Env `SOFTWAKE_VOICE_AGENT_S2S` wins when the daemon resolves
+    /// the mode. Default remains STT→chat→TTS ([ADR 0007] / [ADR 0050]).
+    #[serde(default)]
+    pub voice_agent_s2s: bool,
 }
 
 fn app_config_version() -> u32 {
@@ -129,6 +136,7 @@ impl Default for AppConfig {
             tts_playback_timeout_ms: default_tts_playback_timeout_ms(),
             webhook_enabled: false,
             webhook_port: default_webhook_port(),
+            voice_agent_s2s: false,
         }
     }
 }
@@ -475,6 +483,20 @@ pub fn set_webhook_port(config_dir: &Path, port: u16) -> Result<AppConfig, SoulE
     let mut config = load_app_config(config_dir).unwrap_or_default();
     config.version = APP_CONFIG_VERSION;
     config.webhook_port = port;
+    write_app_config(config_dir, &config)?;
+    Ok(config)
+}
+
+/// Enable or disable Voice Agent continuous S2S in `softwake.json`.
+///
+/// # Errors
+///
+/// Config path or write failure.
+pub fn set_voice_agent_s2s(config_dir: &Path, enabled: bool) -> Result<AppConfig, SoulError> {
+    ensure_migrated(config_dir)?;
+    let mut config = load_app_config(config_dir).unwrap_or_default();
+    config.version = APP_CONFIG_VERSION;
+    config.voice_agent_s2s = enabled;
     write_app_config(config_dir, &config)?;
     Ok(config)
 }
@@ -907,6 +929,7 @@ mod tests {
         );
         assert_eq!(app.tts_playback_timeout_ms, TTS_PLAYBACK_TIMEOUT_MS_DEFAULT);
         assert_eq!(AppConfig::default().kws_threshold_milli, 150);
+        assert!(!AppConfig::default().voice_agent_s2s);
         assert_eq!(
             AppConfig::default().free_speech_end_silence_ms,
             FREE_SPEECH_END_SILENCE_MS_DEFAULT
@@ -977,6 +1000,13 @@ mod tests {
         assert!(loaded.webhook_enabled);
         assert_eq!(loaded.webhook_port, 9090);
         assert!(set_webhook_port(&root.path, 0).is_err());
+
+        let s2s = set_voice_agent_s2s(&root.path, true).expect("s2s");
+        assert!(s2s.voice_agent_s2s);
+        let loaded = load_app_config(&root.path).expect("reload s2s");
+        assert!(loaded.voice_agent_s2s);
+        let off = set_voice_agent_s2s(&root.path, false).expect("s2s off");
+        assert!(!off.voice_agent_s2s);
     }
 
     #[test]

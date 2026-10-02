@@ -52,6 +52,7 @@ mod talk;
 mod telegram;
 mod tool_loop;
 mod verbose_log;
+mod voice_agent;
 mod webhook;
 
 #[cfg(test)]

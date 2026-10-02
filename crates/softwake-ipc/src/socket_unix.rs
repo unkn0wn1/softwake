@@ -485,6 +485,7 @@ impl ServerConnection {
             | ClientMessage::ReloadKws { .. }
             | ClientMessage::ReloadUtterance { .. }
             | ClientMessage::ReloadPlayback { .. }
+            | ClientMessage::ReloadVoiceAgent { .. }
             | ClientMessage::SeedChat { .. }
             | ClientMessage::DropChatTurns { .. } => {
                 let message = "expected a hello message".to_owned();
@@ -804,6 +805,16 @@ impl Client {
         self.round_trip(&ClientMessage::ReloadUtterance { id }, id)
     }
 
+    /// Re-read Voice Agent S2S mode from `softwake.json` / env and apply live.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] on transport failure or a rejected reload.
+    pub fn reload_voice_agent(&mut self) -> Result<Status, CallError> {
+        let id = self.allocate_id();
+        self.round_trip(&ClientMessage::ReloadVoiceAgent { id }, id)
+    }
+
     /// Re-read the TTS playback reaper deadline from `softwake.json` / env.
     ///
     /// # Errors
@@ -1095,6 +1106,7 @@ mod tests {
                         context_compacted: false,
                         context_compact_at: None,
                         voice_test: false,
+                        voice_agent_s2s: false,
                         mic_muted: false,
                         phase: None,
                         build: None,

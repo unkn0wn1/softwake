@@ -478,7 +478,7 @@ fn parse_ctl(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
 fn ctl_command(positional: &[String]) -> Result<CtlAction, String> {
     match positional {
         [] => Err(
-            "ctl needs a command: status, hibernate, resume, wake, sleep, reload-soul, reload-kws, reload-utterance, reload-playback, voice-test, tool, confirm-tool, cancel-tool, ask, chat, webhook, webhook-secret, remote-agent"
+            "ctl needs a command: status, hibernate, resume, wake, sleep, reload-soul, reload-kws, reload-utterance, reload-playback, voice-test, tool, confirm-tool, cancel-tool, ask, chat, voice-agent, webhook, webhook-secret, remote-agent"
                 .to_owned(),
         ),
         [name] if name == "tool" => Err("ctl tool needs a tool name".to_owned()),
@@ -523,6 +523,26 @@ fn ctl_command(positional: &[String]) -> Result<CtlAction, String> {
                 Ok(CtlAction::Chat { text })
             }
         }
+        [name] if name == "voice-agent" => Ok(CtlAction::VoiceAgent {
+            action: crate::ctl::VoiceAgentCtl::Status,
+        }),
+        [name, sub] if name == "voice-agent" => match sub.as_str() {
+            "status" => Ok(CtlAction::VoiceAgent {
+                action: crate::ctl::VoiceAgentCtl::Status,
+            }),
+            "on" | "enable" => Ok(CtlAction::VoiceAgent {
+                action: crate::ctl::VoiceAgentCtl::On,
+            }),
+            "off" | "disable" => Ok(CtlAction::VoiceAgent {
+                action: crate::ctl::VoiceAgentCtl::Off,
+            }),
+            other => Err(format!(
+                "ctl voice-agent expects status, on, or off (got {other})"
+            )),
+        },
+        [name, _, extra, ..] if name == "voice-agent" => Err(format!(
+            "ctl voice-agent takes at most one arg (got extra {extra})"
+        )),
         [name] if name == "webhook" => Ok(CtlAction::Webhook {
             action: WebhookCtl::Status,
         }),

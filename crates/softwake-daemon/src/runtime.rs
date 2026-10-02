@@ -123,6 +123,8 @@ pub(crate) struct Runtime {
     ask_from_free_speech: bool,
     /// Soul path locked by `--soul-dir` / `SOFTWAKE_SOUL_DIR` (no profile retarget).
     soul_path_locked: bool,
+    /// Live xAI Voice Agent S2S bridge (None when mode off or not connected).
+    voice_agent: Option<crate::voice_agent::VoiceAgentBridge>,
 }
 
 impl Runtime {
@@ -218,6 +220,7 @@ impl Runtime {
             reply_latch: crate::reply_latch::ReplyLatch::default(),
             ask_from_free_speech: false,
             soul_path_locked: crate::slash::soul_path_env_locked(),
+            voice_agent: None,
         };
         #[cfg(test)]
         {
@@ -1877,15 +1880,20 @@ impl Runtime {
     /// emits keyword then silence before the next poll).
     /// [`NullDetector`] never matches. After `stop`, the mock drops the queue,
     /// so hibernate does not score a late frame.
+    #[allow(clippy::too_many_lines, reason = "PCM drain owns KWS, free-speech, barge, and Voice Agent pump")]
     fn drain_pcm(&mut self) -> Vec<WireEvent> {
         let mut hit = PhraseHit::None;
         let mut near_miss = None;
         let mut scored = false;
         let mut energy_seen = false;
         let awake = wire_state(self.machine.state()) == WireState::Awake;
+        // Keep / tear down Voice Agent when awake + toggle change.
+        self.sync_voice_agent_session();
+        let s2s = self.voice_agent.is_some();
         // Soft duplex: TTS still arms half-duplex mute for free-speech / KWS, but
         // elevated RMS can barge-in (cancel speech + ask). User HUD mute stays hard.
-        let tts_muted = softwake_voice::input_muted();
+        // Voice Agent mode keeps mic open for server_vad (skip Softwake mute gate).
+        let tts_muted = softwake_voice::input_muted() && !s2s;
         let muted = tts_muted || self.user_mic_muted;
         self.rearm_kws_after_unmute(muted);
         // Fuzzy wake listens only while the clarifier is already armed. Sleep
@@ -1915,7 +1923,8 @@ impl Runtime {
             self.last_capture_level = Some(level);
             let mut barged = false;
             // Soft-duplex barge while Eve speaks (not when the user muted the HUD mic).
-            if softwake_voice::input_muted() && !self.user_mic_muted {
+            // Voice Agent owns barge via server_vad when s2s is active.
+            if !s2s && softwake_voice::input_muted() && !self.user_mic_muted {
                 if self.barge.note(level) {
                     crate::announce::cancel_speech();
                     Self::request_cancel_ask(&self.ask_cancel);
@@ -1934,6 +1943,9 @@ impl Runtime {
             if self.user_mic_muted {
                 continue;
             }
+            if let Some(bridge) = self.voice_agent.as_ref() {
+                bridge.push_pcm(samples);
+            }
             if self.talk.is_armed() {
                 self.talk.push(samples);
             }
@@ -1944,6 +1956,7 @@ impl Runtime {
             // After a barge, allow free-speech buffering on this frame.
             let listen_ok = (auto_ok || barged)
                 && awake
+                && !s2s
                 && !self.voice_test
                 && !self.talk.is_armed()
                 && self.pending_auto_pcm.is_none()
@@ -1973,6 +1986,20 @@ impl Runtime {
             if near_miss.is_none() {
                 near_miss = observed.near_miss;
             }
+        }
+        let (note, dead) = if let Some(bridge) = self.voice_agent.as_mut() {
+            let note = bridge.pump();
+            let dead = !bridge.alive();
+            (note, dead)
+        } else {
+            (None, false)
+        };
+        if let Some(note) = note {
+            self.retain_status_text(Some(note), Some("voice agent".to_owned()));
+            self.set_turn_phase(Some("speaking"));
+        }
+        if dead {
+            self.stop_voice_agent();
         }
         if scored {
             self.last_pcm_hit = Some(hit);
@@ -2207,6 +2234,111 @@ impl Runtime {
         let note = format!("tts playback timeout reloaded ({ms} ms)");
         self.retain_status_text(Some(note.clone()), Some(note.clone()));
         Self::quiet(self.snapshot(Some(note.clone()), Some(note)))
+    }
+
+    /// Re-read Voice Agent S2S toggle and start/stop the bridge when awake.
+    pub(crate) fn reload_voice_agent(&mut self) -> Outcome {
+        self.sync_voice_agent_session();
+        let on = crate::voice_agent::resolve_voice_agent_s2s_enabled();
+        let active = self.voice_agent.is_some();
+        let note = if on && active {
+            "voice agent s2s on (session active)".to_owned()
+        } else if on {
+            "voice agent s2s on (waiting for awake + xAI)".to_owned()
+        } else {
+            "voice agent s2s off".to_owned()
+        };
+        if self.verbosity >= 1 {
+            eprintln!("softwaked: {note}");
+        }
+        self.retain_status_text(Some(note.clone()), Some(note.clone()));
+        Self::quiet(self.snapshot(Some(note.clone()), Some(note)))
+    }
+
+    /// Cancel Voice Agent playback/response (`CancelAsk` / sleep).
+    pub(crate) fn cancel_voice_agent(&mut self) {
+        if let Some(bridge) = self.voice_agent.as_mut() {
+            bridge.cancel();
+        }
+    }
+
+    /// Drop the Voice Agent session entirely.
+    pub(crate) fn stop_voice_agent(&mut self) {
+        if let Some(bridge) = self.voice_agent.take() {
+            bridge.stop();
+        }
+    }
+
+    #[allow(clippy::too_many_lines, reason = "connect + credential + status notes stay in one place")]
+    fn sync_voice_agent_session(&mut self) {
+        let wanted = crate::voice_agent::resolve_voice_agent_s2s_enabled();
+        let awake = wire_state(self.machine.state()) == WireState::Awake;
+        if !wanted || !awake || self.voice_test {
+            self.stop_voice_agent();
+            return;
+        }
+        if self
+            .voice_agent
+            .as_ref()
+            .is_some_and(crate::voice_agent::VoiceAgentBridge::alive)
+        {
+            return;
+        }
+        // Stale handle
+        self.stop_voice_agent();
+        #[cfg(feature = "live-http")]
+        {
+            use softwake_providers::{family_speaks_xai, resolve_tts_voice};
+            let ready = match crate::chat::load_disk_chat() {
+                Ok(ready) => ready,
+                Err(error) => {
+                    if self.verbosity >= 1 {
+                        eprintln!("softwaked: voice agent skipped ({error})");
+                    }
+                    return;
+                }
+            };
+            if !family_speaks_xai(ready.prepared.provider) {
+                if self.verbosity >= 1 {
+                    eprintln!("softwaked: voice agent needs an xAI provider");
+                }
+                return;
+            }
+            let voice = resolve_tts_voice(ready.prepared.provider, ready.prepared_tts_voice())
+                .unwrap_or("eve")
+                .to_owned();
+            let instructions = crate::voice_agent::instructions_from_soul(
+                self.soul.applied_instructions(),
+                &self.soul.agent_name(),
+            );
+            match crate::voice_agent::VoiceAgentBridge::start(
+                ready.prepared.api_base.clone(),
+                ready.bearer.clone(),
+                voice,
+                instructions,
+            ) {
+                Ok(bridge) => {
+                    if self.verbosity >= 1 {
+                        eprintln!("softwaked: voice agent s2s session started");
+                    }
+                    self.voice_agent = Some(bridge);
+                    self.retain_status_text(
+                        Some("Voice Agent listening…".to_owned()),
+                        Some("voice agent s2s".to_owned()),
+                    );
+                }
+                Err(error) => {
+                    if self.verbosity >= 1 {
+                        eprintln!("softwaked: voice agent start failed: {error}");
+                    }
+                    self.retain_status_text(Some(error), Some("voice agent".to_owned()));
+                }
+            }
+        }
+        #[cfg(not(feature = "live-http"))]
+        {
+            let _ = (wanted, awake);
+        }
     }
 
     /// Apply a KWS hit to the voice machine when the state allows it.
@@ -2515,6 +2647,7 @@ impl Runtime {
                 .last_context_compact_at
                 .filter(|_| self.session.phase() == softwake_session::SessionPhase::Open),
             voice_test: self.voice_test,
+            voice_agent_s2s: crate::voice_agent::resolve_voice_agent_s2s_enabled(),
             mic_muted: self.user_mic_muted,
             phase: self.turn_phase.clone(),
             build: Some(crate::build_stamp()),
@@ -2602,6 +2735,7 @@ impl Runtime {
 
     /// Clear turn phase after `CancelAsk` when the runtime lock is free.
     pub(crate) fn clear_turn_live_for_cancel(&mut self) {
+        self.cancel_voice_agent();
         self.clear_turn_live();
         self.ask_cancel
             .store(false, std::sync::atomic::Ordering::SeqCst);
