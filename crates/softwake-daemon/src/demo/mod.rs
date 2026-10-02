@@ -596,6 +596,7 @@ impl Demo {
             prepared,
             bearer,
             tts_voice: _,
+            tts_speed: _,
             stt_model: _,
             budget,
         } = ready;

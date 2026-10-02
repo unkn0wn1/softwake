@@ -109,6 +109,12 @@ impl ProviderHandle {
         if voice.is_empty() { None } else { Some(voice) }
     }
 
+    /// Selected TTS / Voice Agent speech speed (clamped to xAI range).
+    #[must_use]
+    pub fn selected_tts_speed(&self) -> f64 {
+        crate::voice::speed_from_milli(self.settings.selected_tts_speed_milli)
+    }
+
     /// Selected chat `reasoning_effort`, if set. Empty means omit on the wire.
     #[must_use]
     pub fn selected_reasoning_effort(&self) -> Option<&str> {

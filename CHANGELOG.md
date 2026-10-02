@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- **Speech speed (xAI Providers):** Settings presets 0.5×–2× on Providers (xAI only). Wired into unary/streaming TTS (`speed`) and Voice Agent (`audio.output.speed`). Softwake clamps to the xAI API range 0.7–1.5.
+
+### Changed
+
+- **Voice Agent S2S toggle** moved from General onto **Providers → xAI** only (no fake S2S controls on OpenAI / OpenRouter / compatible).
+
+
 ### Fixed
 
 - **Voice Agent S2S audio plays on FFmpeg 8:** `PcmPipePlayer` uses `-ch_layout mono` (FFmpeg 8 removed ffplay `-ac`, which caused `ffplay exited immediately (exit status: 1)` and silent replies). Legacy `-ac 1` remains a fallback. Idle `response.cancel` no longer spams HUD; Speaking phase is set only while PCM is playing.

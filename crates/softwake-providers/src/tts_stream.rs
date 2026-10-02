@@ -11,7 +11,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use serde_json::Value;
 
-use crate::voice::{VOICE_LANGUAGE, VoiceHttpError};
+use crate::voice::{VOICE_LANGUAGE, VoiceHttpError, clamp_tts_speed};
 
 #[cfg(feature = "live-http")]
 use crate::voice::{TTS_MAX_CHARS, clip_chars_for_stream};
@@ -24,7 +24,11 @@ use crate::voice::{TTS_MAX_CHARS, clip_chars_for_stream};
 ///
 /// [`VoiceHttpError::Unreachable`] when the base is not http(s)/ws(s) or the
 /// voice id is hostile; [`VoiceHttpError::EmptyText`] when voice is blank.
-pub fn tts_stream_url(api_base: &str, voice_id: &str) -> Result<String, VoiceHttpError> {
+pub fn tts_stream_url(
+    api_base: &str,
+    voice_id: &str,
+    speed: f64,
+) -> Result<String, VoiceHttpError> {
     let base = api_base.trim().trim_end_matches('/');
     let (scheme, rest) = if let Some(rest) = base.strip_prefix("https://") {
         ("wss", rest)
@@ -48,8 +52,9 @@ pub fn tts_stream_url(api_base: &str, voice_id: &str) -> Result<String, VoiceHtt
     {
         return Err(VoiceHttpError::Unreachable);
     }
+    let speed = clamp_tts_speed(speed);
     Ok(format!(
-        "{scheme}://{rest}/tts?language={VOICE_LANGUAGE}&voice={voice}&codec=mp3&sample_rate=24000&bit_rate=128000&optimize_streaming_latency=1"
+        "{scheme}://{rest}/tts?language={VOICE_LANGUAGE}&voice={voice}&codec=mp3&sample_rate=24000&bit_rate=128000&optimize_streaming_latency=1&speed={speed}"
     ))
 }
 
@@ -114,6 +119,7 @@ pub fn tts_synthesize_streaming(
     bearer: &str,
     text: &str,
     voice_id: &str,
+    speed: f64,
     mut on_chunk: impl FnMut(&[u8]) -> Result<(), VoiceHttpError>,
 ) -> Result<(), VoiceHttpError> {
     use tungstenite::client::IntoClientRequest;
@@ -125,7 +131,7 @@ pub fn tts_synthesize_streaming(
         return Err(VoiceHttpError::EmptyText);
     }
     let text = clip_chars_for_stream(text, TTS_MAX_CHARS);
-    let url = tts_stream_url(api_base, voice_id)?;
+    let url = tts_stream_url(api_base, voice_id, speed)?;
     let mut request = url
         .as_str()
         .into_client_request()
@@ -188,9 +194,10 @@ mod tests {
 
     #[test]
     fn https_api_base_becomes_wss_tts() {
-        let url = tts_stream_url("https://api.x.ai/v1/", "eve").expect("url");
+        let url = tts_stream_url("https://api.x.ai/v1/", "eve", 1.0).expect("url");
         assert!(url.starts_with("wss://api.x.ai/v1/tts?"));
         assert!(url.contains("voice=eve"));
+        assert!(url.contains("speed=1"));
         assert!(url.contains("codec=mp3"));
         assert!(url.contains("optimize_streaming_latency=1"));
         assert!(url.contains("language=en"));
@@ -199,11 +206,11 @@ mod tests {
     #[test]
     fn rejects_empty_or_hostile_voice() {
         assert_eq!(
-            tts_stream_url("https://api.x.ai/v1", "").expect_err("empty"),
+            tts_stream_url("https://api.x.ai/v1", "", 1.0).expect_err("empty"),
             VoiceHttpError::EmptyText
         );
         assert_eq!(
-            tts_stream_url("https://api.x.ai/v1", "eve&x=1").expect_err("meta"),
+            tts_stream_url("https://api.x.ai/v1", "eve&x=1", 1.0).expect_err("meta"),
             VoiceHttpError::Unreachable
         );
     }

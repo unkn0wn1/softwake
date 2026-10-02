@@ -70,13 +70,22 @@ impl VoiceAgentBridge {
         bearer: String,
         voice: String,
         instructions: String,
+        speed: f64,
     ) -> Result<Self, String> {
         let (cmd_tx, cmd_rx) = mpsc::channel::<BridgeCmd>();
         let (event_tx, event_rx) = mpsc::channel::<BridgeEvent>();
         let join = thread::Builder::new()
             .name("softwake-voice-agent".to_owned())
             .spawn(move || {
-                worker_loop(api_base, bearer, voice, instructions, cmd_rx, event_tx);
+                worker_loop(
+                    api_base,
+                    bearer,
+                    voice,
+                    instructions,
+                    speed,
+                    cmd_rx,
+                    event_tx,
+                );
             })
             .map_err(|error| format!("could not start voice agent thread: {error}"))?;
         Ok(Self {
@@ -95,6 +104,7 @@ impl VoiceAgentBridge {
         _bearer: String,
         _voice: String,
         _instructions: String,
+        _speed: f64,
     ) -> Result<Self, String> {
         Err(crate::chat::LIVE_HTTP_DISABLED.to_owned())
     }
@@ -321,6 +331,7 @@ fn worker_loop(
     bearer: String,
     voice: String,
     instructions: String,
+    speed: f64,
     cmd_rx: Receiver<BridgeCmd>,
     event_tx: Sender<BridgeEvent>,
 ) {
@@ -338,7 +349,7 @@ fn worker_loop(
             }
         };
     if session
-        .send_session_update(&voice, &instructions, true)
+        .send_session_update(&voice, &instructions, speed, true)
         .is_err()
     {
         let _ = event_tx.send(BridgeEvent::Error(

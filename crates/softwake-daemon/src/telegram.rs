@@ -385,6 +385,7 @@ fn synthesize_mp3(text: &str) -> Result<Vec<u8>, String> {
             &ready.bearer,
             text,
             voice,
+            ready.tts_speed,
         )
         .map_err(|e| e.to_string())
     }

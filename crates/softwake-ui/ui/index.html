@@ -177,21 +177,6 @@
             <input id="voice-test" type="checkbox" />
             <span>Voice test mode</span>
           </label>
-          <label class="field row-check">
-            <input id="voice-agent-s2s" type="checkbox" />
-            <span>Voice Agent continuous S2S (xAI realtime)</span>
-          </label>
-          <p id="voice-agent-s2s-hint" class="meta">
-            Opt-in continuous speech-to-speech via xAI Voice Agent while awake.
-            Mic stays up; server VAD handles barge-in. Uses your Softwake xAI key.
-            Softwake Hands / tool confirms / full soul tool-loop stay on <strong>text ask</strong> only.
-            Default off keeps STT→chat→TTS (+ soft duplex). Saved as
-            <code>voice_agent_s2s</code> in softwake.json. Env
-            <code>SOFTWAKE_VOICE_AGENT_S2S</code> wins when set.
-            Requires a <code>live-http</code> daemon build.
-          </p>
-          <p id="voice-agent-s2s-status" class="meta" role="status"></p>
-          <p id="voice-agent-s2s-error" class="error" role="status"></p>
           <p class="meta">
             Wake, sleep, and deep-sleep phrases still change state, and Softwake still speaks the short state line.
             Microphone speech is not sent to the chat model. Default off.
@@ -302,13 +287,37 @@
               <option value="">Test to load models</option>
             </select>
           </label>
-          <label class="field">
+          <label class="field" id="tts-voice-field">
             <span>TTS voice</span>
             <select id="tts-voice-select" disabled>
               <option value="">Eve (xAI default)</option>
             </select>
           </label>
-          <p id="tts-note" class="meta">Speech replies use the xAI voice Eve when the selected provider is xAI.</p>
+          <label class="field" id="tts-speed-field">
+            <span>Speech speed</span>
+            <select id="tts-speed-select" disabled>
+              <option value="1">1× (default)</option>
+            </select>
+          </label>
+          <p id="tts-note" class="meta">
+            TTS voice and speech speed are <strong>xAI only</strong> (API range 0.7–1.5; Softwake clamps
+            0.5× / 1.75× / 2×). Other providers hide these controls — no fake voice settings.
+          </p>
+          <div id="voice-agent-s2s-panel" class="stack hidden" hidden>
+            <label class="field row-check">
+              <input id="voice-agent-s2s" type="checkbox" />
+              <span>Voice Agent continuous S2S (xAI realtime)</span>
+            </label>
+            <p id="voice-agent-s2s-hint" class="meta">
+              Opt-in continuous speech-to-speech via xAI Voice Agent while awake.
+              Mic stays up; server VAD handles barge-in. Softwake Hands / confirms / full soul
+              tool-loop stay on <strong>text ask</strong> only. Default off keeps STT→chat→TTS.
+              Saved as <code>voice_agent_s2s</code> in softwake.json.
+              Env <code>SOFTWAKE_VOICE_AGENT_S2S</code> wins when set. Requires <code>live-http</code>.
+            </p>
+            <p id="voice-agent-s2s-status" class="meta" role="status"></p>
+            <p id="voice-agent-s2s-error" class="error" role="status"></p>
+          </div>
           <label class="field">
             <span>Context limit (tokens)</span>
             <input id="context-limit" type="number" min="0" step="1024" placeholder="0 = built-in / 128000" />

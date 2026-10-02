@@ -111,8 +111,10 @@ pub use transport::{
 pub use tts_stream::tts_synthesize_streaming;
 pub use tts_stream::{is_audio_done_event, parse_tts_stream_event, tts_stream_url};
 pub use voice::{
-    TTS_MAX_CHARS, VOICE_LANGUAGE, VoiceHttpError, family_speaks_xai, resolve_stt_model,
-    resolve_tts_voice, stt_transcribe, tts_synthesize, tts_voice_roster, wav_from_pcm16,
+    TTS_MAX_CHARS, TTS_SPEED_API_MAX, TTS_SPEED_API_MIN, TTS_SPEED_PRESETS, VOICE_LANGUAGE,
+    VoiceHttpError, clamp_tts_speed, family_speaks_xai, parse_tts_speed, resolve_stt_model,
+    resolve_tts_voice, speed_from_milli, speed_to_milli, stt_transcribe, tts_synthesize,
+    tts_voice_roster, wav_from_pcm16,
 };
 #[cfg(feature = "live-http")]
 pub use voice_agent::VoiceAgentSession;
