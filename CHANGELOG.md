@@ -4,6 +4,8 @@
 
 ### Added
 
+- **ADR 0051** — Shell redesign plan (main window / HUD orb, 2-way chat, user.md inheritance). Docs only; implementation waits for per-phase go ([ADR 0051](docs/ADR-0051-shell-redesign.md)).
+
 - **Speech speed (xAI Providers):** Settings presets 0.5×–2× on Providers (xAI only). Wired into unary/streaming TTS (`speed`) and Voice Agent (`audio.output.speed`). Softwake clamps to the xAI API range 0.7–1.5.
 
 ### Changed
