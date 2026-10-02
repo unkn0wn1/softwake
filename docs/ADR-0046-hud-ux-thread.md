@@ -17,7 +17,7 @@ Settings actions such as Test on Tailnet / Install companion blocked the Tauri U
 6. **Mic mute** — Additive `ClientMessage::SetMicMute` + `Status.mic_muted`; HUD top-left toggle; KWS/PTT/free-speech off; typed ask remains. Preference also in `ui-prefs.json`.
 7. **Model None** — Select shows `None` when `selected_model` is empty; never auto-pick `models[0]` on load. Providers Test no longer writes the first catalog id when unset. Empty select clears the saved model.
 8. **Strip layout** — Expanded `.strip-main` is a **column flex** with `#log { flex: 1 1 0 }`. Fixed N-track CSS grid mis-assigned the grow row when vault/toolbar/live/meter were `[hidden]` (`display: none` drops tracks), so thinking, context meter, and composer mashed. Live / context / composer stay `flex-shrink: 0` bands in HTML order.
-9. **Single assistant bubble** — HUD dedupes consecutive identical assistant text across the pre-TTS status poll and the post-TTS ask/talk settle (no short time gate). Detail/note may refresh on the same bubble; a later user turn that happens to get the same words still appends a new bubble.
+9. **Single assistant bubble** — HUD dedupes consecutive identical assistant text across the pre-TTS status poll and the post-TTS ask/talk settle (no short time gate). Detail/note may refresh on the same bubble; a later user turn that happens to get the same words still appends a new bubble. Mid-ask streaming also revives the in-flight assistant bubble when `streaming` was cleared (disk reload / soft-finalize), so identical tool narration is not appended on each status poll (see ADR-0048).
 
 ## Consequences
 

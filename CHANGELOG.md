@@ -12,6 +12,8 @@
 
 
 ### Fixed
+- **HUD / chat:** intermediate tool-loop narration is no longer duplicated into dozens of identical assistant bubbles mid-ask (Soulwright PDF/text research). Live streaming revives the in-flight bubble in place, disk reload waits until the turn settles, and identical `on_delta` live text is not re-pushed.
+
 
 - **Voice Agent S2S barge mashup:** on barge-in / cancel / new response, hard-kill prior `PcmPipePlayer` (SIGKILL + drain) and always `interrupt` before opening a new player so a `finish()`-orphaned ffplay/mpv cannot overlap the next sentence.
 

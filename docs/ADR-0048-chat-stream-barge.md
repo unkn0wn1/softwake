@@ -65,3 +65,20 @@ Slice 1 left playback running after CancelAsk (SSE only). Softwake now calls
 `announce::cancel_speech` from CancelAsk so Escape/Cancel interrupt the player
 and clear half-duplex mute immediately. Soft duplex barge-in and streaming TTS
 are documented in [ADR 0049](ADR-0049-duplex-barge-stream-tts.md).
+
+## Amendment — no duplicate live tool narration
+
+Soulwright tool rounds stream intermediate prose (`The text search is working…`)
+into `Status.message`. The HUD polled at ~150ms and `pushOrUpdateStreaming` only
+updated in place when `last.streaming` was set. Disk reload (`replaceTurns`) and
+soft-finalize settle cleared that flag, so each identical poll **appended** a new
+bubble — dozens of copies mid-research. `soft_finalize` also re-publishes wire
+content already shown live.
+
+Follow-up decisions:
+
+1. **HUD** — while an ask is in flight, revive/update the last non-error assistant
+   bubble in place (identical text is a no-op). Skip `maybeReloadChatFromDisk`
+   during `talkPending || streamingTurn`.
+2. **Daemon `on_delta`** — do not rewrite `status.message` when the partial is
+   unchanged (phase/detail still `streaming`); early TTS unchanged.
