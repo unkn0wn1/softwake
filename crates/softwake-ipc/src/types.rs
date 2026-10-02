@@ -748,6 +748,20 @@ pub enum ClientMessage {
         /// Turns to drop (role + exact text).
         turns: Vec<SeedChatTurn>,
     },
+    /// Operator posts into a multi-agent room (ADR-0052).
+    ///
+    /// Softwake appends the operator line, then offers each member a oneshot so
+    /// they may choose to reply. Reply policy in the text (e.g. "only sally")
+    /// is part of the stimulus. Cool-down + single-flight keep members from
+    /// piling on. Additive on protocol generation 1.
+    RoomPost {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+        /// Room id under `$XDG_CONFIG_HOME/softwake/rooms/`.
+        room_id: String,
+        /// Operator message (may include reply policy instructions).
+        text: String,
+    },
 }
 
 /// Daemon messages after a client connects.
@@ -1084,6 +1098,11 @@ mod tests {
         };
         assert_round_trip(&reload_playback);
         assert_round_trip(&seed);
+        assert_round_trip(&ClientMessage::RoomPost {
+            id: 42,
+            room_id: "standup".into(),
+            text: "hi — only sally reply".into(),
+        });
         let reload_playback_json = serde_json::to_string(&reload_playback).expect("encode");
         assert!(reload_playback_json.contains("\"type\":\"reload_playback\""));
         let talk_stop_json = serde_json::to_string(&talk_stop).expect("encode");

@@ -23,6 +23,9 @@ pub const MAX_ROOMS: usize = 64;
 /// Max JSONL lines retained when trimming (soft cap on read helpers).
 pub const MAX_LOG_TAIL: usize = 200;
 
+/// Soft cap for operator room chat history (Settings / room pane).
+pub const MAX_ROOM_CHAT_LINES: usize = 500;
+
 /// On-disk room document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomFile {
@@ -117,6 +120,15 @@ pub fn resolve_rooms_dir(
     Ok(config.join("rooms"))
 }
 
+/// Ensure the rooms config directory exists (mkdir -p).
+///
+/// # Errors
+///
+/// I/O creating the directory.
+pub fn ensure_rooms_dir(rooms_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(rooms_dir).map_err(|e| format!("rooms dir: {e}"))
+}
+
 /// Softwake rooms state (logs) directory.
 ///
 /// # Errors
@@ -165,9 +177,17 @@ pub fn room_file_path(rooms_dir: &Path, room_id: &str) -> PathBuf {
 ///
 /// # Errors
 ///
-/// Missing / invalid JSON.
+/// Missing room id / invalid JSON. Missing files return a clear not-found message
+/// (not a raw OS ENOENT).
 pub fn load_room(path: &Path) -> Result<RoomFile, String> {
-    let bytes = fs::read(path).map_err(|e| format!("read room: {e}"))?;
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("?");
+            return Err(format!("room `{id}` not found"));
+        }
+        Err(e) => return Err(format!("read room: {e}")),
+    };
     serde_json::from_slice(&bytes).map_err(|e| format!("parse room: {e}"))
 }
 
@@ -254,6 +274,27 @@ pub fn create_room(
     };
     save_room(rooms_dir, &room)?;
     Ok(room)
+}
+
+/// Create or update a room (Settings Save / create-on-first-use).
+///
+/// # Errors
+///
+/// Invalid id, too many rooms/members, or I/O.
+pub fn upsert_room(
+    rooms_dir: &Path,
+    id: &str,
+    title: &str,
+    members: Vec<String>,
+) -> Result<RoomFile, String> {
+    if !valid_room_id(id) {
+        return Err("invalid room id".into());
+    }
+    let path = room_file_path(rooms_dir, id);
+    if path.is_file() {
+        return update_room(rooms_dir, id, Some(title), Some(members));
+    }
+    create_room(rooms_dir, id, title, members)
 }
 
 /// Update members / title.
@@ -465,6 +506,36 @@ mod tests {
         let tail = tail_room_log(&state, "standup", 10).unwrap();
         assert_eq!(tail.len(), 2);
         assert_eq!(tail[1].kind, RoomLogKind::GoalProgress);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn missing_room_is_clear_not_enoent() {
+        let root = temp("missing");
+        let rooms = root.join("rooms");
+        fs::create_dir_all(&rooms).unwrap();
+        let err = load_room(&room_file_path(&rooms, "nope")).unwrap_err();
+        assert!(err.contains("not found"), "{err}");
+        assert!(!err.contains("os error"), "{err}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn upsert_creates_then_updates() {
+        let root = temp("upsert");
+        let rooms = root.join("rooms");
+        let a = upsert_room(&rooms, "lab", "Lab", vec!["default".into()]).unwrap();
+        assert_eq!(a.title, "Lab");
+        let b = upsert_room(
+            &rooms,
+            "lab",
+            "Lab 2",
+            vec!["default".into(), "sally".into()],
+        )
+        .unwrap();
+        assert_eq!(b.title, "Lab 2");
+        assert_eq!(b.members.len(), 2);
+        assert_eq!(list_rooms(&rooms).unwrap().len(), 1);
         let _ = fs::remove_dir_all(&root);
     }
 }

@@ -531,7 +531,8 @@ impl ServerConnection {
             | ClientMessage::ReloadPlayback { .. }
             | ClientMessage::ReloadVoiceAgent { .. }
             | ClientMessage::SeedChat { .. }
-            | ClientMessage::DropChatTurns { .. } => {
+            | ClientMessage::DropChatTurns { .. }
+            | ClientMessage::RoomPost { .. } => {
                 let message = "expected a hello message".to_owned();
                 endpoint.write(&ServerMessage::HelloRejected {
                     protocol_version: PROTOCOL_VERSION,
@@ -761,6 +762,23 @@ impl Client {
     ) -> Result<Status, CallError> {
         let id = self.allocate_id();
         self.round_trip(&ClientMessage::DropChatTurns { id, turns }, id)
+    }
+
+    /// Operator posts into a room; members may choose to reply (ADR-0052).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] on transport failure or a rejected room post.
+    pub fn call_room_post(&mut self, room_id: &str, text: &str) -> Result<Status, CallError> {
+        let id = self.allocate_id();
+        self.round_trip(
+            &ClientMessage::RoomPost {
+                id,
+                room_id: room_id.to_owned(),
+                text: text.to_owned(),
+            },
+            id,
+        )
     }
 
     /// Arm press-to-talk on the daemon.

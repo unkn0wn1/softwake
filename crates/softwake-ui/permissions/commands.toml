@@ -516,6 +516,16 @@ description = "Delete a Softwake room."
 commands.allow = ["room_delete"]
 
 [[permission]]
+identifier = "allow-room-save"
+description = "Create or update a Softwake room."
+commands.allow = ["room_save"]
+
+[[permission]]
+identifier = "allow-room-post"
+description = "Operator post into a Softwake room chat."
+commands.allow = ["room_post"]
+
+[[permission]]
 identifier = "allow-global-docs-snapshot"
 description = "Read the main profile user, rules, and glossary."
 commands.allow = ["global_docs_snapshot"]

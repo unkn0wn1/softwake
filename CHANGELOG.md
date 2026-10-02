@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Rooms (ADR-0052):** Settings list shows persisted rooms after Save (create-on-first-use / upsert); New is an action, not a fake top room; missing room reads return a clear `not found` instead of raw ENOENT; operator room chat pane posts with member fan-out (optional reply, cool-down + single-flight); `goal_run` logs plan/revise/gate/execute to room + HUD.
+
 ### Added
 
 - **ADR-0052 agent team / local power:** per-profile agent homes (`$XDG_DATA_HOME/softwake/homes/<id>/`), profile `allow_all` + `role`, confirm-gated `software_install`, rooms with light turn cool-down, peer DM `agent_message`, profile-scoped schedule `agent_task`, and first-class `goal_run` goal loop (plan/execute/verify with caps, human gate, progress log; softwake or local `grok` CLI backend). Settings → Profiles (Allow all / Role) and Settings → Rooms. PROTOCOL stays 1.

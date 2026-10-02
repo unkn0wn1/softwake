@@ -438,6 +438,10 @@ fn cancel_ask_outcome(shared: &Shared) -> crate::runtime::Outcome {
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "client message match arms stay co-located; RoomPost is additive"
+)]
 fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerReader) -> bool {
     match reader.read() {
         Ok(ClientMessage::Request { id, command }) => {
@@ -529,6 +533,11 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
         }
         Ok(ClientMessage::DropChatTurns { id, turns }) => {
             let outcome = lock(&shared.runtime).drop_chat_turns_from_ui(&turns);
+            reply(shared, tx, id, outcome)
+        }
+        Ok(ClientMessage::RoomPost { id, room_id, text }) => {
+            publish_thinking(shared, "room post");
+            let outcome = lock(&shared.runtime).room_post_from_ui(&room_id, &text);
             reply(shared, tx, id, outcome)
         }
         Ok(ClientMessage::Hello { .. }) => false,
