@@ -11,6 +11,7 @@
 //! stubs that document where models will load. Default `cargo test` does not
 //! enable those features and does not download anything.
 
+mod barge;
 mod energy_utt;
 mod mock;
 mod pcm_wav;
@@ -21,6 +22,7 @@ mod sherpa_asr;
 mod sherpa_tts;
 mod xdg;
 
+pub use barge::{BARGE_FRAMES, BARGE_RMS, BargeDetector};
 pub use energy_utt::{
     CAPTURE_FRAME_MS, EnergyUtterance, SILENCE_FRAMES_END, SILENCE_FRAMES_END_MAX,
     SILENCE_FRAMES_END_MIN, SILENCE_RMS, START_FRAMES, START_RMS, silence_frames_from_ms,
@@ -28,9 +30,10 @@ pub use energy_utt::{
 pub use mock::{MockStt, MockTts};
 pub use pcm_wav::{TALK_MAX_SAMPLES, TALK_MIN_SAMPLES, TalkBuffer, wav_from_pcm16};
 pub use playback::{
-    INPUT_MUTE_TEST_LOCK, PLAYBACK_MUTE_GRACE, PLAYBACK_TIMEOUT, PlaybackMode, PlayedClip,
-    begin_input_mute, clear_input_mute_for_test, end_input_mute, input_muted, interrupt_playback,
-    play_audio, play_audio_with_interrupt, wait_for_playback_idle,
+    INPUT_MUTE_TEST_LOCK, Mp3PipePlayer, PLAYBACK_MUTE_GRACE, PLAYBACK_TIMEOUT, PlaybackMode,
+    PlayedClip, begin_input_mute, clear_input_mute_for_test, end_input_mute,
+    force_clear_input_mute, input_muted, interrupt_playback, play_audio, play_audio_with_interrupt,
+    play_mp3_pipe_start, wait_for_playback_idle,
 };
 #[cfg(feature = "sherpa-asr")]
 pub use sherpa_asr::SherpaAsr;

@@ -412,6 +412,8 @@ fn client_loop(stream: IpcStream, shared: &Shared) {
 
 fn cancel_ask_outcome(shared: &Shared) -> crate::runtime::Outcome {
     Runtime::request_cancel_ask(&shared.ask_cancel);
+    // Kill Eve now — CancelAsk used to stop only the SSE reader while audio played on.
+    crate::announce::cancel_speech();
     if let Ok(mut runtime) = shared.runtime.try_lock() {
         runtime.clear_turn_live_for_cancel();
         return crate::runtime::Outcome {

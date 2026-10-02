@@ -8,8 +8,8 @@ description = "Model provider credentials, device-code OAuth, Test probes, chat 
 
 [features]
 default = []
-# Opens real HTTPS with ureq. Off in CI. Unit tests stay on MockTransport.
-live-http = ["dep:ureq"]
+# Opens real HTTPS with ureq. Streaming TTS uses tungstenite+rustls. Off in CI default.
+live-http = ["dep:ureq", "dep:tungstenite"]
 
 [dependencies]
 keyring = { version = "=3.6.3", default-features = false, features = [
@@ -25,6 +25,10 @@ ureq = { version = "2.12", default-features = true, optional = true }
 sha2 = "0.10"
 base64 = "0.22"
 getrandom = "0.2"
+tungstenite = { version = "0.24", optional = true, default-features = false, features = [
+    "handshake",
+    "rustls-tls-webpki-roots",
+] }
 
 [lints]
 workspace = true

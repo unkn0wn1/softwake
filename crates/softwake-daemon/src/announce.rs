@@ -82,12 +82,24 @@ fn speak_generation() -> &'static AtomicU64 {
 /// Invalidate queued state/early TTS from a prior ask and stop the current player.
 #[cfg(not(test))]
 pub(crate) fn begin_ask_speech() {
-    speak_generation().fetch_add(1, Ordering::SeqCst);
-    softwake_voice::interrupt_playback();
+    cancel_speech();
 }
 
 #[cfg(test)]
 pub(crate) fn begin_ask_speech() {}
+
+/// Stop Eve immediately: bump speak generation, kill the player, clear mute.
+///
+/// Used by ask-start, `CancelAsk` / Escape, and soft-duplex barge-in.
+#[cfg(not(test))]
+pub(crate) fn cancel_speech() {
+    speak_generation().fetch_add(1, Ordering::SeqCst);
+    softwake_voice::interrupt_playback();
+    softwake_voice::force_clear_input_mute();
+}
+
+#[cfg(test)]
+pub(crate) fn cancel_speech() {}
 
 /// How long a queued clip may wait for the previous player to finish.
 #[cfg(not(test))]

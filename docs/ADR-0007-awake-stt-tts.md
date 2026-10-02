@@ -8,6 +8,7 @@
 - **Amended:** 2026-09-26. Free-speech `EnergyUtterance` end-of-speech silence hangover raised to ~2.0 s (200 × 10 ms capture frames) so mid-thought pauses cut less often. PTT unchanged.
 - **Amended:** 2026-09-26. That hangover is configurable (default 2.0 s, range 0.5–4.0 s) from Settings → General, `free_speech_end_silence_ms` in softwake.json, or `SOFTWAKE_FREE_SPEECH_END_SILENCE_MS` (env wins over the file). Live apply updates the energy gate and does not rebuild the keyword spotter. Press-to-talk unchanged.
 - **Amended:** 2026-09-26. The playback reaper deadline is configurable (default 60 s, range 30–300 s) from Settings → General, `tts_playback_timeout_ms` in softwake.json, or `SOFTWAKE_TTS_PLAYBACK_TIMEOUT_MS` (env wins over the file). The next speak uses it. An in-flight player keeps its original deadline. Chat HTTP stays 120 s. Mute grace stays ~200 ms.
+- **Amended:** 2026-10-02. Soft duplex barge-in + streaming TTS ([ADR 0049](ADR-0049-duplex-barge-stream-tts.md)): CancelAsk/Escape kills the player and clears mute; elevated-energy barge while TTS plays; prefer xAI `wss://…/v1/tts` with stdin pipe playback (unary POST fallback). Half-duplex mute remains the default for free-speech/KWS (not AEC). Voice Agent S2S deferred.
 
 ## Decision
 

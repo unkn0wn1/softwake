@@ -13,8 +13,11 @@
 //!
 //! While a spawned player is alive (and for a short grace after it exits),
 //! [`input_muted`] is true so the daemon can drop mic frames — half-duplex,
-//! mute-while-speaking — and avoid Eve hearing herself over speakers. Early
-//! returns (no TTS, missing player, Record mode) never arm mute.
+//! mute-while-speaking — and avoid Eve hearing herself over speakers. Soft
+//! duplex barge-in ([`crate::BargeDetector`]) and `CancelAsk` call
+//! [`force_clear_input_mute`] so the mic opens the moment speech is cut.
+//! Early returns (no TTS, missing player, Record mode) never arm mute.
+//! Streaming TTS writes MP3 chunks into [`Mp3PipePlayer`] (ffplay/mpv stdin).
 
 use std::io::Write;
 use std::path::Path;
@@ -112,15 +115,23 @@ pub fn end_input_mute(generation: u64) {
     *grace = Some(Instant::now() + PLAYBACK_MUTE_GRACE);
 }
 
-/// Drop any mute hold and grace immediately. For unit tests only — production
-/// paths use [`end_input_mute`] so room reverb is still covered by grace.
-pub fn clear_input_mute_for_test() {
+/// Drop any mute hold and grace immediately.
+///
+/// Used by `CancelAsk` / soft-duplex barge-in so the mic opens as soon as Eve
+/// is cut. Also used by unit tests. Normal clip end still prefers
+/// [`end_input_mute`] (grace covers room reverb).
+pub fn force_clear_input_mute() {
     MUTE_GENERATION.fetch_add(1, Ordering::AcqRel);
     MUTE_HOLD.store(false, Ordering::Release);
     let mut grace = MUTE_GRACE_UNTIL
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *grace = None;
+}
+
+/// Drop any mute hold and grace immediately. Alias of [`force_clear_input_mute`].
+pub fn clear_input_mute_for_test() {
+    force_clear_input_mute();
 }
 
 /// Serialize tests that arm mute or score mic frames while mute may be set.
@@ -369,12 +380,172 @@ fn write_temp(bytes: &[u8], suffix: &str) -> Result<std::path::PathBuf, String> 
     Ok(path)
 }
 
+/// Progressive MP3 playback via player stdin (streaming TTS).
+///
+/// Softwake writes codec frames as the WebSocket delivers them so Eve can
+/// start before the full utterance is buffered. Mute / interrupt / reaper
+/// match [`play_audio_with_interrupt`] Spawn semantics.
+pub struct Mp3PipePlayer {
+    child: Child,
+    stdin: std::process::ChildStdin,
+    pid: u32,
+    mute_generation: u64,
+    timeout: Duration,
+}
+
+/// Start an MP3 stdin player. Returns after the child is alive (mute armed).
+///
+/// # Errors
+///
+/// When `interrupt` is honored the prior player is killed first. Missing
+/// `ffplay`/`mpv` or a failed spawn returns a HUD-safe sentence.
+pub fn play_mp3_pipe_start(timeout: Duration, interrupt: bool) -> Result<Mp3PipePlayer, String> {
+    if interrupt {
+        interrupt_playback();
+    }
+    let mut missing = Vec::new();
+    for (program, args) in pipe_player_commands() {
+        match Command::new(program)
+            .args(&args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                let pid = child.id();
+                let stdin = child
+                    .stdin
+                    .take()
+                    .ok_or_else(|| format!("{program} stdin unavailable"))?;
+                // Brief settle — immediate exit means bad args / no sink.
+                thread::sleep(Duration::from_millis(40));
+                match child.try_wait() {
+                    Ok(Some(status)) if !status.success() => {
+                        clear_pid_if(pid);
+                        return Err(format!(
+                            "{program} exited immediately ({status}). Softwake could not play the reply."
+                        ));
+                    }
+                    Ok(Some(_)) => {
+                        clear_pid_if(pid);
+                        return Err(format!("{program} exited before audio arrived."));
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        clear_pid_if(pid);
+                        return Err(format!("could not check {program}: {error}"));
+                    }
+                }
+                let mute_generation = begin_input_mute();
+                remember_pid(pid);
+                return Ok(Mp3PipePlayer {
+                    child,
+                    stdin,
+                    pid,
+                    mute_generation,
+                    timeout,
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(program);
+            }
+            Err(error) => {
+                return Err(format!("could not start {program}: {error}"));
+            }
+        }
+    }
+    Err(format!(
+        "no audio player found (tried {}). Install ffplay or mpv to hear replies.",
+        missing.join(", ")
+    ))
+}
+
+impl Mp3PipePlayer {
+    /// Append one MP3 chunk from streaming TTS.
+    ///
+    /// # Errors
+    ///
+    /// Broken pipe when the player was interrupted or exited.
+    pub fn write_chunk(&mut self, bytes: &[u8]) -> Result<(), String> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        self.stdin
+            .write_all(bytes)
+            .map_err(|error| format!("could not stream speech audio: {error}"))
+    }
+
+    /// Close stdin and reap the player in the background (fire-and-forget).
+    pub fn finish(self) {
+        let Mp3PipePlayer {
+            child,
+            stdin,
+            pid,
+            mute_generation,
+            timeout,
+        } = self;
+        drop(stdin);
+        let _ = thread::Builder::new()
+            .name("softwake-tts-reaper".to_owned())
+            .spawn(move || {
+                reap_player(child, timeout);
+                clear_pid_if(pid);
+                end_input_mute(mute_generation);
+            });
+    }
+
+    /// Abort: kill player and clear mute immediately (`CancelAsk` / barge).
+    pub fn abort(self) {
+        let Mp3PipePlayer {
+            child,
+            stdin,
+            pid,
+            mute_generation: _,
+            timeout: _,
+        } = self;
+        drop(stdin);
+        let mut child = child;
+        let _ = child.kill();
+        let _ = child.wait();
+        clear_pid_if(pid);
+        force_clear_input_mute();
+    }
+}
+
+fn pipe_player_commands() -> Vec<(&'static str, Vec<String>)> {
+    vec![
+        (
+            "ffplay",
+            vec![
+                "-nodisp".to_owned(),
+                "-autoexit".to_owned(),
+                "-loglevel".to_owned(),
+                "quiet".to_owned(),
+                "-f".to_owned(),
+                "mp3".to_owned(),
+                "-i".to_owned(),
+                "pipe:0".to_owned(),
+            ],
+        ),
+        (
+            "mpv",
+            vec![
+                "--no-video".to_owned(),
+                "--really-quiet".to_owned(),
+                "--demuxer-lavf-format=mp3".to_owned(),
+                "-".to_owned(),
+            ],
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         INPUT_MUTE_TEST_LOCK, PLAYBACK_MUTE_GRACE, PLAYBACK_TIMEOUT, PlaybackMode,
-        begin_input_mute, clear_input_mute_for_test, end_input_mute, input_muted, play_audio,
-        wait_for_playback_idle,
+        begin_input_mute, clear_input_mute_for_test, end_input_mute, force_clear_input_mute,
+        input_muted, play_audio, wait_for_playback_idle,
     };
     use std::thread;
     use std::time::{Duration, Instant};
@@ -477,5 +648,19 @@ mod tests {
         assert!(input_muted());
         assert!(!wait_for_playback_idle(Duration::from_millis(80)));
         clear_input_mute_for_test();
+    }
+
+    #[test]
+    fn force_clear_drops_hold_and_grace() {
+        let _guard = INPUT_MUTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        clear_input_mute_for_test();
+        let mute_gen = begin_input_mute();
+        assert!(input_muted());
+        force_clear_input_mute();
+        assert!(!input_muted());
+        end_input_mute(mute_gen); // stale generation — must not re-arm
+        assert!(!input_muted());
     }
 }

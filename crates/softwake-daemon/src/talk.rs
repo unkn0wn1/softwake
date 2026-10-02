@@ -125,6 +125,19 @@ pub(crate) fn speak_reply_with_interrupt(
     }
     #[cfg(feature = "live-http")]
     {
+        let timeout = crate::playback_timeout::resolve_tts_playback_timeout();
+        if speak_via_stream(
+            &ready.prepared.api_base,
+            &ready.bearer,
+            text,
+            voice,
+            timeout,
+            interrupt,
+        )
+        .is_ok()
+        {
+            return Ok(());
+        }
         let transport = softwake_providers::live::LiveTransport::bounded(crate::chat::CHAT_TIMEOUT);
         let audio = tts_synthesize(
             &transport,
@@ -136,7 +149,6 @@ pub(crate) fn speak_reply_with_interrupt(
         )
         .map_err(|error| error.to_string())?;
         let mut record = None;
-        let timeout = crate::playback_timeout::resolve_tts_playback_timeout();
         play_audio_with_interrupt(
             PlaybackMode::Spawn,
             &audio,
@@ -148,7 +160,59 @@ pub(crate) fn speak_reply_with_interrupt(
     }
 }
 
-/// Model id for one STT call. xAI falls back to the registry seed.
+/// Prefer xAI streaming TTS into an MP3 stdin pipe (lower time-to-first-audio).
+#[cfg(feature = "live-http")]
+fn speak_via_stream(
+    api_base: &str,
+    bearer: &str,
+    text: &str,
+    voice: &str,
+    timeout: std::time::Duration,
+    interrupt: bool,
+) -> Result<(), String> {
+    use softwake_voice::{Mp3PipePlayer, play_mp3_pipe_start};
+
+    let mut player: Option<Mp3PipePlayer> = None;
+    let mut player_error: Option<String> = None;
+    let stream =
+        softwake_providers::tts_synthesize_streaming(api_base, bearer, text, voice, |chunk| {
+            if player.is_none() {
+                match play_mp3_pipe_start(timeout, interrupt) {
+                    Ok(started) => player = Some(started),
+                    Err(message) => {
+                        player_error = Some(message);
+                        return Err(softwake_providers::VoiceHttpError::NoAudio);
+                    }
+                }
+            }
+            if let Some(active) = player.as_mut() {
+                if let Err(message) = active.write_chunk(chunk) {
+                    player_error = Some(message);
+                    return Err(softwake_providers::VoiceHttpError::NoAudio);
+                }
+            }
+            Ok(())
+        });
+    match stream {
+        Ok(()) => {
+            if let Some(active) = player.take() {
+                active.finish();
+                Ok(())
+            } else if let Some(message) = player_error {
+                Err(message)
+            } else {
+                Err("The voice service returned no audio.".to_owned())
+            }
+        }
+        Err(error) => {
+            if let Some(active) = player.take() {
+                active.abort();
+            }
+            Err(player_error.unwrap_or_else(|| error.to_string()))
+        }
+    }
+}
+
 pub(crate) fn stt_model_for(provider: ProviderId, selected: &str) -> Result<String, String> {
     let model = resolve_stt_model(provider, selected);
     if model.is_empty() {

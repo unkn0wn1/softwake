@@ -26,6 +26,7 @@ mod secrets_keyring;
 mod secrets_mock;
 mod settings;
 mod transport;
+mod tts_stream;
 mod voice;
 
 #[cfg(feature = "live-http")]
@@ -105,6 +106,9 @@ pub use transport::{
     HttpBytes, HttpResponse, MockTransport, MultipartField, RecordedBytePost, RecordedMultipart,
     Transport, TransportError,
 };
+#[cfg(feature = "live-http")]
+pub use tts_stream::tts_synthesize_streaming;
+pub use tts_stream::{is_audio_done_event, parse_tts_stream_event, tts_stream_url};
 pub use voice::{
     TTS_MAX_CHARS, VOICE_LANGUAGE, VoiceHttpError, family_speaks_xai, resolve_stt_model,
     resolve_tts_voice, stt_transcribe, tts_synthesize, tts_voice_roster, wav_from_pcm16,
