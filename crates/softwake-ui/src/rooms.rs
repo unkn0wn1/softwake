@@ -139,4 +139,3 @@ pub fn room_post(room_id: String, text: String) -> Result<RoomsSnapshot, String>
         .map_err(|e| e.to_string())?;
     snapshot(Some(room_id), false)
 }
-
