@@ -1,0 +1,30 @@
+name: apply-mashup-patch
+on:
+  workflow_dispatch:
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/s2s-audio-mashup
+          fetch-depth: 0
+      - name: Apply mashup fix patch
+        run: |
+          set -eux
+          git config user.email "spencer@softwake.local"
+          git config user.name "Spencer Hardy"
+          git apply .grok-briefs/mashup-fix.diff
+          git add crates/softwake-daemon/src/voice_agent.rs crates/softwake-voice/src/playback.rs CHANGELOG.md
+          git status
+          git commit -m "$(cat <<'EOF'
+          fix(voice): hard-kill prior PcmPipePlayer on S2S barge
+
+          On barge-in / cancel / new response, always interrupt LAST_PLAYER
+          (SIGKILL + drain) before opening a new pipe — finish()-orphans must
+          not overlap a new utterance (audio mashup).
+          EOF
+          )"
+          git push origin HEAD:fix/s2s-audio-mashup
