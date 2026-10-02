@@ -32,3 +32,4 @@ Bridging Softwake Hands into Voice Agent `function` tools is a future ADR.
 - Operators get continuous talk when they opt in; default behaviour unchanged.
 - Soul “personality” on voice is a truncated prompt, not the acting session.
 - Speaker echo can still confuse server VAD; AEC remains out of scope.
+- Assistant PCM playback requires a working stdin player: FFmpeg 8+ ffplay needs `-ch_layout mono` (not removed `-ac`).

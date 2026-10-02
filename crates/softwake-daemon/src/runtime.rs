@@ -1990,16 +1990,22 @@ impl Runtime {
                 near_miss = observed.near_miss;
             }
         }
-        let (note, dead) = if let Some(bridge) = self.voice_agent.as_mut() {
-            let note = bridge.pump();
+        let (note, phase, dead) = if let Some(bridge) = self.voice_agent.as_mut() {
+            let (note, phase) = bridge.pump();
             let dead = !bridge.alive();
-            (note, dead)
+            (note, phase, dead)
         } else {
-            (None, false)
+            (None, None, false)
         };
         if let Some(note) = note {
             self.retain_status_text(Some(note), Some("voice agent".to_owned()));
-            self.set_turn_phase(Some("speaking"));
+        }
+        if let Some(phase) = phase {
+            let label = match phase {
+                crate::voice_agent::VaHudPhase::Speaking => "speaking",
+                crate::voice_agent::VaHudPhase::Listening => "listening",
+            };
+            self.set_turn_phase(Some(label));
         }
         if dead {
             self.stop_voice_agent();

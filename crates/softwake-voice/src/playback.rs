@@ -569,6 +569,7 @@ pub fn play_pcm_pipe_start(
     }
     let rate = sample_rate_hz.to_string();
     let mut missing = Vec::new();
+    let mut last_error = None;
     for (program, args) in pcm_pipe_player_commands(&rate) {
         match Command::new(program)
             .args(&args)
@@ -579,26 +580,35 @@ pub fn play_pcm_pipe_start(
         {
             Ok(mut child) => {
                 let pid = child.id();
-                let stdin = child
-                    .stdin
-                    .take()
-                    .ok_or_else(|| format!("{program} stdin unavailable"))?;
+                let Some(stdin) = child.stdin.take() else {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    clear_pid_if(pid);
+                    last_error = Some(format!("{program} stdin unavailable"));
+                    continue;
+                };
                 thread::sleep(Duration::from_millis(40));
                 match child.try_wait() {
                     Ok(Some(status)) if !status.success() => {
                         clear_pid_if(pid);
-                        return Err(format!(
+                        // Bad flags (e.g. FFmpeg 8 rejecting `-ac`) — try next command.
+                        last_error = Some(format!(
                             "{program} exited immediately ({status}). Softwake could not play the reply."
                         ));
+                        continue;
                     }
                     Ok(Some(_)) => {
                         clear_pid_if(pid);
-                        return Err(format!("{program} exited before audio arrived."));
+                        last_error = Some(format!("{program} exited before audio arrived."));
+                        continue;
                     }
                     Ok(None) => {}
                     Err(error) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
                         clear_pid_if(pid);
-                        return Err(format!("could not check {program}: {error}"));
+                        last_error = Some(format!("could not check {program}: {error}"));
+                        continue;
                     }
                 }
                 let mute_generation = if arm_input_mute {
@@ -619,9 +629,12 @@ pub fn play_pcm_pipe_start(
                 missing.push(program);
             }
             Err(error) => {
-                return Err(format!("could not start {program}: {error}"));
+                last_error = Some(format!("could not start {program}: {error}"));
             }
         }
+    }
+    if let Some(error) = last_error {
+        return Err(error);
     }
     Err(format!(
         "no audio player found (tried {}). Install ffplay or mpv to hear replies.",
@@ -686,7 +699,26 @@ impl PcmPipePlayer {
 }
 
 fn pcm_pipe_player_commands(rate: &str) -> Vec<(&'static str, Vec<String>)> {
+    // FFmpeg 8 removed `-ac` from ffplay ("Option not found" → exit 1). Prefer
+    // `-ch_layout mono`; keep a legacy `-ac 1` attempt for older builds.
     vec![
+        (
+            "ffplay",
+            vec![
+                "-nodisp".to_owned(),
+                "-autoexit".to_owned(),
+                "-loglevel".to_owned(),
+                "quiet".to_owned(),
+                "-f".to_owned(),
+                "s16le".to_owned(),
+                "-ar".to_owned(),
+                rate.to_owned(),
+                "-ch_layout".to_owned(),
+                "mono".to_owned(),
+                "-i".to_owned(),
+                "pipe:0".to_owned(),
+            ],
+        ),
         (
             "ffplay",
             vec![
@@ -724,10 +756,39 @@ mod tests {
     use super::{
         INPUT_MUTE_TEST_LOCK, PLAYBACK_MUTE_GRACE, PLAYBACK_TIMEOUT, PlaybackMode,
         begin_input_mute, clear_input_mute_for_test, end_input_mute, force_clear_input_mute,
-        input_muted, play_audio, wait_for_playback_idle,
+        input_muted, pcm_pipe_player_commands, play_audio, wait_for_playback_idle,
     };
     use std::thread;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn pcm_pipe_prefers_ch_layout_before_legacy_ac() {
+        let commands = pcm_pipe_player_commands("24000");
+        assert!(commands.len() >= 2);
+        assert_eq!(commands[0].0, "ffplay");
+        assert!(
+            commands[0]
+                .1
+                .windows(2)
+                .any(|w| w[0] == "-ch_layout" && w[1] == "mono"),
+            "FFmpeg 8 needs -ch_layout mono; got {:?}",
+            commands[0].1
+        );
+        assert!(
+            !commands[0]
+                .1
+                .windows(2)
+                .any(|w| w[0] == "-ac" && w[1] == "1"),
+            "first ffplay must not use removed -ac"
+        );
+        assert!(
+            commands[1]
+                .1
+                .windows(2)
+                .any(|w| w[0] == "-ac" && w[1] == "1"),
+            "legacy -ac fallback missing"
+        );
+    }
 
     #[test]
     fn record_mode_keeps_bytes_and_rejects_empty() {
