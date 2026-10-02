@@ -1880,7 +1880,10 @@ impl Runtime {
     /// emits keyword then silence before the next poll).
     /// [`NullDetector`] never matches. After `stop`, the mock drops the queue,
     /// so hibernate does not score a late frame.
-    #[allow(clippy::too_many_lines, reason = "PCM drain owns KWS, free-speech, barge, and Voice Agent pump")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "PCM drain owns KWS, free-speech, barge, and Voice Agent pump"
+    )]
     fn drain_pcm(&mut self) -> Vec<WireEvent> {
         let mut hit = PhraseHit::None;
         let mut near_miss = None;
@@ -2269,7 +2272,10 @@ impl Runtime {
         }
     }
 
-    #[allow(clippy::too_many_lines, reason = "connect + credential + status notes stay in one place")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "connect + credential + status notes stay in one place"
+    )]
     fn sync_voice_agent_session(&mut self) {
         let wanted = crate::voice_agent::resolve_voice_agent_s2s_enabled();
         let awake = wire_state(self.machine.state()) == WireState::Awake;

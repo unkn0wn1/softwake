@@ -4,7 +4,10 @@
 //! assistant PCM plays locally. Softwake Hands / tool-loop / full soul session
 //! stay on the text ask path. Feature `live-http` required for the socket.
 
-#![allow(dead_code, reason = "Voice Agent bridge is exercised under live-http; default CI builds keep the types")]
+#![allow(
+    dead_code,
+    reason = "Voice Agent bridge is exercised under live-http; default CI builds keep the types"
+)]
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::thread::JoinHandle;
 

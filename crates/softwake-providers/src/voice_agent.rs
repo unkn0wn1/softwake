@@ -230,7 +230,6 @@ pub fn parse_voice_agent_event(payload: &str) -> Result<VoiceAgentEvent, VoiceHt
             VoiceAgentEvent::Error(message)
         }
         _ => VoiceAgentEvent::Ignored,
-
     })
 }
 
