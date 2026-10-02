@@ -1,1 +1,1 @@
-LOADING_FROM_FILE
+/workspace/va_content_for_mcp.txt
