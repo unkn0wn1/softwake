@@ -209,7 +209,8 @@ pub fn wait_for_playback_idle(timeout: Duration) -> bool {
 
 /// Stop the last spawned player, if Softwake still knows its pid.
 ///
-/// Best-effort. Used before a new reply so Eve does not overlap herself.
+/// Hard-kill (SIGKILL) + brief drain so a barge / new Voice Agent reply never
+/// overlaps a `finish()`-orphaned ffplay/mpv still flushing its sink buffer.
 pub fn interrupt_playback() {
     let pid = {
         let mut guard = LAST_PLAYER
@@ -217,14 +218,33 @@ pub fn interrupt_playback() {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.take()
     };
-    if let Some(pid) = pid {
-        let _ = Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
+    let Some(pid) = pid else {
+        return;
+    };
+    let _ = Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    // Wait until the process is gone (or a short deadline) before a new player
+    // opens — otherwise two stdin players mash up on the same sink.
+    let deadline = Instant::now() + Duration::from_millis(150);
+    while Instant::now() < deadline {
+        let alive = Command::new("kill")
+            .args(["-0", &pid.to_string()])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .status()
+            .is_ok_and(|status| status.success());
+        if !alive {
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
     }
+    // PipeWire/Pulse may still hold a few ms of already-queued frames.
+    thread::sleep(Duration::from_millis(30));
 }
 
 fn spawn_player_detached(
@@ -758,7 +778,8 @@ mod tests {
     use super::{
         INPUT_MUTE_TEST_LOCK, PLAYBACK_MUTE_GRACE, PLAYBACK_TIMEOUT, PlaybackMode,
         begin_input_mute, clear_input_mute_for_test, end_input_mute, force_clear_input_mute,
-        input_muted, pcm_pipe_player_commands, play_audio, wait_for_playback_idle,
+        input_muted, interrupt_playback, pcm_pipe_player_commands, play_audio,
+        wait_for_playback_idle,
     };
     use std::thread;
     use std::time::{Duration, Instant};
@@ -917,5 +938,19 @@ mod tests {
         assert!(!input_muted());
         end_input_mute(mute_gen); // stale generation — must not re-arm
         assert!(!input_muted());
+    }
+
+    #[test]
+    fn interrupt_playback_is_noop_when_no_player_remembered() {
+        let _guard = INPUT_MUTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        clear_input_mute_for_test();
+        let start = Instant::now();
+        interrupt_playback();
+        assert!(
+            start.elapsed() < Duration::from_millis(50),
+            "idle interrupt must not sleep the full drain budget"
+        );
     }
 }

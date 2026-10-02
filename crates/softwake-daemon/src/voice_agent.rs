@@ -413,6 +413,9 @@ fn abort_va_player(player: &mut Option<softwake_voice::PcmPipePlayer>) {
     if let Some(player) = player.take() {
         player.abort();
     }
+    // Always hard-kill LAST_PLAYER too: `finish()` may have dropped the Option
+    // while ffplay/mpv is still draining — barge must not leave that orphan.
+    softwake_voice::interrupt_playback();
 }
 
 #[cfg(feature = "live-http")]
@@ -429,10 +432,12 @@ fn write_va_audio(
     bytes: &[u8],
 ) -> Result<(), String> {
     if player.is_none() {
+        // Always interrupt before a new utterance player: prior finish()-orphan
+        // or race after barge must never leave two ffplay/mpv instances.
         let started = softwake_voice::play_pcm_pipe_start(
             softwake_providers::VOICE_AGENT_OUTPUT_RATE_HZ,
             softwake_voice::PLAYBACK_TIMEOUT,
-            false, // do not kill unrelated players mid-stream chunk
+            true,  // hard-kill prior player + drain before open
             false, // keep mic open for server_vad barge
         )?;
         *player = Some(started);
