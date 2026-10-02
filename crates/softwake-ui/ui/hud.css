@@ -41,7 +41,7 @@ body {
   cursor: default;
   padding: 8px;
   gap: 6px;
-  grid-template-rows: 72px minmax(0, 1fr);
+  grid-template-rows: 72px auto minmax(0, 1fr);
 }
 
 #bloom {
@@ -55,6 +55,51 @@ body {
   height: 72px;
   border-radius: 0.65rem;
   cursor: pointer;
+}
+
+.orb-controls {
+  position: absolute;
+  z-index: 3;
+  left: 6px;
+  right: 6px;
+  bottom: 6px;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  pointer-events: auto;
+}
+
+.capsule.expanded .orb-controls {
+  position: static;
+  margin: 0 2px;
+}
+
+.orb-btn,
+.orb-voice {
+  box-sizing: border-box;
+  height: 26px;
+  border-radius: 0.45rem;
+  border: 1px solid var(--line);
+  background: oklch(0.16 0.02 273 / 0.82);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.68rem;
+  cursor: pointer;
+}
+
+.orb-btn {
+  padding: 0 6px;
+}
+
+.orb-btn[aria-pressed="true"] {
+  background: oklch(0.78 0.13 200 / 0.85);
+  color: var(--cyan-ink);
+}
+
+.orb-voice {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 2px;
 }
 
 /* Collapsed: bloom only. Author display must beat the hidden attribute. */

@@ -1,7 +1,7 @@
 # ADR 0051 — Shell redesign: main window / HUD orb, 2-way chat, user profile inheritance
 
-- **Status:** Accepted (docs / phased plan only — implementation waits for explicit slice approval)
-- **Date:** 2026-10-02
+- **Status:** Implemented (P0–P2, 2026-10-03). 2-way OFF is **sleep** (not hibernate). Pack inheritance uses `use_global_user`, `use_global_glossary`, and `use_global_rules` (default true), edited from Settings → Global.
+- **Date:** 2026-10-02 (accepted); implemented 2026-10-03 on an explicit full go (P0–P2 together)
 - **Related:** [ADR 0015](ADR-0015-tray-hud.md), [ADR 0017](ADR-0017-profiles.md), [ADR 0022](ADR-0022-voice-modes.md), [ADR 0041](ADR-0041-hud-profile-rail.md), [ADR 0046](ADR-0046-hud-ux-thread.md), [ADR 0049](ADR-0049-duplex-barge-stream-tts.md), [ADR 0050](ADR-0050-voice-agent-s2s.md)
 
 ## Context
@@ -13,12 +13,12 @@ Operators now want a Grok-Bot-like presence model:
 1. **Expanded main window** by default (on start / after sleep), with the bloom acting as an **orb** that single-clicks to shrink / expand — stays open until the orb is clicked (not idle collapse, not double-click).
 2. A clear **2-way chat** control plus a **voice chevron** on the main composer, with a **minimal** 2-way + voice strip when shrunk.
 3. Voice stickiness that remembers the last voice until a **profile switch**, then falls back to **Default** (Eve / resolver default) — not a required per-profile voice field.
-4. Per-profile **Use main user profile** for `user.md` (default checked → show main user.md **disabled**; unchecked → editable, seeded with commented recommendations).
+4. Per-profile **Use global user / glossary / rules** (default checked → read-only global preview; unchecked → editable own file, seeded with a commented scaffold). Settings → **Global** edits the main profile’s three files. Soul stays per-profile.
 5. Settings stays a **separate window**; gear on main window and shrunk HUD opens it. Profile rail and reload-on-switch stay ([ADR 0041](ADR-0041-hud-profile-rail.md)).
 6. New Settings: **shrunk HUD size** + **bloom intensity**.
 7. **2-way ON** starts **awake** (listening). Unchecking 2-way is how the operator hibernates / sleeps listening. If Voice Agent S2S is the active path ([ADR 0050](ADR-0050-voice-agent-s2s.md)), 2-way **is** S2S; otherwise soft-duplex STT → chat → TTS ([ADR 0049](ADR-0049-duplex-barge-stream-tts.md)).
 
-This ADR locks those product decisions and a **shippable phased plan**. It does **not** implement UI or daemon behaviour.
+This ADR locks those product decisions. P0–P2 shipped together on 2026-10-03. The phased list below is the record of what landed.
 
 ### Code reality (coupling notes)
 
@@ -30,7 +30,7 @@ This ADR locks those product decisions and a **shippable phased plan**. It does 
 | Idle collapse | `hud_idle_collapse_ms` (Settings General) + pin | Conflicts with locked “stays open until orb clicked”. |
 | 2-way control | No named toggle; closest are wake / sleep / hibernate, `auto_listening`, mic mute, Voice Agent S2S | New composer control must map cleanly onto voice-state machine without duplicating tray Resume paths. |
 | Voice pick | Global `providers.json` `selected_tts_voice`; `/voice` slash + Providers pane | Stickiness-until-profile-switch is a UI/session latch; do not invent a required pack field. |
-| `user.md` | One file per profile pack ([ADR 0017](ADR-0017-profiles.md)); editors always editable when a profile is selected | Inheritance needs a profile flag + resolve path that can point at main profile’s `user.md`. |
+| Pack docs | One `user.md` / `rules.md` / `glossary.md` per profile ([ADR 0017](ADR-0017-profiles.md)); editors were always the profile’s own files | Inheritance flags `use_global_*` (default true). Main always owns its files. Settings → Global edits those three. |
 | Settings open | Tray menu → `show_settings` only | Gear on main + orb is new chrome; reuse the same show/focus path. |
 | Bloom | Particle density/brightness track capture level; opacity is `hud_opacity` | Intensity knob is new; keep level-driven bloom as the base signal. |
 
@@ -61,7 +61,7 @@ This ADR locks those product decisions and a **shippable phased plan**. It does 
 ### 4. 2-way chat semantics
 
 1. **2-way ON** → Softwake is **awake** and listening (free-speech / soft-duplex path, or Voice Agent S2S when that mode is active).
-2. **2-way OFF** → operator intent to stop two-way listening: transition to **sleep** or **hibernate** per the existing voice-state machine and Settings/KWS conventions (implementation picks the honest mapping; prefer sleep when KWS wake should remain, hibernate when capture should fully stop — document the choice in the implementing PR).
+2. **2-way OFF** → **sleep** (not hibernate). Wake word still works and HUD ask stays available. Hibernate remains the separate deep stop (mic off until Resume). The preference is `two_way` in `ui-prefs.json`.
 3. If `voice_agent_s2s` is enabled and the live path is xAI Voice Agent ([ADR 0050](ADR-0050-voice-agent-s2s.md)), **2-way ON is S2S**; Softwake does not also run free-speech STT→ask→TTS on the same mic (same bypass rule as ADR 0050).
 4. Otherwise 2-way ON uses soft-duplex / STT → chat tool-loop → TTS ([ADR 0049](ADR-0049-duplex-barge-stream-tts.md), [ADR 0007](ADR-0007-awake-stt-tts.md)).
 5. Typed ask / HUD text ask remains available while awake regardless of S2S (Hands tool-loop unchanged).
@@ -72,15 +72,15 @@ This ADR locks those product decisions and a **shippable phased plan**. It does 
 1. Remember the **last selected TTS / Voice Agent voice** across the Softwake UI session.
 2. On **profile switch** (HUD rail, `/profile`, Settings set-active that triggers live refresh), fall back to **Default** (empty / Eve via existing `resolve_tts_voice`).
 3. Do **not** require a `voice` field on `profile.json`. Optional later enrichment is out of scope.
-4. Providers pane and `/voice` remain valid ways to change the global `selected_tts_voice`; the chevron is the daily control and must stay consistent with that store (or a thin session overlay that writes through — implementing PR chooses one source of truth and documents it).
+4. Providers pane and `/voice` remain valid ways to change the global `selected_tts_voice`. The chevron **writes through** to that field (empty string is Default / Eve via `resolve_tts_voice`). Profile switch clears it, including when the provider is not xAI.
 
-### 6. `user.md` — Use main user profile
+### 6. Global user, glossary, and rules
 
-1. Each profile gains a boolean preference (suggested wire name: `use_main_user_profile`, default **true**).
-2. **Checked (default):** Settings → Profiles → User tab shows the **main** profile’s `user.md` contents **disabled** (read-only preview). Runtime pack resolve for that profile uses main’s `user.md` body when rendering instructions.
-3. **Unchecked:** User tab is editable for that profile’s own `user.md`. First uncheck **seeds** the editor with **commented rules / recommendations** for a user profile (scaffold), without silently overwriting an existing non-empty custom file unless the operator confirms.
-4. **Main** means the designated primary profile (default id `default` unless Softwake later adds an explicit main marker — implementing PR must define resolution and document it). A profile cannot “use main” in a way that creates a cycle (main always uses its own file).
-5. Soul / rules / glossary stay per-profile (unchanged). Only `user.md` inherits under this checkbox.
+1. Each profile stores three booleans on `profile.json`: `use_global_user`, `use_global_glossary`, `use_global_rules`. All default **true** (including when the keys are absent).
+2. **Checked (default):** the Profiles editor shows the **main** profile’s file **read-only**. Runtime resolve uses that global body. Glossary aliases are parsed from the glossary that is actually rendered.
+3. **Unchecked:** the profile’s own file is editable. The first uncheck of an empty or whitespace file seeds a commented scaffold for that doc type and writes it. A non-empty own file is kept; replacing it with the scaffold requires confirmation. `pack_save` skips a doc whose flag is true, and the UI saves the flags before `pack_save`, so a read-only preview is not copied onto the profile.
+4. **Main** is profile id `default` when that folder exists (`ensure_migrated` recreates it). If `default` is missing, main is the lexicographically first profile id. Main always renders its own three files. Its checkboxes stay checked and disabled.
+5. **Soul** stays per-profile. Settings → **Global** edits main `user.md`, `glossary.md`, and `rules.md` in one place. There is no `use_main_user_profile` wire name.
 
 ### 7. Settings
 
@@ -94,7 +94,7 @@ This ADR locks those product decisions and a **shippable phased plan**. It does 
 - Operators get a persistent expanded chat shell with an orb shrink, closer to Grok Bot, without merging Settings into the capsule.
 - Idle-collapse and pin semantics from ADR 0015 amendments are superseded for the default path; CHANGELOG / ADR 0015 should gain a short amendment pointer when P0 lands.
 - 2-way becomes the primary listening affordance; sleep / hibernate / mic mute / Voice Agent S2S must be explained relative to it so operators are not surprised.
-- `user.md` inheritance reduces copy-paste across profiles but adds resolve complexity and a clear “main” definition.
+- User, glossary, and rules inheritance reduces copy-paste across profiles. Main is `default` (or the first profile id). Soul does not inherit.
 - PROTOCOL generation stays **1** unless a slice proves an additive Status / ClientMessage field is required (prefer reuse of wake / sleep / hibernate / existing prefs + Ask).
 
 ## Non-goals
@@ -145,16 +145,17 @@ Each phase is intended to be **independently shippable** after Spencer’s expli
 
 **Out of P1:** user.md Use-main UX, bloom intensity, large Settings IA redesign.
 
-### P2 — user.md Use-main + bloom intensity + Settings gear polish
+### P2 — Global user, glossary, and rules + bloom intensity + Settings gear polish
 
-**Goal:** Profile inheritance UX and presence polish.
+**Goal:** Pack inheritance for all three docs, plus presence polish. Landed with P0 and P1 on the 2026-10-03 full go.
 
 **Slices:**
 
-1. **Use main user profile** checkbox (default on) in Profiles → User; disabled preview of main `user.md`; uncheck → editable + commented scaffold seed rules; resolve path for render_instructions.
-2. **Bloom intensity** Setting (multiplier on particle density/brightness; keep capture-level as base input).
-3. **Gear discoverability** on main + shrunk HUD if not done in P0; ensure Settings hide-on-close and always-on-top rules still hold.
-4. Docs/README touch for the new shell vocabulary; amend ADR 0015 / 0017 briefly when behaviour lands.
+1. Settings → **Global** edits main `user.md`, `glossary.md`, and `rules.md`.
+2. Per-profile **Use global user / glossary / rules** (`use_global_user`, `use_global_glossary`, `use_global_rules`, default true). Checked → read-only global preview and resolve from global. Unchecked → editable own file plus a commented scaffold when the own file is empty. Main cannot opt out.
+3. **Bloom intensity** Setting (multiplier on particle density/brightness; capture level stays the base).
+4. **Gear** on main and shrunk HUD calls `show_settings`.
+5. Docs: CHANGELOG, README shell vocabulary, short ADR 0015 / 0017 pointers. This ADR’s status is Implemented.
 
 **Verify:** pack load tests for inheritance / cycle guard; UI prefs clamps; no regression on profile rail `/refresh`.
 
@@ -173,9 +174,9 @@ If codebase coupling forces a merge (e.g. voice chevron needs chrome that only e
 ## Open design risks (for implementers)
 
 1. **Idle collapse vs “stay open”** — `hud_idle_collapse_ms` and pin are first-class in Settings General and `ui-prefs.json`. P0 must deliberately supersede them or operators will see conflicting knobs.
-2. **2-way OFF → sleep vs hibernate** — Hibernate refuses HUD ask until Settings Resume; sleep keeps KWS. Wrong default will feel like Softwake “died.” Prefer documenting the choice in the P1 PR description before coding.
+2. **2-way OFF → sleep** — Hibernate refuses HUD ask until Settings Resume. 2-way OFF uses sleep so the wake word and HUD ask keep working.
 3. **S2S vs soft-duplex** — ADR 0050 already bypasses free-speech while S2S owns the mic. The 2-way toggle must not arm both paths.
-4. **“Main” profile for user.md** — today every profile has its own `user.md` with no inherit flag. Defining main as `default` is simplest; operators who renamed/removed `default` need a fallback story.
+4. **Main profile** — `default` when that folder exists; otherwise the lexicographically first profile id. Main always uses its own user, glossary, and rules.
 5. **Voice source of truth** — global `selected_tts_voice` vs session sticky overlay vs write-through on chevron; pick one in P1 to avoid Providers / chevron / `/voice` drift.
 6. **Shrunk chrome density** — minimal 2-way + voice + gear on a small orb risks hit-target collisions with bloom click-to-expand; P0/P1 should reserve an orb drag/click zone distinct from controls.
 7. **After-sleep expanded** — “after sleep” can mean daemon voice sleep or UI process restart; P0 should define both so reopen behaviour is predictable.

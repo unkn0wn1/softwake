@@ -10,7 +10,7 @@ const confirmBtn = document.querySelector("#confirm");
 const cancelBtn = document.querySelector("#cancel");
 const navStatus = document.querySelector("#nav-status");
 
-const panes = ["general", "profiles", "providers", "tools", "timers", "skills", "messengers", "mcp", "remote-agent", "email", "status"];
+const panes = ["general", "global", "profiles", "providers", "tools", "timers", "skills", "messengers", "mcp", "remote-agent", "email", "status"];
 
 const providerSelect = document.querySelector("#provider-select");
 const keyPanel = document.querySelector("#key-panel");
@@ -645,11 +645,121 @@ const profilesSubnavEl = document.querySelector("#profiles-subnav");
 const profilesConfigDirEl = document.querySelector("#profiles-config-dir");
 const profileNameInput = document.querySelector("#profile-name");
 
+const INHERIT_DOCS = ["user", "rules", "glossary"];
+const DOC_SCAFFOLDS = {
+  user: "# User (scaffold)\n\n# Suggested: Name, Timezone, Address as, Preferences, Hard nos.\n",
+  rules:
+    "# Rules (scaffold)\n\n# List constraints that override soul.md personality.\n# Suggested: no destructive shell; confirm before mutating actions; glossary is not permission.\n",
+  glossary:
+    "# Glossary (scaffold)\n\n# Add alias rows as: name, then an arrow, then an absolute path.\n# Heading-only (no alias rows) is a valid empty map.\n",
+};
+let ownDocs = { user: "", rules: "", glossary: "" };
+let globalPreview = { user: "", rules: "", glossary: "" };
+let profileIsMain = false;
+let activePackTab = "soul";
+
+function docBlank(text) {
+  return !String(text || "").trim();
+}
+
+function useGlobalChecked(kind) {
+  const box = document.querySelector("#use-global-" + kind);
+  return !!(box && box.checked);
+}
+
+function docUsesGlobal(kind) {
+  return !profileIsMain && useGlobalChecked(kind);
+}
+
 function setPackEditable(on) {
   document.querySelector("#pack-save").disabled = !on;
-  for (const file of packFiles) {
-    packEditors[file].disabled = !on;
+  packEditors.soul.disabled = !on;
+  packEditors.soul.readOnly = false;
+  for (const kind of INHERIT_DOCS) {
+    const editor = packEditors[kind];
+    const inherited = on && docUsesGlobal(kind);
+    editor.disabled = !on;
+    editor.readOnly = inherited;
+    editor.classList.toggle("is-readonly", inherited);
   }
+  updateScaffoldButton();
+}
+
+function updateScaffoldButton() {
+  const btn = document.querySelector("#insert-doc-scaffold");
+  if (!btn) return;
+  const show =
+    profilesLoaded && INHERIT_DOCS.includes(activePackTab) && !docUsesGlobal(activePackTab);
+  btn.hidden = !show;
+}
+
+function paintInheritEditors() {
+  for (const kind of INHERIT_DOCS) {
+    packEditors[kind].value = docUsesGlobal(kind)
+      ? globalPreview[kind] || ""
+      : ownDocs[kind] || "";
+  }
+}
+
+function syncOwnFromEditors() {
+  for (const kind of INHERIT_DOCS) {
+    if (!docUsesGlobal(kind)) {
+      ownDocs[kind] = packEditors[kind].value;
+    }
+  }
+}
+
+function packSaveBodies() {
+  syncOwnFromEditors();
+  return {
+    profileId: selectedProfileId || null,
+    soul: packEditors.soul.value,
+    user: ownDocs.user,
+    rules: ownDocs.rules,
+    glossary: ownDocs.glossary,
+  };
+}
+
+function applyGlobalDocControls(snap) {
+  profileIsMain = !!snap.is_main;
+  globalPreview = {
+    user: snap.global_user || "",
+    rules: snap.global_rules || "",
+    glossary: snap.global_glossary || "",
+  };
+  const pack = snap.pack || {};
+  ownDocs = {
+    user: pack.user || "",
+    rules: pack.rules || "",
+    glossary: pack.glossary || "",
+  };
+  const flags = {
+    user: profileIsMain || !!snap.use_global_user,
+    glossary: profileIsMain || !!snap.use_global_glossary,
+    rules: profileIsMain || !!snap.use_global_rules,
+  };
+  for (const kind of INHERIT_DOCS) {
+    const box = document.querySelector("#use-global-" + kind);
+    if (!box) continue;
+    box.checked = !!flags[kind];
+    box.disabled = profileIsMain;
+  }
+  const note = document.querySelector("#global-doc-note");
+  if (note) {
+    note.textContent = profileIsMain
+      ? "This profile owns the global user, glossary, and rules."
+      : "Checked docs show the global file and cannot be edited here. Uncheck to edit this profile’s copy.";
+  }
+}
+
+async function persistGlobalFlags() {
+  if (!selectedProfileId || profileIsMain) return null;
+  return invoke("profile_set_global_flags", {
+    id: selectedProfileId,
+    useGlobalUser: useGlobalChecked("user"),
+    useGlobalGlossary: useGlobalChecked("glossary"),
+    useGlobalRules: useGlobalChecked("rules"),
+  });
 }
 
 function errorText(error) {
@@ -657,6 +767,7 @@ function errorText(error) {
 }
 
 function showPackTab(name) {
+  activePackTab = name;
   for (const file of packFiles) {
     const editor = packEditors[file];
     const tab = document.querySelector(`#pack-tab-${file}`);
@@ -665,13 +776,12 @@ function showPackTab(name) {
     editor.hidden = !on;
     tab.setAttribute("aria-selected", on ? "true" : "false");
   }
+  updateScaffoldButton();
 }
 
 function applyPackSnapshot(snap, statusText) {
   packDirEl.textContent = "Directory: " + (snap.dir || "");
-  for (const file of packFiles) {
-    packEditors[file].value = snap[file] || "";
-  }
+  packEditors.soul.value = snap.soul || "";
   if (snap.ok) {
     packValidityEl.textContent = "Pack: ok";
     packValidityEl.classList.remove("error");
@@ -683,6 +793,7 @@ function applyPackSnapshot(snap, statusText) {
   packErrorEl.textContent = "";
   packStatusEl.textContent = statusText || "";
   setPackEditable(true);
+  paintInheritEditors();
 }
 
 
@@ -742,8 +853,10 @@ function applyProfilesSnapshot(snap, statusText) {
   profileNameInput.value = snap.selected_name || "";
   renderProfilesList(snap);
   setProfilesSubnavVisible(true);
+  applyGlobalDocControls(snap);
   applyPackSnapshot(snap.pack || {}, statusText || "");
   profilesLoaded = true;
+  updateScaffoldButton();
 }
 
 async function loadProfiles(selectedId, statusText) {
@@ -813,13 +926,8 @@ async function savePack() {
   }
   packErrorEl.textContent = "";
   try {
-    const snap = await invoke("pack_save", {
-      profileId: selectedProfileId || null,
-      soul: packEditors.soul.value,
-      user: packEditors.user.value,
-      rules: packEditors.rules.value,
-      glossary: packEditors.glossary.value,
-    });
+    await persistGlobalFlags();
+    const snap = await invoke("pack_save", packSaveBodies());
     const profiles = await invoke("profiles_snapshot", {
       selectedId: selectedProfileId || null,
     });
@@ -884,6 +992,151 @@ document.querySelector("#profile-save-name").addEventListener("click", () => {
 document.querySelector("#profile-set-active").addEventListener("click", () => {
   setActiveProfile();
 });
+
+for (const kind of INHERIT_DOCS) {
+  const box = document.querySelector("#use-global-" + kind);
+  if (!box) continue;
+  box.addEventListener("change", async () => {
+    if (profileIsMain) {
+      box.checked = true;
+      return;
+    }
+    const checked = box.checked;
+    let seeded = false;
+    if (checked) {
+      if (!packEditors[kind].readOnly) {
+        ownDocs[kind] = packEditors[kind].value;
+      }
+    } else if (docBlank(ownDocs[kind])) {
+      ownDocs[kind] = DOC_SCAFFOLDS[kind];
+      seeded = true;
+    }
+    setPackEditable(true);
+    paintInheritEditors();
+    packErrorEl.textContent = "";
+    try {
+      await persistGlobalFlags();
+      if (seeded) {
+        await invoke("pack_save", packSaveBodies());
+        await loadProfiles(
+          selectedProfileId,
+          "Seeded a commented " + kind + " scaffold for this profile."
+        );
+        return;
+      }
+      packStatusEl.textContent = checked
+        ? "Using the global " + kind + " file."
+        : "Editing this profile’s " + kind + " file.";
+    } catch (error) {
+      packErrorEl.textContent = errorText(error);
+      loadProfiles(selectedProfileId);
+    }
+  });
+  packEditors[kind].addEventListener("input", () => {
+    if (!docUsesGlobal(kind)) {
+      ownDocs[kind] = packEditors[kind].value;
+    }
+  });
+}
+
+const insertScaffoldBtn = document.querySelector("#insert-doc-scaffold");
+if (insertScaffoldBtn) {
+  insertScaffoldBtn.addEventListener("click", () => {
+    const kind = activePackTab;
+    if (!INHERIT_DOCS.includes(kind) || docUsesGlobal(kind)) return;
+    const current = packEditors[kind].value;
+    if (!docBlank(current)) {
+      const ok = window.confirm(
+        "Replace this profile’s " + kind + " text with the commented scaffold?"
+      );
+      if (!ok) return;
+    }
+    ownDocs[kind] = DOC_SCAFFOLDS[kind];
+    packEditors[kind].value = DOC_SCAFFOLDS[kind];
+    packStatusEl.textContent = "Scaffold inserted. Save pack to write it.";
+  });
+}
+
+const globalEditors = {
+  user: document.querySelector("#global-user"),
+  glossary: document.querySelector("#global-glossary"),
+  rules: document.querySelector("#global-rules"),
+};
+let globalTab = "user";
+
+function showGlobalTab(name) {
+  globalTab = name;
+  for (const kind of INHERIT_DOCS) {
+    const editor = globalEditors[kind];
+    const tab = document.querySelector("#global-tab-" + kind);
+    if (!editor) continue;
+    const on = kind === name;
+    editor.classList.toggle("hidden", !on);
+    editor.hidden = !on;
+    if (tab) tab.setAttribute("aria-selected", on ? "true" : "false");
+  }
+}
+
+async function loadGlobalDocs(statusText) {
+  const errEl = document.querySelector("#global-error");
+  const statusEl = document.querySelector("#global-status");
+  try {
+    const snap = await invoke("global_docs_snapshot");
+    const idEl = document.querySelector("#global-main-id");
+    const dirEl = document.querySelector("#global-dir");
+    if (idEl) idEl.textContent = snap.main_id || "default";
+    if (dirEl) dirEl.textContent = "Directory: " + (snap.dir || "");
+    if (globalEditors.user) globalEditors.user.value = snap.user || "";
+    if (globalEditors.rules) globalEditors.rules.value = snap.rules || "";
+    if (globalEditors.glossary) globalEditors.glossary.value = snap.glossary || "";
+    if (errEl) errEl.textContent = "";
+    if (statusEl) {
+      statusEl.textContent =
+        statusText ||
+        (snap.ok ? "Pack: ok" : "Pack: invalid" + (snap.reason ? " — " + snap.reason : ""));
+    }
+  } catch (error) {
+    if (errEl) errEl.textContent = errorText(error);
+  }
+}
+
+async function saveGlobalDocs() {
+  const errEl = document.querySelector("#global-error");
+  const statusEl = document.querySelector("#global-status");
+  if (errEl) errEl.textContent = "";
+  try {
+    const snap = await invoke("global_docs_save", {
+      user: globalEditors.user ? globalEditors.user.value : "",
+      rules: globalEditors.rules ? globalEditors.rules.value : "",
+      glossary: globalEditors.glossary ? globalEditors.glossary.value : "",
+    });
+    if (statusEl) {
+      statusEl.textContent = snap.ok ? "Saved global docs." : "Saved. Pack is still invalid.";
+    }
+    try {
+      await invoke("reload_soul");
+      if (statusEl) statusEl.textContent = "Saved global docs. Reload recorded — applies on next awake.";
+    } catch (error) {
+      if (errEl) errEl.textContent = "Saved, but reload soul failed: " + errorText(error);
+    }
+    if (profilesLoaded) {
+      loadProfiles(selectedProfileId);
+    }
+  } catch (error) {
+    if (errEl) errEl.textContent = errorText(error);
+  }
+}
+
+for (const kind of INHERIT_DOCS) {
+  const tab = document.querySelector("#global-tab-" + kind);
+  if (tab) {
+    tab.addEventListener("click", () => showGlobalTab(kind));
+  }
+}
+const globalSaveBtn = document.querySelector("#global-save");
+const globalReloadBtn = document.querySelector("#global-reload");
+if (globalSaveBtn) globalSaveBtn.addEventListener("click", () => saveGlobalDocs());
+if (globalReloadBtn) globalReloadBtn.addEventListener("click", () => loadGlobalDocs("Reloaded from disk."));
 
 
 let emailSnap = null;
@@ -1567,54 +1820,50 @@ toolsSaveBtn.addEventListener("click", async () => {
 const uiTextSizeSelect = document.querySelector("#ui-text-size");
 const uiPrefsStatus = document.querySelector("#ui-prefs-status");
 const uiPrefsError = document.querySelector("#ui-prefs-error");
-const hudIdleRange = document.querySelector("#hud-idle-range");
-const hudIdleNumber = document.querySelector("#hud-idle-seconds");
-const hudIdleStatus = document.querySelector("#hud-idle-status");
-const hudIdleError = document.querySelector("#hud-idle-error");
+const hudShrunkRange = document.querySelector("#hud-shrunk-range");
+const hudShrunkNumber = document.querySelector("#hud-shrunk-px");
+const hudShrunkStatus = document.querySelector("#hud-shrunk-status");
+const hudBloomRange = document.querySelector("#hud-bloom-range");
+const hudBloomNumber = document.querySelector("#hud-bloom-percent");
+const hudBloomStatus = document.querySelector("#hud-bloom-status");
 const hudOpacityRange = document.querySelector("#hud-opacity-range");
 const hudOpacityNumber = document.querySelector("#hud-opacity-percent");
 const hudOpacityStatus = document.querySelector("#hud-opacity-status");
 const voiceTestBox = document.querySelector("#voice-test");
 let voiceTestEditing = false;
-let hudIdleDirty = false;
-let hudIdleTimer = null;
+let hudShrunkTimer = null;
+let hudBloomTimer = null;
 
 const TEXT_SIZES = ["xx-small", "x-small", "small", "medium", "large"];
-const HUD_IDLE_MIN_S = 1;
-const HUD_IDLE_MAX_S = 30;
-const HUD_IDLE_DEFAULT_S = 3;
+const HUD_SHRUNK_MIN = 96;
+const HUD_SHRUNK_MAX = 280;
+const HUD_SHRUNK_DEFAULT = 120;
+const HUD_BLOOM_MIN = 25;
+const HUD_BLOOM_MAX = 200;
+const HUD_BLOOM_DEFAULT = 100;
 
-function clampIdleSeconds(value) {
+function clampShrunkPx(value) {
   const n = Math.round(Number(value));
-  if (!Number.isFinite(n)) {
-    return HUD_IDLE_DEFAULT_S;
-  }
-  return Math.min(HUD_IDLE_MAX_S, Math.max(HUD_IDLE_MIN_S, n));
+  if (!Number.isFinite(n)) return HUD_SHRUNK_DEFAULT;
+  return Math.min(HUD_SHRUNK_MAX, Math.max(HUD_SHRUNK_MIN, n));
 }
 
-function applyHudIdleMs(ms) {
-  if (hudIdleDirty) {
-    return;
-  }
-  const seconds = clampIdleSeconds(Number(ms) / 1000);
-  if (hudIdleRange) {
-    hudIdleRange.value = String(seconds);
-  }
-  if (hudIdleNumber) {
-    hudIdleNumber.value = String(seconds);
-  }
-  if (hudIdleStatus && !hudIdleStatus.textContent) {
-    hudIdleStatus.textContent =
-      "HUD collapses after " + seconds + " s idle (hud_idle_collapse_ms=" + seconds * 1000 + ").";
-  }
+function clampBloomPercent(value) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return HUD_BLOOM_DEFAULT;
+  return Math.min(HUD_BLOOM_MAX, Math.max(HUD_BLOOM_MIN, n));
 }
 
-function showHudIdleError(error) {
-  if (!hudIdleError) {
-    return;
-  }
-  hudIdleError.textContent =
-    typeof error === "string" ? error : error && error.message ? error.message : "request failed";
+function applyHudShrunk(px) {
+  const clamped = clampShrunkPx(px);
+  if (hudShrunkRange) hudShrunkRange.value = String(clamped);
+  if (hudShrunkNumber) hudShrunkNumber.value = String(clamped);
+}
+
+function applyHudBloom(percent) {
+  const clamped = clampBloomPercent(percent);
+  if (hudBloomRange) hudBloomRange.value = String(clamped);
+  if (hudBloomNumber) hudBloomNumber.value = String(clamped);
 }
 
 function applyTextSize(size) {
@@ -1708,8 +1957,9 @@ async function refreshUiPrefs() {
     if (uiPrefsError) uiPrefsError.textContent = "";
     const snap = await invoke("ui_prefs_snapshot");
     applyTextSize(snap.text_size || "x-small");
-    applyHudIdleMs(
-      typeof snap.hud_idle_collapse_ms === "number" ? snap.hud_idle_collapse_ms : 3000,
+    applyHudShrunk(typeof snap.hud_shrunk_px === "number" ? snap.hud_shrunk_px : HUD_SHRUNK_DEFAULT);
+    applyHudBloom(
+      typeof snap.hud_bloom_intensity === "number" ? snap.hud_bloom_intensity : HUD_BLOOM_DEFAULT,
     );
     applyHudOpacity(
       typeof snap.hud_opacity === "number" ? snap.hud_opacity : 55,
@@ -1719,39 +1969,48 @@ async function refreshUiPrefs() {
     }
   } catch (error) {
     applyTextSize("x-small");
-    applyHudIdleMs(3000);
+    applyHudShrunk(HUD_SHRUNK_DEFAULT);
+    applyHudBloom(HUD_BLOOM_DEFAULT);
     applyHudOpacity(55);
     showUiPrefsError(error);
   }
 }
 
-async function saveHudIdleSeconds(seconds) {
-  const clamped = clampIdleSeconds(seconds);
-  if (hudIdleRange) {
-    hudIdleRange.value = String(clamped);
-  }
-  if (hudIdleNumber) {
-    hudIdleNumber.value = String(clamped);
-  }
+async function saveHudShrunk(px) {
+  const clamped = clampShrunkPx(px);
+  applyHudShrunk(clamped);
+  if (hudShrunkStatus) hudShrunkStatus.textContent = "Saving…";
   try {
-    if (hudIdleError) {
-      hudIdleError.textContent = "";
+    const snap = await invoke("ui_prefs_set_hud_shrunk_px", { px: clamped });
+    applyHudShrunk(typeof snap.hud_shrunk_px === "number" ? snap.hud_shrunk_px : clamped);
+    if (hudShrunkStatus) {
+      hudShrunkStatus.textContent = "Shrunk HUD: " + (snap.hud_shrunk_px || clamped) + " px";
     }
-    const snap = await invoke("ui_prefs_set_hud_idle_collapse_ms", { ms: clamped * 1000 });
-    hudIdleDirty = false;
-    applyHudIdleMs(snap.hud_idle_collapse_ms);
-    if (hudIdleStatus) {
-      const saved = clampIdleSeconds(Number(snap.hud_idle_collapse_ms) / 1000);
-      hudIdleStatus.textContent =
-        "HUD collapses after " +
-        saved +
-        " s idle (hud_idle_collapse_ms=" +
-        snap.hud_idle_collapse_ms +
-        ").";
+    try {
+      await invoke("hud_apply_shrunk_size");
+    } catch (_layoutError) {
+      // Settings can save the pref when the HUD window is not open yet.
     }
   } catch (error) {
-    hudIdleDirty = false;
-    showHudIdleError(error);
+    if (hudShrunkStatus) hudShrunkStatus.textContent = "Save failed: " + errorText(error);
+    refreshUiPrefs();
+  }
+}
+
+async function saveHudBloom(percent) {
+  const clamped = clampBloomPercent(percent);
+  applyHudBloom(clamped);
+  if (hudBloomStatus) hudBloomStatus.textContent = "Saving…";
+  try {
+    const snap = await invoke("ui_prefs_set_hud_bloom_intensity", { percent: clamped });
+    applyHudBloom(
+      typeof snap.hud_bloom_intensity === "number" ? snap.hud_bloom_intensity : clamped,
+    );
+    if (hudBloomStatus) {
+      hudBloomStatus.textContent = "Bloom intensity: " + (snap.hud_bloom_intensity || clamped) + "%";
+    }
+  } catch (error) {
+    if (hudBloomStatus) hudBloomStatus.textContent = "Save failed: " + errorText(error);
     refreshUiPrefs();
   }
 }
@@ -1797,32 +2056,47 @@ function scheduleHudOpacitySave(percent) {
   }, 200);
 }
 
-function scheduleHudIdleSave(seconds) {
-  hudIdleDirty = true;
-  if (hudIdleTimer) {
-    clearTimeout(hudIdleTimer);
-  }
-  hudIdleTimer = setTimeout(() => {
-    hudIdleTimer = null;
-    saveHudIdleSeconds(seconds);
-  }, 300);
+function scheduleHudShrunkSave(px) {
+  applyHudShrunk(px);
+  if (hudShrunkTimer) clearTimeout(hudShrunkTimer);
+  hudShrunkTimer = setTimeout(() => {
+    hudShrunkTimer = null;
+    void saveHudShrunk(px);
+  }, 200);
 }
 
-if (hudIdleRange && hudIdleNumber) {
-  hudIdleRange.addEventListener("input", () => {
-    hudIdleNumber.value = hudIdleRange.value;
-    scheduleHudIdleSave(hudIdleRange.value);
+function scheduleHudBloomSave(percent) {
+  applyHudBloom(percent);
+  if (hudBloomTimer) clearTimeout(hudBloomTimer);
+  hudBloomTimer = setTimeout(() => {
+    hudBloomTimer = null;
+    void saveHudBloom(percent);
+  }, 200);
+}
+
+if (hudShrunkRange && hudShrunkNumber) {
+  hudShrunkRange.addEventListener("input", () => {
+    hudShrunkNumber.value = hudShrunkRange.value;
+    scheduleHudShrunkSave(hudShrunkRange.value);
   });
-  hudIdleNumber.addEventListener("input", () => {
-    const seconds = clampIdleSeconds(hudIdleNumber.value);
-    hudIdleRange.value = String(seconds);
-    scheduleHudIdleSave(seconds);
+  hudShrunkNumber.addEventListener("change", () => {
+    const px = clampShrunkPx(hudShrunkNumber.value);
+    hudShrunkNumber.value = String(px);
+    hudShrunkRange.value = String(px);
+    scheduleHudShrunkSave(px);
   });
-  hudIdleNumber.addEventListener("change", () => {
-    const seconds = clampIdleSeconds(hudIdleNumber.value);
-    hudIdleNumber.value = String(seconds);
-    hudIdleRange.value = String(seconds);
-    scheduleHudIdleSave(seconds);
+}
+
+if (hudBloomRange && hudBloomNumber) {
+  hudBloomRange.addEventListener("input", () => {
+    hudBloomNumber.value = hudBloomRange.value;
+    scheduleHudBloomSave(hudBloomRange.value);
+  });
+  hudBloomNumber.addEventListener("change", () => {
+    const percent = clampBloomPercent(hudBloomNumber.value);
+    hudBloomNumber.value = String(percent);
+    hudBloomRange.value = String(percent);
+    scheduleHudBloomSave(percent);
   });
 }
 
@@ -2585,6 +2859,9 @@ function showPane(name) {
     } else {
       setProfilesSubnavVisible(true);
     }
+  }
+  if (name === "global") {
+    loadGlobalDocs();
   }
   if (name === "email") {
     refreshEmail();

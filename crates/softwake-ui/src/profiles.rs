@@ -10,9 +10,10 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use softwake_ipc::{Client, resolve_socket_path};
 use softwake_soul::{
-    create_profile, ensure_migrated, list_profiles, load_app_config, profile_name_in,
-    profile_pack_dir, rename_profile, resolve_config_dir, resolve_soul_dir, set_active_profile,
-    try_load,
+    create_profile, ensure_migrated, list_profiles, load_app_config, load_profile_meta,
+    profile_name_in, profile_owner_from_pack_dir, profile_pack_dir, rename_profile,
+    resolve_config_dir, resolve_main_profile_id, resolve_soul_dir, set_active_profile,
+    set_global_doc_flags, try_load_effective,
 };
 
 use crate::pack::{self, PackSnapshot};
@@ -32,6 +33,10 @@ pub struct ProfileRow {
 
 /// Profiles pane snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "wire snapshot: is_main plus three independent use_global flags"
+)]
 pub struct ProfilesSnapshot {
     /// Softwake config root (display).
     pub config_dir: String,
@@ -43,8 +48,43 @@ pub struct ProfilesSnapshot {
     pub selected_name: String,
     /// All profiles, sorted by id.
     pub profiles: Vec<ProfileRow>,
-    /// Pack editors for the selected profile.
+    /// Pack editors for the selected profile (own files, not the global preview).
     pub pack: PackSnapshot,
+    /// True when the selected profile owns the global docs.
+    pub is_main: bool,
+    /// Main profile id (`default`, or the first id if that folder is gone).
+    pub main_id: String,
+    /// `use_global_user` for the selected profile. Main reports true.
+    pub use_global_user: bool,
+    /// `use_global_glossary` for the selected profile. Main reports true.
+    pub use_global_glossary: bool,
+    /// `use_global_rules` for the selected profile. Main reports true.
+    pub use_global_rules: bool,
+    /// Main `user.md` body for the read-only preview.
+    pub global_user: String,
+    /// Main `rules.md` body for the read-only preview.
+    pub global_rules: String,
+    /// Main `glossary.md` body for the read-only preview.
+    pub global_glossary: String,
+}
+
+/// Global pane: the main profile's user, rules, and glossary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GlobalDocsSnapshot {
+    /// Main profile id.
+    pub main_id: String,
+    /// Pack directory.
+    pub dir: String,
+    /// `user.md`.
+    pub user: String,
+    /// `rules.md`.
+    pub rules: String,
+    /// `glossary.md`.
+    pub glossary: String,
+    /// Whether [`try_load`] accepts the main pack.
+    pub ok: bool,
+    /// Why the pack is invalid, when `ok` is false.
+    pub reason: Option<String>,
 }
 
 /// Result of a HUD left-rail profile switch (ADR-0041).
@@ -83,18 +123,19 @@ fn snapshot_at(config: &Path, selected_id: &str) -> Result<ProfilesSnapshot, Str
     let profiles = list_profiles(config).map_err(|error| error.to_string())?;
     let rows = profiles
         .into_iter()
-        .map(|meta| {
-            let dir = profile_pack_dir(config, &meta.id);
-            ProfileRow {
-                active: meta.id == app.active_profile,
-                pack_ok: try_load(&dir).is_ok(),
-                id: meta.id,
-                name: meta.name,
-            }
+        .map(|meta| ProfileRow {
+            active: meta.id == app.active_profile,
+            pack_ok: try_load_effective(config, &meta.id).is_ok(),
+            id: meta.id,
+            name: meta.name,
         })
         .collect::<Vec<_>>();
     let selected_name = profile_name_in(&selected_dir);
-    let pack = pack::read_pack(&selected_dir);
+    let pack = pack_with_effective_ok(config, &selected, pack::read_pack(&selected_dir));
+    let main_id = resolve_main_profile_id(config).unwrap_or_else(|_| "default".to_owned());
+    let is_main = selected == main_id;
+    let meta = load_profile_meta(&selected_dir);
+    let global = pack::read_pack(&profile_pack_dir(config, &main_id));
     Ok(ProfilesSnapshot {
         config_dir: config.display().to_string(),
         active_id: app.active_profile,
@@ -102,7 +143,29 @@ fn snapshot_at(config: &Path, selected_id: &str) -> Result<ProfilesSnapshot, Str
         selected_name,
         profiles: rows,
         pack,
+        is_main,
+        main_id,
+        use_global_user: is_main || meta.use_global_user,
+        use_global_glossary: is_main || meta.use_global_glossary,
+        use_global_rules: is_main || meta.use_global_rules,
+        global_user: global.user,
+        global_rules: global.rules,
+        global_glossary: global.glossary,
     })
+}
+
+fn pack_with_effective_ok(config: &Path, profile_id: &str, mut pack: PackSnapshot) -> PackSnapshot {
+    match try_load_effective(config, profile_id) {
+        Ok(_) => {
+            pack.ok = true;
+            pack.reason = None;
+        }
+        Err(error) => {
+            pack.ok = false;
+            pack.reason = Some(error.to_string());
+        }
+    }
+    pack
 }
 
 /// List profiles and load the selected (or active) pack into the editors.
@@ -133,8 +196,73 @@ pub fn profile_rename(id: String, name: String) -> Result<ProfilesSnapshot, Stri
 #[tauri::command]
 pub fn profile_set_active(id: String) -> Result<ProfilesSnapshot, String> {
     let config = config_dir()?;
+    let previous = load_app_config(&config)
+        .map(|app| app.active_profile)
+        .unwrap_or_default();
     set_active_profile(&config, &id).map_err(|error| error.to_string())?;
+    if previous != id {
+        let _ = crate::providers::clear_selected_tts_voice();
+    }
     snapshot_at(&config, &id)
+}
+
+/// Save Use-global checkboxes. Main is forced to its own files.
+#[tauri::command]
+pub fn profile_set_global_flags(
+    id: String,
+    use_global_user: bool,
+    use_global_glossary: bool,
+    use_global_rules: bool,
+) -> Result<ProfilesSnapshot, String> {
+    let config = config_dir()?;
+    set_global_doc_flags(
+        &config,
+        id.trim(),
+        use_global_user,
+        use_global_glossary,
+        use_global_rules,
+    )
+    .map_err(|error| error.to_string())?;
+    snapshot_at(&config, id.trim())
+}
+
+/// Read the main profile's user, rules, and glossary for the Global pane.
+#[tauri::command]
+pub fn global_docs_snapshot() -> Result<GlobalDocsSnapshot, String> {
+    let config = config_dir()?;
+    ensure_migrated(&config).map_err(|error| error.to_string())?;
+    read_global_docs(&config)
+}
+
+/// Write the main profile's user, rules, and glossary. Soul is left as-is.
+#[tauri::command]
+pub fn global_docs_save(
+    user: String,
+    rules: String,
+    glossary: String,
+) -> Result<GlobalDocsSnapshot, String> {
+    let config = config_dir()?;
+    ensure_migrated(&config).map_err(|error| error.to_string())?;
+    let main = resolve_main_profile_id(&config).map_err(|error| error.to_string())?;
+    let dir = profile_pack_dir(&config, &main);
+    let existing = pack::read_pack(&dir);
+    pack::write_pack(&dir, &existing.soul, &user, &rules, &glossary)?;
+    read_global_docs(&config)
+}
+
+fn read_global_docs(config: &Path) -> Result<GlobalDocsSnapshot, String> {
+    let main = resolve_main_profile_id(config).map_err(|error| error.to_string())?;
+    let dir = profile_pack_dir(config, &main);
+    let pack = pack::read_pack(&dir);
+    Ok(GlobalDocsSnapshot {
+        main_id: main,
+        dir: pack.dir,
+        user: pack.user,
+        rules: pack.rules,
+        glossary: pack.glossary,
+        ok: pack.ok,
+        reason: pack.reason,
+    })
 }
 
 /// HUD left-rail switch: set active profile on disk, then run `/refresh` effects.
@@ -157,6 +285,8 @@ pub fn hud_switch_profile(id: String) -> Result<HudSwitchProfileResult, String> 
     let already = app.active_profile == id;
     if !already {
         set_active_profile(&config, &id).map_err(|error| error.to_string())?;
+        // One voice store: profile switch returns to Default (empty).
+        let _ = crate::providers::clear_selected_tts_voice();
     }
     let snapshot = snapshot_at(&config, &id)?;
     let (refresh_ok, refresh_message) = match ask_refresh() {
@@ -210,7 +340,53 @@ pub fn pack_save(
     glossary: String,
 ) -> Result<PackSnapshot, String> {
     let dir = pack_dir_for(profile_id.as_deref())?;
-    pack::write_pack(&dir, &soul, &user, &rules, &glossary)
+    let existing = pack::read_pack(&dir);
+    // Inherited docs keep the profile's own file. The editor is showing the
+    // global preview, and writing that preview would copy main onto the profile.
+    let user = if should_write_own(&dir, DocKind::User) {
+        user
+    } else {
+        existing.user.clone()
+    };
+    let rules = if should_write_own(&dir, DocKind::Rules) {
+        rules
+    } else {
+        existing.rules.clone()
+    };
+    let glossary = if should_write_own(&dir, DocKind::Glossary) {
+        glossary
+    } else {
+        existing.glossary
+    };
+    let written = pack::write_pack(&dir, &soul, &user, &rules, &glossary)?;
+    if let Some((config, id)) = profile_owner_from_pack_dir(&dir) {
+        return Ok(pack_with_effective_ok(&config, &id, written));
+    }
+    Ok(written)
+}
+
+enum DocKind {
+    User,
+    Rules,
+    Glossary,
+}
+
+fn should_write_own(dir: &Path, kind: DocKind) -> bool {
+    let Some((config, id)) = profile_owner_from_pack_dir(dir) else {
+        return true;
+    };
+    let Ok(main) = resolve_main_profile_id(&config) else {
+        return true;
+    };
+    if id == main {
+        return true;
+    }
+    let meta = load_profile_meta(dir);
+    match kind {
+        DocKind::User => !meta.use_global_user,
+        DocKind::Rules => !meta.use_global_rules,
+        DocKind::Glossary => !meta.use_global_glossary,
+    }
 }
 
 fn pack_dir_for(profile_id: Option<&str>) -> Result<PathBuf, String> {

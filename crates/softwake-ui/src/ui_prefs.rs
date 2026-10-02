@@ -118,6 +118,44 @@ const fn default_hud_pinned() -> bool {
     false
 }
 
+/// Default shrunk HUD square (logical pixels). Replaces the hard-coded 120.
+pub const HUD_SHRUNK_PX_DEFAULT: u32 = 120;
+/// Smallest shrunk HUD square.
+pub const HUD_SHRUNK_PX_MIN: u32 = 96;
+/// Largest shrunk HUD square.
+pub const HUD_SHRUNK_PX_MAX: u32 = 280;
+
+const fn default_hud_shrunk_px() -> u32 {
+    HUD_SHRUNK_PX_DEFAULT
+}
+
+/// Clamp shrunk HUD size into [`HUD_SHRUNK_PX_MIN`]..=[`HUD_SHRUNK_PX_MAX`].
+#[must_use]
+pub fn clamp_hud_shrunk_px(px: u32) -> u32 {
+    px.clamp(HUD_SHRUNK_PX_MIN, HUD_SHRUNK_PX_MAX)
+}
+
+/// Default bloom intensity percent (100 = capture level unchanged).
+pub const HUD_BLOOM_INTENSITY_DEFAULT: u8 = 100;
+/// Dimmest bloom multiplier percent.
+pub const HUD_BLOOM_INTENSITY_MIN: u8 = 25;
+/// Brightest bloom multiplier percent.
+pub const HUD_BLOOM_INTENSITY_MAX: u8 = 200;
+
+const fn default_hud_bloom_intensity() -> u8 {
+    HUD_BLOOM_INTENSITY_DEFAULT
+}
+
+/// Clamp bloom intensity percent.
+#[must_use]
+pub fn clamp_hud_bloom_intensity(percent: u8) -> u8 {
+    percent.clamp(HUD_BLOOM_INTENSITY_MIN, HUD_BLOOM_INTENSITY_MAX)
+}
+
+const fn default_two_way() -> bool {
+    false
+}
+
 /// Clamp expanded width into [`HUD_EXPANDED_W_MIN`]..=[`HUD_EXPANDED_W_MAX`].
 #[must_use]
 pub fn clamp_hud_expanded_w(width: u32) -> u32 {
@@ -155,6 +193,15 @@ pub struct UiPrefs {
     /// HUD mic mute preference (daemon latch restored on HUD load).
     #[serde(default = "default_hud_mic_muted_pref")]
     pub hud_mic_muted: bool,
+    /// Shrunk orb square in logical pixels (96..=280, default 120).
+    #[serde(default = "default_hud_shrunk_px")]
+    pub hud_shrunk_px: u32,
+    /// Bloom density/brightness multiplier percent (25..=200, default 100).
+    #[serde(default = "default_hud_bloom_intensity")]
+    pub hud_bloom_intensity: u8,
+    /// Operator 2-way intent. ON wakes; OFF sleeps. Not hibernate.
+    #[serde(default = "default_two_way")]
+    pub two_way: bool,
 }
 
 impl Default for UiPrefs {
@@ -167,6 +214,9 @@ impl Default for UiPrefs {
             hud_expanded_h: HUD_EXPANDED_H_DEFAULT,
             hud_opacity: HUD_OPACITY_DEFAULT,
             hud_mic_muted: false,
+            hud_shrunk_px: HUD_SHRUNK_PX_DEFAULT,
+            hud_bloom_intensity: HUD_BLOOM_INTENSITY_DEFAULT,
+            two_way: false,
         }
     }
 }
@@ -178,6 +228,8 @@ pub fn normalize(mut prefs: UiPrefs) -> UiPrefs {
     prefs.hud_expanded_w = clamp_hud_expanded_w(prefs.hud_expanded_w);
     prefs.hud_expanded_h = clamp_hud_expanded_h(prefs.hud_expanded_h);
     prefs.hud_opacity = clamp_hud_opacity(prefs.hud_opacity);
+    prefs.hud_shrunk_px = clamp_hud_shrunk_px(prefs.hud_shrunk_px);
+    prefs.hud_bloom_intensity = clamp_hud_bloom_intensity(prefs.hud_bloom_intensity);
     prefs
 }
 
@@ -235,6 +287,12 @@ pub struct UiPrefsSnapshot {
     pub hud_opacity: u8,
     /// Persisted mic mute preference.
     pub hud_mic_muted: bool,
+    /// Shrunk orb square (clamped).
+    pub hud_shrunk_px: u32,
+    /// Bloom intensity percent (clamped).
+    pub hud_bloom_intensity: u8,
+    /// Persisted 2-way intent.
+    pub two_way: bool,
 }
 
 impl From<&UiPrefs> for UiPrefsSnapshot {
@@ -247,6 +305,9 @@ impl From<&UiPrefs> for UiPrefsSnapshot {
             hud_expanded_h: clamp_hud_expanded_h(prefs.hud_expanded_h),
             hud_opacity: clamp_hud_opacity(prefs.hud_opacity),
             hud_mic_muted: prefs.hud_mic_muted,
+            hud_shrunk_px: clamp_hud_shrunk_px(prefs.hud_shrunk_px),
+            hud_bloom_intensity: clamp_hud_bloom_intensity(prefs.hud_bloom_intensity),
+            two_way: prefs.two_way,
         }
     }
 }
@@ -326,6 +387,33 @@ pub fn ui_prefs_set_hud_opacity(percent: u8) -> Result<UiPrefsSnapshot, String> 
 pub fn ui_prefs_set_hud_mic_muted(muted: bool) -> Result<UiPrefsSnapshot, String> {
     let mut prefs = load();
     prefs.hud_mic_muted = muted;
+    save(&prefs)?;
+    Ok(UiPrefsSnapshot::from(&prefs))
+}
+
+/// Save the shrunk orb square. The HUD applies it on the next layout.
+#[tauri::command]
+pub fn ui_prefs_set_hud_shrunk_px(px: u32) -> Result<UiPrefsSnapshot, String> {
+    let mut prefs = load();
+    prefs.hud_shrunk_px = clamp_hud_shrunk_px(px);
+    save(&prefs)?;
+    Ok(UiPrefsSnapshot::from(&prefs))
+}
+
+/// Save bloom intensity percent (multiplier on capture-level bloom).
+#[tauri::command]
+pub fn ui_prefs_set_hud_bloom_intensity(percent: u8) -> Result<UiPrefsSnapshot, String> {
+    let mut prefs = load();
+    prefs.hud_bloom_intensity = clamp_hud_bloom_intensity(percent);
+    save(&prefs)?;
+    Ok(UiPrefsSnapshot::from(&prefs))
+}
+
+/// Save 2-way intent. The daemon transition is [`crate::commands::hud_set_two_way`].
+#[tauri::command]
+pub fn ui_prefs_set_two_way(enabled: bool) -> Result<UiPrefsSnapshot, String> {
+    let mut prefs = load();
+    prefs.two_way = enabled;
     save(&prefs)?;
     Ok(UiPrefsSnapshot::from(&prefs))
 }
@@ -429,5 +517,26 @@ mod tests {
         assert!(normalized.hud_pinned);
         assert_eq!(normalized.hud_expanded_w, HUD_EXPANDED_W_MIN);
         assert_eq!(normalized.hud_expanded_h, HUD_EXPANDED_H_MAX);
+    }
+
+    #[test]
+    fn shrunk_bloom_and_two_way_default_when_absent() {
+        let prefs: UiPrefs = serde_json::from_str(r#"{"text_size":"large"}"#).expect("parse");
+        assert_eq!(prefs.hud_shrunk_px, HUD_SHRUNK_PX_DEFAULT);
+        assert_eq!(prefs.hud_bloom_intensity, HUD_BLOOM_INTENSITY_DEFAULT);
+        assert!(!prefs.two_way);
+        assert_eq!(clamp_hud_shrunk_px(10), HUD_SHRUNK_PX_MIN);
+        assert_eq!(clamp_hud_shrunk_px(9_000), HUD_SHRUNK_PX_MAX);
+        assert_eq!(clamp_hud_bloom_intensity(1), HUD_BLOOM_INTENSITY_MIN);
+        assert_eq!(clamp_hud_bloom_intensity(250), HUD_BLOOM_INTENSITY_MAX);
+        let normalized = normalize(UiPrefs {
+            hud_shrunk_px: 1,
+            hud_bloom_intensity: 1,
+            two_way: true,
+            ..UiPrefs::default()
+        });
+        assert_eq!(normalized.hud_shrunk_px, HUD_SHRUNK_PX_MIN);
+        assert_eq!(normalized.hud_bloom_intensity, HUD_BLOOM_INTENSITY_MIN);
+        assert!(normalized.two_way);
     }
 }

@@ -492,13 +492,14 @@ The soul directory is the first match of `--soul-dir PATH` (on `serve` and `demo
 **HUD**
 
 - Parks at the **bottom-right of the primary monitor** by default (always-on-top above Settings).
-- Collapsed: 120×120 bloom. Expanded: default 520×620 (resizable; size pinned in `ui-prefs.json`) with chat bubbles, multiline composer, mic-icon press-to-talk, and the full reply.
-- Chat log keeps up to 40 turns per profile in `profiles/<id>/hud-chat.json` (optional passphrase encryption — [ADR 0026](docs/ADR-0026-hud-chat-unlock.md)). On wake, a budgeted suffix seeds the model session so Softwake remembers prior turns after sleep.
-- Top-right pin keeps it open (skips idle collapse). Otherwise it collapses after the pointer stays outside for the General idle setting (`hud_idle_collapse_ms` in `ui-prefs.json`, default 3 s, range 1–30), unless a tool is pending: Approve or Deny holds the panel open.
+- Opens **expanded** (default 520×620, resizable; size in `ui-prefs.json`). The shrunk orb is a square bloom (`hud_shrunk_px`, default 120, range 96–280) with a minimal 2-way control, voice chevron, and gear. Click the bloom to shrink or expand. The window stays open until that click. Idle auto-collapse and the pin control are retired.
+- Chat log keeps up to 40 turns per profile in `profiles/<id>/hud-chat.json` (optional passphrase encryption — [ADR 0026](docs/ADR-0026-hud-chat-unlock.md)). On wake, a budgeted suffix seeds the model session so Softwake remembers prior turns after sleep. A pending tool still holds the panel open until Approve or Deny.
+- **2-way on** is awake listening. **2-way off** is sleep (the wake word still works). Hibernate is separate and stops the mic until Resume. If Voice Agent S2S is on, 2-way uses that path and does not also run free-speech.
+- The voice chevron writes `selected_tts_voice`. Switching profile resets it to Default.
 - Drag the bloom to move it; Softwake persists that spot and keeps the bottom-right corner across expand/collapse until `hud-position.json` is cleared.
-- Particles follow capture level while listening ([ADR 0015](docs/ADR-0015-tray-hud.md), [ADR 0016](docs/ADR-0016-capture-level-hud.md)): daemon sends peak-normalized RMS on `Status` when PCM is scored; UI falls back to a local sine when that field is absent.
+- Particles follow capture level while listening ([ADR 0015](docs/ADR-0015-tray-hud.md), [ADR 0016](docs/ADR-0016-capture-level-hud.md)): daemon sends peak-normalized RMS on `Status` when PCM is scored; UI falls back to a local sine when that field is absent. Settings → General **bloom intensity** (`hud_bloom_intensity`, default 100%, range 25–200) multiplies density and brightness. Capture level stays the base.
 
-**Settings left-nav** shows **exactly one** content pane at a time: General, Profiles (sublist), Providers, Tools, Timers (sublist), Skills (sublist), Messengers (sublist), MCP (sublist), Remote Agent (sublist), Email, and Status. Status is selected when the Settings window opens.
+**Settings left-nav** shows **exactly one** content pane at a time: General, Global, Profiles (sublist), Providers, Tools, Timers (sublist), Skills (sublist), Messengers (sublist), MCP (sublist), Remote Agent (sublist), Email, and Status. Status is selected when the Settings window opens. **Global** edits the main profile’s user, glossary, and rules. Other profiles can use those files (checkboxes, default on) or their own copies. Soul stays on each profile. Main is `default`, or the first profile id if that folder is missing.
 
 **Status** shows:
 
@@ -623,7 +624,7 @@ cargo test -p softwake-daemon --features pipewire-capture
 | [docs/ADR-0014-skills-hub.md](docs/ADR-0014-skills-hub.md) | Skills hub (Settings page + skill_save); refine later; webhook → ADR-0038 |
 | [docs/ADR-0038-webhook-wake.md](docs/ADR-0038-webhook-wake.md) | Authenticated local webhook wake (`POST /v1/wake`, Bearer secret) |
 | [docs/ADR-0015-tray-hud.md](docs/ADR-0015-tray-hud.md) | System tray and always-on-top HUD |
-| [docs/ADR-0051-shell-redesign.md](docs/ADR-0051-shell-redesign.md) | Shell redesign plan: main window / HUD orb, 2-way chat, user.md inheritance (phased) |
+| [docs/ADR-0051-shell-redesign.md](docs/ADR-0051-shell-redesign.md) | Shell: stay-open orb, 2-way = sleep when off, global user/glossary/rules |
 | [docs/ADR-0016-capture-level-hud.md](docs/ADR-0016-capture-level-hud.md) | Capture level on Status → HUD particles |
 | [docs/ADR-0023-email-oauth.md](docs/ADR-0023-email-oauth.md) | Email OAuth: Google / Microsoft Connect on Settings → Email; PKCE + secret bag |
 | [docs/ADR-0033-multi-account-oauth.md](docs/ADR-0033-multi-account-oauth.md) | Multiple Google and Microsoft Email accounts; active id; optional `account` |

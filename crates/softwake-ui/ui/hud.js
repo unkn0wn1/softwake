@@ -32,6 +32,9 @@ const contextMeterFill = document.querySelector("#context-meter-fill");
 const contextMeterMark = document.querySelector("#context-meter-mark");
 const contextMeterLabel = document.querySelector("#context-meter-label");
 const pinBtn = document.querySelector("#pin");
+const twoWayBtn = document.querySelector("#two-way");
+const voiceSelect = document.querySelector("#voice-select");
+const gearBtn = document.querySelector("#gear");
 const micMuteBtn = document.querySelector("#mic-mute");
 const resizeGrip = document.querySelector("#resize-grip");
 const chatToolbar = document.querySelector("#chat-toolbar");
@@ -51,8 +54,12 @@ let level = 0.02;
 let state = "sleep";
 let previousVoiceState = "sleep";
 let captureRunning = false;
-let expanded = false;
+let expanded = true;
 let idleTimer = null;
+let bloomIntensity = 1;
+let appliedShrunkPx = 0;
+let sawVoiceStatus = false;
+let twoWayReady = false;
 let configuredIdleMs = IDLE_DEFAULT_MS;
 let hudPinned = false;
 let lastActivity = Date.now();
@@ -142,7 +149,8 @@ function fitCanvas() {
 }
 
 function spawnBurstWithLevel(drawLevel) {
-  const dens = Math.floor(2 + drawLevel * 14);
+  const gain = bloomIntensity;
+  const dens = Math.max(1, Math.floor((2 + drawLevel * 14) * gain));
   const colors = palette();
   // Square collapsed bloom and the expanded strip both center the particles.
   const cx = viewW * 0.5;
@@ -160,7 +168,7 @@ function spawnBurstWithLevel(drawLevel) {
       life: 1,
       decay: 0.008 + Math.random() * 0.012,
       color,
-      alpha: 0.25 + drawLevel * 0.55,
+      alpha: Math.min(1, (0.25 + drawLevel * 0.55) * gain),
     });
   }
 }
@@ -230,24 +238,11 @@ function idleBlocked() {
 }
 
 function armIdle() {
+  // ADR-0051: the shell stays open until the orb is clicked.
   if (idleTimer) {
     window.clearTimeout(idleTimer);
     idleTimer = null;
   }
-  if (!expanded || hudPinned) {
-    return;
-  }
-  idleTimer = window.setTimeout(() => {
-    idleTimer = null;
-    if (!expanded) {
-      return;
-    }
-    if (idleBlocked() || Date.now() - lastActivity < configuredIdleMs) {
-      armIdle();
-      return;
-    }
-    setExpanded(false);
-  }, configuredIdleMs);
 }
 
 function markActivity() {
@@ -315,6 +310,10 @@ function setExpanded(next) {
   }
   expanded = next;
   capsule.classList.toggle("expanded", next);
+  canvas.setAttribute(
+    "aria-label",
+    next ? "Softwake orb. Click to shrink." : "Softwake orb. Click to expand.",
+  );
   capsule.setAttribute("aria-expanded", next ? "true" : "false");
   capsule.setAttribute("role", next ? "group" : "button");
   void applyWindowLayout(next);
@@ -798,7 +797,6 @@ function pushOrUpdateStreaming(text) {
   // turn is user) still opens a fresh bubble after pushUser.
   const inFlight = talkPending || streamingTurn;
   streamingTurn = true;
-  setExpanded(true);
   const last = turns.length ? turns[turns.length - 1] : null;
   // Mid-ask: always grow/revive the current assistant bubble. Disk reload and
   // soft-finalize settle clear `streaming`; requiring that flag alone appended
@@ -964,7 +962,6 @@ function considerStatus(message, detail, phase) {
         setLive("Listening…", false);
       } else if (isThinking(text)) {
         setLive(detail ? "Thinking… (" + detail + ")" : "Thinking…", false);
-        setExpanded(true);
       }
     }
     return;
@@ -979,36 +976,14 @@ function considerStatus(message, detail, phase) {
     setLive("", false);
   }
   pushAssistant(text, detail, false);
-  setExpanded(true);
 }
 
-function applyPinned(next) {
-  hudPinned = !!next;
-  capsule.dataset.pinned = hudPinned ? "1" : "0";
+function applyPinned(_next) {
+  // Pin is retired. Stay-open is the orb, not a second control.
+  hudPinned = false;
+  capsule.dataset.pinned = "0";
   if (pinBtn) {
-    pinBtn.setAttribute("aria-pressed", hudPinned ? "true" : "false");
-    pinBtn.setAttribute("aria-label", hudPinned ? "Unpin chat" : "Pin chat open");
-    pinBtn.title = hudPinned ? "Pinned — click to unpin" : "Pin chat open";
-    pinBtn.classList.toggle("is-on", hudPinned);
-    const off = pinBtn.querySelector(".pin-icon-off");
-    const on = pinBtn.querySelector(".pin-icon-on");
-    if (off) {
-      off.hidden = hudPinned;
-    }
-    if (on) {
-      on.hidden = !hudPinned;
-    }
-  }
-  if (hudPinned) {
-    if (idleTimer) {
-      window.clearTimeout(idleTimer);
-      idleTimer = null;
-    }
-    if (!expanded) {
-      setExpanded(true);
-    }
-  } else if (expanded) {
-    armIdle();
+    pinBtn.hidden = true;
   }
 }
 
@@ -1023,6 +998,17 @@ async function refreshHudPrefs() {
     }
     if (snap && typeof snap.hud_opacity === "number") {
       applyHudOpacityPercent(snap.hud_opacity);
+    }
+    if (snap && typeof snap.hud_bloom_intensity === "number") {
+      const n = Math.max(25, Math.min(200, snap.hud_bloom_intensity));
+      bloomIntensity = n / 100;
+    }
+    if (!expanded && snap && typeof snap.hud_shrunk_px === "number") {
+      const px = Math.max(96, Math.min(280, snap.hud_shrunk_px));
+      if (px !== appliedShrunkPx) {
+        appliedShrunkPx = px;
+        void invoke("hud_set_layout", { expanded: false });
+      }
     }
     if (snap && typeof snap.hud_mic_muted === "boolean" && snap.hud_mic_muted !== micMuted) {
       // Restore daemon latch from prefs once (avoid loop).
@@ -1172,6 +1158,7 @@ async function switchHudProfile(nextId) {
     const failed = result && result.refresh_ok === false;
     setLive(msg, !!failed);
     sessionHudSeeded = false;
+    void resetVoiceToDefault();
   } catch (error) {
     setLive(errorText(error, "profile switch failed"), true);
   } finally {
@@ -1198,6 +1185,9 @@ async function refreshProfileName(force) {
     if (nextId && nextId !== profileId) {
       const previous = profileId;
       profileId = nextId;
+      if (previous) {
+        void resetVoiceToDefault();
+      }
       if (previous && vaultUnlocked) {
         await persistChat();
         chatPersistReady = false;
@@ -1442,9 +1432,22 @@ async function refresh() {
   try {
     const snap = await invoke("hud_snapshot");
     const nextState = snap.state || "sleep";
-    const woke = nextState === "awake" && previousVoiceState !== "awake";
+    const woke = sawVoiceStatus && nextState === "awake" && previousVoiceState !== "awake";
+    const leftAwake = sawVoiceStatus && previousVoiceState === "awake" && nextState !== "awake";
+    if (!sawVoiceStatus && nextState === "awake") {
+      setExpanded(true);
+    }
     state = nextState;
     previousVoiceState = nextState;
+    sawVoiceStatus = true;
+    syncTwoWay(nextState === "awake");
+    if (twoWayReady && woke) {
+      setExpanded(true);
+      void invoke("ui_prefs_set_two_way", { enabled: true });
+    }
+    if (twoWayReady && leftAwake) {
+      void invoke("ui_prefs_set_two_way", { enabled: false });
+    }
     if (nextState !== "awake") {
       sessionHudSeeded = false;
     }
@@ -1652,7 +1655,7 @@ function isInteractiveTarget(target) {
     return false;
   }
   return !!target.closest(
-    "#ask-form, #talk, #ask-send, #ask-input, #log, #live, #hud-pending, #hud-allow, #pin, #resize-grip, #chat-toolbar, #profile-rail, #vault-gate, button, input, textarea, a, .bubble",
+    "#ask-form, #talk, #ask-send, #ask-input, #log, #live, #hud-pending, #hud-allow, #pin, #resize-grip, #chat-toolbar, #profile-rail, #vault-gate, #orb-controls, #two-way, #voice-select, #gear, button, input, textarea, select, a, .bubble",
   );
 }
 
@@ -1696,25 +1699,21 @@ window.addEventListener("pointerup", (event) => {
   }
 });
 
-capsule.addEventListener("click", (event) => {
+canvas.addEventListener("click", (event) => {
+  event.stopPropagation();
   if (dragMoved) {
     dragMoved = false;
     return;
   }
-  if (
-    event.target.closest("#ask-form") ||
-    event.target.closest("#log") ||
-    event.target.closest("#live") ||
-    event.target.closest("#talk") ||
-    event.target.closest("#hud-pending") ||
-    event.target.closest("#hud-allow") ||
-    event.target.closest("#pin") ||
-    event.target.closest("#resize-grip") ||
-    event.target.closest("#profile-rail") ||
-    event.target.closest("#vault-gate")
-  ) {
+  setExpanded(!expanded);
+});
+
+canvas.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") {
     return;
   }
+  event.preventDefault();
+  event.stopPropagation();
   setExpanded(!expanded);
 });
 
@@ -2055,3 +2054,132 @@ async function refreshHudBuild() {
   }
 }
 void refreshHudBuild();
+
+function syncTwoWay(on) {
+  if (!twoWayBtn) {
+    return;
+  }
+  twoWayBtn.setAttribute("aria-pressed", on ? "true" : "false");
+  twoWayBtn.classList.toggle("is-on", !!on);
+  twoWayBtn.title = on
+    ? "2-way on — awake and listening. Click for sleep (wake word still works)."
+    : "2-way off — sleep. Wake word still works. Click to wake.";
+}
+
+async function resetVoiceToDefault() {
+  try {
+    await invoke("provider_set_tts_voice", { voiceId: "" });
+  } catch (_error) {
+    // Non-xAI providers have no TTS voice. The daemon/profile path also clears.
+  }
+  void loadVoiceRoster();
+}
+
+async function loadVoiceRoster() {
+  if (!voiceSelect) {
+    return;
+  }
+  try {
+    const snap = await invoke("provider_snapshot");
+    const voices = (snap && snap.tts_voices) || [];
+    const current = (snap && snap.selected_tts_voice) || "";
+    const previous = voiceSelect.value;
+    voiceSelect.innerHTML = "";
+    const def = document.createElement("option");
+    def.value = "";
+    def.textContent = "Default";
+    voiceSelect.appendChild(def);
+    for (const id of voices) {
+      const opt = document.createElement("option");
+      opt.value = String(id);
+      opt.textContent = String(id);
+      voiceSelect.appendChild(opt);
+    }
+    const want = voices.indexOf(current) >= 0 || current === "" ? current : previous;
+    voiceSelect.value = want === undefined ? "" : want;
+    if (voiceSelect.value !== (want || "")) {
+      voiceSelect.value = "";
+    }
+  } catch (_error) {
+    if (!voiceSelect.options.length) {
+      const def = document.createElement("option");
+      def.value = "";
+      def.textContent = "Default";
+      voiceSelect.appendChild(def);
+    }
+  }
+}
+
+async function restoreTwoWayIntent() {
+  try {
+    const prefs = await invoke("ui_prefs_snapshot");
+    if (prefs && typeof prefs.hud_bloom_intensity === "number") {
+      bloomIntensity = Math.max(25, Math.min(200, prefs.hud_bloom_intensity)) / 100;
+    }
+    const status = await invoke("hud_snapshot");
+    if (prefs && prefs.two_way && status && status.state === "sleep") {
+      await invoke("hud_set_two_way", { enabled: true });
+      syncTwoWay(true);
+      setExpanded(true);
+    } else if (status && status.state === "awake") {
+      await invoke("ui_prefs_set_two_way", { enabled: true });
+      syncTwoWay(true);
+    } else if (status && status.state === "hibernate") {
+      await invoke("ui_prefs_set_two_way", { enabled: false });
+      syncTwoWay(false);
+    }
+  } catch (_error) {
+    // Daemon may be down. The toggle still reflects the next successful poll.
+  } finally {
+    twoWayReady = true;
+  }
+}
+
+if (twoWayBtn) {
+  twoWayBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const next = twoWayBtn.getAttribute("aria-pressed") !== "true";
+    syncTwoWay(next);
+    invoke("hud_set_two_way", { enabled: next })
+      .then((status) => {
+        const on = status && status.state === "awake";
+        syncTwoWay(on);
+        state = (status && status.state) || state;
+        previousVoiceState = state;
+      })
+      .catch((error) => {
+        syncTwoWay(!next);
+        setLive(errorText(error, "2-way change failed"), true);
+      });
+  });
+}
+
+if (voiceSelect) {
+  voiceSelect.addEventListener("pointerdown", (event) => {
+    event.stopPropagation();
+  });
+  voiceSelect.addEventListener("click", (event) => {
+    event.stopPropagation();
+  });
+  voiceSelect.addEventListener("change", () => {
+    const voiceId = voiceSelect.value || "";
+    invoke("provider_set_tts_voice", { voiceId }).catch((error) => {
+      setLive(errorText(error, "voice change failed"), true);
+      void loadVoiceRoster();
+    });
+  });
+  void loadVoiceRoster();
+}
+
+if (gearBtn) {
+  gearBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    invoke("show_settings").catch((error) => {
+      setLive(errorText(error, "could not open Settings"), true);
+    });
+  });
+}
+
+void restoreTwoWayIntent();

@@ -166,7 +166,15 @@ impl LoadedSoul {
     }
 
     fn read(&mut self) {
-        match self.dir.load() {
+        let loaded = if let Some((config, id)) =
+            softwake_soul::profile_owner_from_pack_dir(self.dir.path())
+        {
+            // ADR-0051: user / rules / glossary may come from the main profile.
+            softwake_soul::try_load_effective(&config, &id)
+        } else {
+            self.dir.load()
+        };
+        match loaded {
             Ok(pack) => {
                 self.pack = Some(pack);
                 self.reason = None;
