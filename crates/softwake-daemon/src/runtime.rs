@@ -1345,7 +1345,11 @@ impl Runtime {
                 if let Some(cache) = &status_cache {
                     if let Ok(mut guard) = cache.lock() {
                         if let Some(status) = guard.as_mut() {
-                            status.message = Some(partial.to_owned());
+                            // Skip identical live text so soft-finalize / poll ticks
+                            // do not look like fresh assistant content to the HUD.
+                            if status.message.as_deref() != Some(partial) {
+                                status.message = Some(partial.to_owned());
+                            }
                             status.detail = Some("streaming".to_owned());
                             status.phase = Some("streaming".to_owned());
                         }

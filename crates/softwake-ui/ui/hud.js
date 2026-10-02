@@ -794,12 +794,22 @@ function pushOrUpdateStreaming(text) {
   if (!clean) {
     return;
   }
+  // Capture in-flight before latching streamingTurn so a brand-new ask (last
+  // turn is user) still opens a fresh bubble after pushUser.
+  const inFlight = talkPending || streamingTurn;
   streamingTurn = true;
   setExpanded(true);
-  // Update the last assistant bubble in-place while tokens arrive.
-  if (turns.length && turns[turns.length - 1].role === "assistant" && turns[turns.length - 1].streaming) {
-    turns[turns.length - 1].text = clean;
-    turns[turns.length - 1].ts = Date.now();
+  const last = turns.length ? turns[turns.length - 1] : null;
+  // Mid-ask: always grow/revive the current assistant bubble. Disk reload and
+  // soft-finalize settle clear `streaming`; requiring that flag alone appended
+  // dozens of identical tool-narration bubbles on each 150ms status poll.
+  if (last && last.role === "assistant" && !last.error && (last.streaming || inFlight)) {
+    last.streaming = true;
+    if (last.text === clean) {
+      return;
+    }
+    last.text = clean;
+    last.ts = Date.now();
     renderLog();
     return;
   }
@@ -1982,6 +1992,8 @@ void bootstrapVault().finally(() => {
 let lastChatReloadMs = 0;
 async function maybeReloadChatFromDisk() {
   if (!vaultUnlocked || !chatPersistReady) return;
+  // Never clobber an in-flight streaming bubble (replaceTurns strips `streaming`).
+  if (talkPending || streamingTurn) return;
   const now = Date.now();
   if (now - lastChatReloadMs < 2500) return;
   lastChatReloadMs = now;
