@@ -623,6 +623,7 @@ cargo test -p softwake-daemon --features pipewire-capture
 | [docs/ADR-0014-skills-hub.md](docs/ADR-0014-skills-hub.md) | Skills hub (Settings page + skill_save); refine later; webhook → ADR-0038 |
 | [docs/ADR-0038-webhook-wake.md](docs/ADR-0038-webhook-wake.md) | Authenticated local webhook wake (`POST /v1/wake`, Bearer secret) |
 | [docs/ADR-0015-tray-hud.md](docs/ADR-0015-tray-hud.md) | System tray and always-on-top HUD |
+| [docs/ADR-0051-shell-redesign.md](docs/ADR-0051-shell-redesign.md) | Shell redesign plan: main window / HUD orb, 2-way chat, user.md inheritance (phased) |
 | [docs/ADR-0016-capture-level-hud.md](docs/ADR-0016-capture-level-hud.md) | Capture level on Status → HUD particles |
 | [docs/ADR-0023-email-oauth.md](docs/ADR-0023-email-oauth.md) | Email OAuth: Google / Microsoft Connect on Settings → Email; PKCE + secret bag |
 | [docs/ADR-0033-multi-account-oauth.md](docs/ADR-0033-multi-account-oauth.md) | Multiple Google and Microsoft Email accounts; active id; optional `account` |
