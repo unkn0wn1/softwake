@@ -13,6 +13,8 @@
 
 ### Fixed
 
+- **Voice Agent S2S barge mashup:** on barge-in / cancel / new response, hard-kill prior `PcmPipePlayer` (SIGKILL + drain) and always `interrupt` before opening a new player so a `finish()`-orphaned ffplay/mpv cannot overlap the next sentence.
+
 - **Voice Agent first-audio latency:** open/flush `PcmPipePlayer` on the realtime worker at the first `response.output_audio.delta` (no longer wait for HUD `GetStatus` → `pump()`, often ~900ms). ffplay gets `-fflags nobuffer` / low_delay / small probesize; stdin flushed after each PCM chunk.
 
 - **Voice Agent S2S audio plays on FFmpeg 8:** `PcmPipePlayer` uses `-ch_layout mono` (FFmpeg 8 removed ffplay `-ac`, which caused `ffplay exited immediately (exit status: 1)` and silent replies). Legacy `-ac 1` remains a fallback. Idle `response.cancel` no longer spams HUD; Speaking phase is set only while PCM is playing.
