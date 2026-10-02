@@ -104,6 +104,7 @@ pub fn voice_agent_session_update_json(
     instructions: &str,
     input_rate_hz: u32,
     output_rate_hz: u32,
+    speed: f64,
     web_search: bool,
 ) -> String {
     let voice = {
@@ -124,7 +125,8 @@ pub fn voice_agent_session_update_json(
             },
             "output": {
                 "format": { "type": "audio/pcm", "rate": output_rate_hz },
-                "transport": "json"
+                "transport": "json",
+                "speed": crate::voice::clamp_tts_speed(speed)
             }
         }
     });
@@ -276,6 +278,7 @@ impl VoiceAgentSession {
         &mut self,
         voice: &str,
         instructions: &str,
+        speed: f64,
         web_search: bool,
     ) -> Result<(), VoiceHttpError> {
         let payload = voice_agent_session_update_json(
@@ -283,6 +286,7 @@ impl VoiceAgentSession {
             instructions,
             VOICE_AGENT_INPUT_RATE_HZ,
             VOICE_AGENT_OUTPUT_RATE_HZ,
+            speed,
             web_search,
         );
         self.send_text(&payload)
@@ -391,8 +395,14 @@ mod tests {
 
     #[test]
     fn session_update_json_has_vad_and_rates() {
-        let raw =
-            voice_agent_session_update_json("carina", "You are Softwake.", 16_000, 24_000, true);
+        let raw = voice_agent_session_update_json(
+            "carina",
+            "You are Softwake.",
+            16_000,
+            24_000,
+            1.25,
+            true,
+        );
         let value: Value = serde_json::from_str(&raw).expect("json");
         assert_eq!(value["type"], "session.update");
         let session = &value["session"];
@@ -400,6 +410,7 @@ mod tests {
         assert_eq!(session["turn_detection"]["type"], "server_vad");
         assert_eq!(session["audio"]["input"]["format"]["rate"], 16_000);
         assert_eq!(session["audio"]["output"]["format"]["rate"], 24_000);
+        assert_eq!(session["audio"]["output"]["speed"], 1.25);
         assert_eq!(session["tools"][0]["type"], "web_search");
         assert_eq!(session["reasoning"]["effort"], "none");
     }

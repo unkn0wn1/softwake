@@ -506,6 +506,8 @@ pub(crate) struct DiskChat {
     pub(crate) bearer: String,
     /// Settings `selected_tts_voice`. Empty means the xAI default when speaking.
     pub(crate) tts_voice: String,
+    /// Settings `selected_tts_speed` (clamped to xAI 0.7–1.5 at speak time).
+    pub(crate) tts_speed: f64,
     /// Settings `selected_voice_model`. Empty means the xAI STT seed.
     pub(crate) stt_model: String,
     /// Resolved context budget from Settings + model id.
@@ -519,6 +521,7 @@ impl std::fmt::Debug for DiskChat {
             .field("prepared", &self.prepared)
             .field("bearer", &"<redacted>")
             .field("tts_voice", &self.tts_voice)
+            .field("tts_speed", &self.tts_speed)
             .field("stt_model", &self.stt_model)
             .field("budget", &self.budget)
             .finish()
@@ -555,6 +558,7 @@ pub(crate) fn load_disk_chat() -> Result<DiskChat, String> {
     let budget = ContextBudget::from_settings(&prepared.model, handle.settings());
     Ok(DiskChat {
         tts_voice: handle.selected_tts_voice().unwrap_or("").to_owned(),
+        tts_speed: handle.selected_tts_speed(),
         stt_model: handle.selected_voice_model().unwrap_or("").to_owned(),
         prepared,
         bearer,

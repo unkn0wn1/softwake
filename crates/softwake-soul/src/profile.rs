@@ -91,7 +91,7 @@ pub struct AppConfig {
     pub webhook_port: u16,
     /// Opt-in xAI Voice Agent continuous speech-to-speech while awake.
     ///
-    /// Missing key → false. Settings → General and `softwaked ctl voice-agent on|off`
+    /// Missing key → false. Settings → Providers (xAI) and `softwaked ctl voice-agent on|off`
     /// write this key. Env `SOFTWAKE_VOICE_AGENT_S2S` wins when the daemon resolves
     /// the mode. Default remains STT→chat→TTS ([ADR 0007] / [ADR 0050]).
     #[serde(default)]

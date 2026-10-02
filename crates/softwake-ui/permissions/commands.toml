@@ -99,6 +99,11 @@ description = "Save the selected xAI TTS voice id."
 commands.allow = ["provider_set_tts_voice"]
 
 [[permission]]
+identifier = "allow-provider-set-tts-speed"
+description = "Save the xAI speech speed multiplier."
+commands.allow = ["provider_set_tts_speed"]
+
+[[permission]]
 identifier = "allow-provider-set-context-limit"
 description = "Save the context window override in tokens."
 commands.allow = ["provider_set_context_limit"]

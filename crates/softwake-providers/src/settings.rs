@@ -64,6 +64,12 @@ pub struct ProviderSettings {
     /// Document version stays 1. Older files omit this field.
     #[serde(default)]
     pub selected_tts_voice: String,
+
+    /// Speech speed in milli-units (1000 = 1.0×) for xAI TTS / Voice Agent.
+    ///
+    /// Default 1000. Softwake clamps to the xAI API range (0.7–1.5) at speak time.
+    #[serde(default = "default_tts_speed_milli")]
+    pub selected_tts_speed_milli: u16,
     /// Chat Completions `reasoning_effort` (`low`/`medium`/`high`/`xhigh`).
     /// Empty means omit the field (provider default). Document version stays 1.
     #[serde(default)]
@@ -98,6 +104,10 @@ fn default_compact_at_percent() -> u8 {
     crate::context::DEFAULT_COMPACT_AT_PERCENT
 }
 
+fn default_tts_speed_milli() -> u16 {
+    1000
+}
+
 fn default_keep_recent_turns() -> u32 {
     crate::context::DEFAULT_KEEP_RECENT_TURNS
 }
@@ -110,6 +120,7 @@ impl Default for ProviderSettings {
             selected_model: String::new(),
             selected_voice_model: String::new(),
             selected_tts_voice: String::new(),
+            selected_tts_speed_milli: 1000,
             reasoning_effort: String::new(),
             model_cache: BTreeMap::new(),
             last_test: BTreeMap::new(),
@@ -214,6 +225,11 @@ impl ProviderSettings {
     }
 
     /// Store a normalized reasoning effort (empty clears the override).
+    /// Store a UI speech-speed preset (milli-units). Speak path clamps to the API range.
+    pub fn set_tts_speed(&mut self, speed: f64) {
+        self.selected_tts_speed_milli = crate::voice::speed_to_milli(speed);
+    }
+
     pub fn set_reasoning_effort(&mut self, effort: impl Into<String>) {
         self.reasoning_effort = effort.into();
     }

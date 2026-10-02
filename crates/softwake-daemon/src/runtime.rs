@@ -1294,6 +1294,7 @@ impl Runtime {
             prepared,
             bearer,
             tts_voice: _,
+            tts_speed: _,
             stt_model: _,
             budget,
         } = ready;
@@ -2328,6 +2329,7 @@ impl Runtime {
                 ready.bearer.clone(),
                 voice,
                 instructions,
+                ready.tts_speed,
             ) {
                 Ok(bridge) => {
                     if self.verbosity >= 1 {

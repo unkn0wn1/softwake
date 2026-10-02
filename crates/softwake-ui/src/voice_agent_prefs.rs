@@ -1,4 +1,4 @@
-//! Settings → General Voice Agent continuous S2S toggle.
+//! Settings → Providers (xAI only) Voice Agent continuous S2S toggle.
 //!
 //! Persist `voice_agent_s2s` in `softwake.json`, then IPC `reload_voice_agent`
 //! so the running daemon starts or stops the realtime session without restart.

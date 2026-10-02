@@ -131,6 +131,7 @@ pub(crate) fn speak_reply_with_interrupt(
             &ready.bearer,
             text,
             voice,
+            ready.tts_speed,
             timeout,
             interrupt,
         )
@@ -146,6 +147,7 @@ pub(crate) fn speak_reply_with_interrupt(
             &ready.bearer,
             text,
             voice,
+            ready.tts_speed,
         )
         .map_err(|error| error.to_string())?;
         let mut record = None;
@@ -167,6 +169,7 @@ fn speak_via_stream(
     bearer: &str,
     text: &str,
     voice: &str,
+    speed: f64,
     timeout: std::time::Duration,
     interrupt: bool,
 ) -> Result<(), String> {
@@ -174,8 +177,13 @@ fn speak_via_stream(
 
     let mut player: Option<Mp3PipePlayer> = None;
     let mut player_error: Option<String> = None;
-    let stream =
-        softwake_providers::tts_synthesize_streaming(api_base, bearer, text, voice, |chunk| {
+    let stream = softwake_providers::tts_synthesize_streaming(
+        api_base,
+        bearer,
+        text,
+        voice,
+        speed,
+        |chunk| {
             if player.is_none() {
                 match play_mp3_pipe_start(timeout, interrupt) {
                     Ok(started) => player = Some(started),
@@ -192,7 +200,8 @@ fn speak_via_stream(
                 }
             }
             Ok(())
-        });
+        },
+    );
     match stream {
         Ok(()) => {
             if let Some(active) = player.take() {

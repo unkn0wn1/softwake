@@ -17,6 +17,60 @@ pub const VOICE_LANGUAGE: &str = "en";
 /// Hard cap on TTS input. The xAI API allows more; this keeps one HUD reply short.
 pub const TTS_MAX_CHARS: usize = 4_000;
 
+/// xAI TTS / Voice Agent documented speed floor.
+pub const TTS_SPEED_API_MIN: f64 = 0.7;
+/// xAI TTS / Voice Agent documented speed ceiling.
+pub const TTS_SPEED_API_MAX: f64 = 1.5;
+/// Softwake Settings presets (UI). Out-of-range values are clamped for the API.
+pub const TTS_SPEED_PRESETS: &[f64] = &[0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+
+/// Clamp a Settings speed into the xAI API range. Non-finite or ≤0 → 1.0.
+#[must_use]
+pub fn clamp_tts_speed(speed: f64) -> f64 {
+    if !speed.is_finite() || speed <= 0.0 {
+        return 1.0;
+    }
+    speed.clamp(TTS_SPEED_API_MIN, TTS_SPEED_API_MAX)
+}
+
+/// Parse a Settings speed string (`"1.25"`, `"1x"`). Empty → 1.0.
+#[must_use]
+pub fn parse_tts_speed(raw: &str) -> f64 {
+    let trimmed = raw.trim().trim_end_matches(['x', 'X']);
+    if trimmed.is_empty() {
+        return 1.0;
+    }
+    trimmed.parse::<f64>().map_or(1.0, clamp_tts_speed)
+}
+
+/// Convert Settings milli-units (1000 = 1.0×) into a clamped API speed.
+#[must_use]
+pub fn speed_from_milli(milli: u16) -> f64 {
+    if milli == 0 {
+        return 1.0;
+    }
+    clamp_tts_speed(f64::from(milli) / 1000.0)
+}
+
+/// Convert a UI speed preset into milli-units for storage.
+#[must_use]
+pub fn speed_to_milli(speed: f64) -> u16 {
+    if !speed.is_finite() || speed <= 0.0 {
+        return 1000;
+    }
+    let milli = (speed * 1000.0).round();
+    if milli < 1.0 {
+        1
+    } else if milli > f64::from(u16::MAX) {
+        u16::MAX
+    } else {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        {
+            milli as u16
+        }
+    }
+}
+
 /// STT or TTS failure. Display text omits the body, the bearer, and the URL.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum VoiceHttpError {
@@ -144,6 +198,7 @@ pub fn tts_synthesize<T: Transport>(
     bearer: &str,
     text: &str,
     voice_id: &str,
+    speed: f64,
 ) -> Result<Vec<u8>, VoiceHttpError> {
     if !family_speaks_xai(provider) {
         return Err(VoiceHttpError::NotXai);
@@ -153,11 +208,13 @@ pub fn tts_synthesize<T: Transport>(
         return Err(VoiceHttpError::EmptyText);
     }
     let text = clip_chars(text, TTS_MAX_CHARS);
+    let speed = clamp_tts_speed(speed);
     let url = format!("{}/tts", api_base.trim_end_matches('/'));
     let body = serde_json::json!({
         "text": text,
         "voice_id": voice_id,
         "language": VOICE_LANGUAGE,
+        "speed": speed,
     })
     .to_string();
     let response = transport
@@ -248,9 +305,23 @@ pub fn wav_from_pcm16(samples: &[i16]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        TTS_MAX_CHARS, VoiceHttpError, family_speaks_xai, resolve_stt_model, resolve_tts_voice,
-        stt_transcribe, tts_synthesize, tts_voice_roster, wav_from_pcm16,
+        TTS_MAX_CHARS, VoiceHttpError, clamp_tts_speed, family_speaks_xai, parse_tts_speed,
+        resolve_stt_model, resolve_tts_voice, speed_from_milli, speed_to_milli, stt_transcribe,
+        tts_synthesize, tts_voice_roster, wav_from_pcm16,
     };
+
+    #[test]
+    fn clamps_tts_speed_to_xai_range() {
+        assert!((clamp_tts_speed(1.0) - 1.0).abs() < f64::EPSILON);
+        assert!((clamp_tts_speed(0.5) - 0.7).abs() < 1e-9);
+        assert!((clamp_tts_speed(2.0) - 1.5).abs() < 1e-9);
+        assert!((clamp_tts_speed(0.0) - 1.0).abs() < f64::EPSILON);
+        assert!((parse_tts_speed("1.25x") - 1.25).abs() < 1e-9);
+        assert!((parse_tts_speed("") - 1.0).abs() < f64::EPSILON);
+        assert_eq!(speed_to_milli(1.25), 1250);
+        assert!((speed_from_milli(500) - 0.7).abs() < 1e-9);
+    }
+
     use crate::constants::{XAI_TTS_VOICE_EVE, XAI_VOICE_SEED};
     use crate::ids::ProviderId;
     use crate::transport::{HttpBytes, HttpResponse, MockTransport};
@@ -361,6 +432,7 @@ mod tests {
             "bearer-token",
             "  she replies  ",
             XAI_TTS_VOICE_EVE,
+            1.0,
         )
         .expect("tts");
         assert_eq!(audio, mp3);
@@ -370,6 +442,7 @@ mod tests {
         assert_eq!(body["text"], "she replies");
         assert_eq!(body["voice_id"], "eve");
         assert_eq!(body["language"], "en");
+        assert_eq!(body["speed"], 1.0);
     }
 
     #[test]
@@ -382,7 +455,8 @@ mod tests {
                 "https://api.openai.com/v1",
                 "b",
                 "hello",
-                "eve"
+                "eve",
+                1.0,
             )
             .expect_err("openai"),
             VoiceHttpError::NotXai
@@ -395,7 +469,8 @@ mod tests {
                 "https://api.x.ai/v1",
                 "b",
                 "   ",
-                "eve"
+                "eve",
+                1.0,
             )
             .expect_err("blank"),
             VoiceHttpError::EmptyText
@@ -418,6 +493,7 @@ mod tests {
             "expired-token",
             "I'm awake.",
             "eve",
+            1.0,
         )
         .expect_err("403");
         assert_eq!(error, VoiceHttpError::Rejected);
@@ -441,6 +517,7 @@ mod tests {
             "b",
             &long,
             "eve",
+            1.0,
         )
         .expect_err("empty audio");
         assert_eq!(error, VoiceHttpError::NoAudio);

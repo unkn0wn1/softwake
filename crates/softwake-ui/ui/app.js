@@ -35,6 +35,10 @@ const testStatus = document.querySelector("#test-status");
 const modelSelect = document.querySelector("#model-select");
 const voiceModelSelect = document.querySelector("#voice-model-select");
 const ttsVoiceSelect = document.querySelector("#tts-voice-select");
+const ttsSpeedSelect = document.querySelector("#tts-speed-select");
+const ttsSpeedField = document.querySelector("#tts-speed-field");
+const ttsVoiceField = document.querySelector("#tts-voice-field");
+const voiceAgentS2sPanel = document.querySelector("#voice-agent-s2s-panel");
 const contextLimitInput = document.querySelector("#context-limit");
 const compactAtInput = document.querySelector("#compact-at");
 const saveContextBtn = document.querySelector("#save-context");
@@ -405,15 +409,16 @@ function renderProviders(snap) {
   }
 
   const ttsVoices = snap.tts_voices || [];
+  const xaiVoice = !!snap.tts_available;
   ttsVoiceSelect.innerHTML = "";
-  if (!snap.tts_available || ttsVoices.length === 0) {
+  if (!xaiVoice || ttsVoices.length === 0) {
     const option = document.createElement("option");
     option.value = "";
     option.textContent = "xAI only";
     ttsVoiceSelect.appendChild(option);
     ttsVoiceSelect.disabled = true;
     ttsNote.textContent =
-      "TTS voice is for xAI. Eve speaks when the selected provider is xAI sign-in or an xAI API key.";
+      "TTS voice, speech speed, and Voice Agent S2S are xAI only — hidden for other providers.";
   } else {
     const fallback = document.createElement("option");
     fallback.value = "";
@@ -429,7 +434,37 @@ function renderProviders(snap) {
     const selected = snap.selected_tts_voice || "";
     ttsVoiceSelect.value = ttsVoices.includes(selected) ? selected : "";
     ttsNote.textContent =
-      "Ask replies are spoken with this xAI voice. Empty uses Eve.";
+      "Ask replies use this xAI voice and speech speed. Empty voice uses Eve. Speed outside 0.7–1.5 is clamped.";
+  }
+  if (ttsVoiceField) {
+    ttsVoiceField.classList.toggle("hidden", !xaiVoice);
+    ttsVoiceField.hidden = !xaiVoice;
+  }
+  const speedPresets = snap.tts_speed_presets || [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+  if (ttsSpeedSelect) {
+    ttsSpeedSelect.innerHTML = "";
+    for (const speed of speedPresets) {
+      const option = document.createElement("option");
+      option.value = String(speed);
+      const label = speed === 1 || speed === 1.0 ? "1× (default)" : speed + "×";
+      option.textContent = label;
+      ttsSpeedSelect.appendChild(option);
+    }
+    const selectedSpeed = typeof snap.selected_tts_speed === "number" ? snap.selected_tts_speed : 1;
+    const match = speedPresets.find((p) => Math.abs(p - selectedSpeed) < 0.001);
+    ttsSpeedSelect.value = match != null ? String(match) : "1";
+    ttsSpeedSelect.disabled = !xaiVoice;
+  }
+  if (ttsSpeedField) {
+    ttsSpeedField.classList.toggle("hidden", !xaiVoice);
+    ttsSpeedField.hidden = !xaiVoice;
+  }
+  if (voiceAgentS2sPanel) {
+    voiceAgentS2sPanel.classList.toggle("hidden", !xaiVoice);
+    voiceAgentS2sPanel.hidden = !xaiVoice;
+  }
+  if (xaiVoice) {
+    refreshVoiceAgentS2s();
   }
 }
 
@@ -480,6 +515,7 @@ async function providerAction(command, args) {
           command === "provider_set_model" ||
           command === "provider_set_voice_model" ||
           command === "provider_set_tts_voice" ||
+          command === "provider_set_tts_speed" ||
           command === "provider_clear_cred" ||
           command === "provider_opt_in_plaintext"
         ? "Saving…"
@@ -593,6 +629,12 @@ voiceModelSelect.addEventListener("change", () => {
 ttsVoiceSelect.addEventListener("change", () => {
   providerAction("provider_set_tts_voice", { voiceId: ttsVoiceSelect.value });
 });
+if (ttsSpeedSelect) {
+  ttsSpeedSelect.addEventListener("change", () => {
+    const speed = Number(ttsSpeedSelect.value);
+    providerAction("provider_set_tts_speed", { speed: Number.isFinite(speed) ? speed : 1 });
+  });
+}
 
 let profilesLoaded = false;
 let profilesSnap = null;

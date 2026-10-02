@@ -76,6 +76,10 @@ pub struct ProviderSnapshot {
     pub selected_voice_model: String,
     /// Selected TTS voice id (may be empty; xAI then speaks as `eve`).
     pub selected_tts_voice: String,
+    /// Selected speech speed multiplier (xAI TTS / Voice Agent). Default 1.0.
+    pub selected_tts_speed: f64,
+    /// UI presets (0.5…2). Softwake clamps to the xAI API range at speak time.
+    pub tts_speed_presets: Vec<f64>,
     /// Built-in TTS voice ids for the selected provider. Empty outside xAI.
     pub tts_voices: Vec<String>,
     /// True when the selected provider can speak with xAI TTS.
@@ -159,6 +163,8 @@ fn snapshot_from(
         selected_model: settings.selected_model.clone(),
         selected_voice_model: settings.selected_voice_model.clone(),
         selected_tts_voice: settings.selected_tts_voice.clone(),
+        selected_tts_speed: softwake_providers::speed_from_milli(settings.selected_tts_speed_milli),
+        tts_speed_presets: softwake_providers::TTS_SPEED_PRESETS.to_vec(),
         tts_voices: softwake_providers::tts_voice_roster(selected)
             .iter()
             .map(|id| (*id).to_owned())
@@ -578,6 +584,25 @@ pub fn provider_set_tts_voice(voice_id: String) -> Result<ProviderSnapshot, Stri
         };
         voice.clone_into(&mut settings.selected_tts_voice);
     }
+    store.save(&settings).map_err(|e| e.to_string())?;
+    load_snapshot()
+}
+
+/// Save speech speed for xAI TTS / Voice Agent. Non-xAI providers refuse the write.
+///
+/// Values outside the xAI API range (0.7–1.5) are clamped before store.
+#[tauri::command]
+pub fn provider_set_tts_speed(speed: f64) -> Result<ProviderSnapshot, String> {
+    let store = open_settings()?;
+    let mut settings = store.load().map_err(|e| e.to_string())?;
+    if !softwake_providers::family_speaks_xai(settings.selected_provider) {
+        return Err("Speech speed is available for xAI providers only.".to_owned());
+    }
+    if !speed.is_finite() || speed <= 0.0 {
+        return Err("speech speed must be a positive number".to_owned());
+    }
+    // Persist the operator's preset (may be outside API range); speak path clamps.
+    settings.set_tts_speed(speed);
     store.save(&settings).map_err(|e| e.to_string())?;
     load_snapshot()
 }
