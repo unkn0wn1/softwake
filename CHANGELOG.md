@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Voice Agent S2S audio plays on FFmpeg 8:** `PcmPipePlayer` uses `-ch_layout mono` (FFmpeg 8 removed ffplay `-ac`, which caused `ffplay exited immediately (exit status: 1)` and silent replies). Legacy `-ac 1` remains a fallback. Idle `response.cancel` no longer spams HUD; Speaking phase is set only while PCM is playing.
+
+
 ### Added
 
 - **Voice Agent continuous S2S (opt-in)** — Settings → General / `softwake.json` `voice_agent_s2s` / `softwaked ctl voice-agent on|off`. Streams mic PCM to xAI `wss://…/v1/realtime` and plays PCM replies with server VAD barge-in ([ADR 0050](docs/ADR-0050-voice-agent-s2s.md)). Softwake Hands stay on text ask. Default off.
