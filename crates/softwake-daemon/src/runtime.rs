@@ -868,6 +868,9 @@ impl Runtime {
             Ok(line) => line,
             Err(err) => return self.quiet_slash(err),
         };
+        // Profile switch resets TTS to Default and must not keep the old S2S voice.
+        let _ = crate::slash::clear_tts_voice_default();
+        self.stop_voice_agent();
         if self.soul_path_locked {
             return self.quiet_slash(format!(
                 "{label}. Soul dir override is set — daemon pack unchanged; restart without --soul-dir / SOFTWAKE_SOUL_DIR to apply."
@@ -891,6 +894,7 @@ impl Runtime {
 
     /// Re-read soul, re-apply if awake, open a fresh session (seed HUD history).
     fn fresh_session(&mut self, ok_message: &str) -> Outcome {
+        self.stop_voice_agent();
         if self.soul_path_locked {
             self.soul.reload();
         } else if let Ok(dir) = softwake_soul::resolve_soul_dir(None) {
@@ -943,18 +947,18 @@ impl Runtime {
             }
             SoftwakeCtlEffect::Sleep => {
                 let _ = self.sleep_phrase();
-                Ok("Entering sleep".to_owned())
+                Ok("Entering sleep (2-way off; wake word still works)".to_owned())
             }
             SoftwakeCtlEffect::Hibernate => {
                 let _ = self.hibernate_phrase();
-                Ok("Entering hibernate".to_owned())
+                Ok("Entering hibernate (mic off until Resume — not the 2-way control)".to_owned())
             }
             SoftwakeCtlEffect::Resume => {
                 if self.machine.state() != softwake_state::VoiceState::Hibernate {
                     return Err("Resume only works from hibernate (lands in sleep)".to_owned());
                 }
                 let _ = self.transition(softwake_ipc::Command::WakeFromUi);
-                Ok("Resumed to sleep".to_owned())
+                Ok("Resumed to sleep (2-way still off; wake word works)".to_owned())
             }
             SoftwakeCtlEffect::NewSession => {
                 let outcome = self.fresh_session("Session refreshed from soul pack");
@@ -1342,41 +1346,13 @@ impl Runtime {
             // Update the shared status cache only (no &mut self) so invoke can
             // still borrow the runtime for tool calls while tokens stream.
             let mut on_delta = move |partial: &str| {
-                if let Some(cache) = &status_cache {
-                    if let Ok(mut guard) = cache.lock() {
-                        if let Some(status) = guard.as_mut() {
-                            // Skip identical live text so soft-finalize / poll ticks
-                            // do not look like fresh assistant content to the HUD.
-                            if status.message.as_deref() != Some(partial) {
-                                status.message = Some(partial.to_owned());
-                            }
-                            status.detail = Some("streaming".to_owned());
-                            status.phase = Some("streaming".to_owned());
-                        }
-                    }
-                }
-                let raw = spoken_for_delta.load(std::sync::atomic::Ordering::SeqCst);
-                // New tool-loop round resets `partial`; clamp so we do not skip it.
-                let already = crate::early_tts::clamp_spoken_to_text(partial, raw);
-                if already != raw {
-                    spoken_for_delta.store(already, std::sync::atomic::Ordering::SeqCst);
-                }
-                let (next, chunk) = crate::early_tts::take_new_speech(partial, already);
-                if let Some(line) = chunk {
-                    spoken_for_delta.store(next, std::sync::atomic::Ordering::SeqCst);
-                    #[cfg(not(test))]
-                    {
-                        crate::announce::spawn_fixed_line(
-                            line,
-                            profile_for_tts.clone(),
-                            verbosity_for_tts,
-                        );
-                    }
-                    #[cfg(test)]
-                    {
-                        let _ = (line, &profile_for_tts, verbosity_for_tts);
-                    }
-                }
+                Self::note_disk_stream_delta(
+                    partial,
+                    status_cache.as_ref(),
+                    &spoken_for_delta,
+                    &profile_for_tts,
+                    verbosity_for_tts,
+                );
             };
             let is_cancelled = move || cancel.load(std::sync::atomic::Ordering::SeqCst);
             crate::chat::finish_prepared_chat_tools_with_hooks(
@@ -1394,6 +1370,50 @@ impl Runtime {
         };
         self.ask_tts_spoken = spoken_chars.load(std::sync::atomic::Ordering::SeqCst);
         self.finish_tool_loop_ask(loop_ok, context)
+    }
+
+    /// Publish one streaming partial and speak any newly finished sentence.
+    ///
+    /// Split out of [`Self::ask_disk`] so that function stays under clippy's
+    /// line cap. Behavior matches the previous in-closure body.
+    fn note_disk_stream_delta(
+        partial: &str,
+        status_cache: Option<&std::sync::Arc<std::sync::Mutex<Option<Status>>>>,
+        spoken: &std::sync::atomic::AtomicUsize,
+        profile: &str,
+        verbosity: u8,
+    ) {
+        if let Some(cache) = status_cache {
+            if let Ok(mut guard) = cache.lock() {
+                if let Some(status) = guard.as_mut() {
+                    // Skip identical live text so soft-finalize / poll ticks
+                    // do not look like fresh assistant content to the HUD.
+                    if status.message.as_deref() != Some(partial) {
+                        status.message = Some(partial.to_owned());
+                    }
+                    status.detail = Some("streaming".to_owned());
+                    status.phase = Some("streaming".to_owned());
+                }
+            }
+        }
+        let raw = spoken.load(std::sync::atomic::Ordering::SeqCst);
+        // New tool-loop round resets `partial`; clamp so we do not skip it.
+        let already = crate::early_tts::clamp_spoken_to_text(partial, raw);
+        if already != raw {
+            spoken.store(already, std::sync::atomic::Ordering::SeqCst);
+        }
+        let (next, chunk) = crate::early_tts::take_new_speech(partial, already);
+        if let Some(line) = chunk {
+            spoken.store(next, std::sync::atomic::Ordering::SeqCst);
+            #[cfg(not(test))]
+            {
+                crate::announce::spawn_fixed_line(line, profile.to_owned(), verbosity);
+            }
+            #[cfg(test)]
+            {
+                let _ = (line, profile, verbosity);
+            }
+        }
     }
 
     fn finish_tool_loop_ask(
@@ -1896,6 +1916,8 @@ impl Runtime {
         let mut energy_seen = false;
         let awake = wire_state(self.machine.state()) == WireState::Awake;
         // Keep / tear down Voice Agent when awake + toggle change.
+        // 2-way ON is this awake listen. When S2S owns the mic, free-speech
+        // below stays disarmed (`!s2s`) so the two paths are never both live.
         self.sync_voice_agent_session();
         let s2s = self.voice_agent.is_some();
         // Soft duplex: TTS still arms half-duplex mute for free-speech / KWS, but
@@ -2252,6 +2274,9 @@ impl Runtime {
 
     /// Re-read Voice Agent S2S toggle and start/stop the bridge when awake.
     pub(crate) fn reload_voice_agent(&mut self) -> Outcome {
+        // Drop the live bridge first so a new TTS voice or pack is not stuck
+        // on the previous session (`sync` keeps an alive bridge).
+        self.stop_voice_agent();
         self.sync_voice_agent_session();
         let on = crate::voice_agent::resolve_voice_agent_s2s_enabled();
         let active = self.voice_agent.is_some();

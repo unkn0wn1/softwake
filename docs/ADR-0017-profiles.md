@@ -47,3 +47,7 @@ ADR 0011 defined the four-file pack in a single soul directory. Operators want m
 - Flag / env overrides still point at a raw pack dir (optional `profile.json` for name).
 - Public docs describe the layout without host-specific paths.
 - Settings **Profiles** chrome uses a nested sub-menu under the main left nav (profile chips + create) so the content pane stays a growing pack editor; blank create seeds comment-only scaffolds and leaves the agent name empty until Save.
+
+## Amendment (2026-10-03) — global user, glossary, and rules ([ADR 0051](ADR-0051-shell-redesign.md))
+
+`profile.json` may also store `use_global_user`, `use_global_glossary`, and `use_global_rules` (default true when absent). The main profile is `default`, or the lexicographically first profile id if that folder is missing. Main always uses its own three files. Other profiles render the main file for each flag that is true, and the glossary alias map is parsed from that body. Soul stays on the profile. Settings → Global edits the main three files. A checked Use-global box is a read-only preview; unchecking an empty file seeds a commented scaffold.

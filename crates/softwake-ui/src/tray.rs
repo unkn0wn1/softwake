@@ -101,11 +101,19 @@ fn fetch_state() -> Option<(VoiceState, String)> {
     } else {
         ""
     };
-    let label = format!("Status: {}{capture}", status.state.as_str());
+    let label = match status.state {
+        VoiceState::Awake => format!("Status: awake · 2-way on{capture}"),
+        VoiceState::Sleep => {
+            format!("Status: sleep · 2-way off (wake word still works){capture}")
+        }
+        VoiceState::Hibernate => {
+            format!("Status: hibernate · Resume in Settings (not 2-way){capture}")
+        }
+    };
     Some((status.state, label))
 }
 
-fn show_settings<R: Runtime>(app: &AppHandle<R>) {
+pub(crate) fn show_settings<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();

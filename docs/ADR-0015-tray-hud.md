@@ -98,3 +98,7 @@ A pending tool auto-expands the panel. `idleBlocked` includes that pending id, a
 
 While expanded, a narrow left rail lists profiles; click sets active and runs `/refresh` effects, then loads that profile’s HUD history ([ADR-0041](ADR-0041-hud-profile-rail.md)). Collapsed bloom is unchanged.
 
+## Amendment (2026-10-03) — orb stay-open ([ADR 0051](ADR-0051-shell-redesign.md))
+
+The shell opens **expanded**. A single click on the bloom shrinks or expands it and it stays open until that click. Idle auto-collapse and the pin control are retired. Stored `hud_idle_collapse_ms` and `hud_pinned` are ignored. Shrunk size is `hud_shrunk_px` (square, default 120, clamp 96–280). Bloom intensity is `hud_bloom_intensity` (percent, default 100, clamp 25–200) on top of capture level. Gear on the main window and the shrunk orb opens Settings. 2-way off is sleep, not hibernate.
+

@@ -585,7 +585,32 @@ pub fn provider_set_tts_voice(voice_id: String) -> Result<ProviderSnapshot, Stri
         voice.clone_into(&mut settings.selected_tts_voice);
     }
     store.save(&settings).map_err(|e| e.to_string())?;
+    // Restart S2S (if it is on) so the new voice is the one on the wire.
+    poke_voice_agent_reload();
     load_snapshot()
+}
+
+/// Clear the stored TTS voice to Default (empty → Eve via `resolve_tts_voice`).
+///
+/// Does not require an xAI provider. Profile switches call this so the chevron,
+/// `/voice`, and Providers stay on one field.
+pub fn clear_selected_tts_voice() -> Result<(), String> {
+    let store = open_settings()?;
+    let mut settings = store.load().map_err(|e| e.to_string())?;
+    settings.selected_tts_voice.clear();
+    store.save(&settings).map_err(|e| e.to_string())?;
+    poke_voice_agent_reload();
+    Ok(())
+}
+
+fn poke_voice_agent_reload() {
+    let Ok(path) = softwake_ipc::resolve_socket_path(None) else {
+        return;
+    };
+    let Ok(mut client) = softwake_ipc::Client::connect(&path) else {
+        return;
+    };
+    let _ = client.reload_voice_agent();
 }
 
 /// Save speech speed for xAI TTS / Voice Agent. Non-xAI providers refuse the write.

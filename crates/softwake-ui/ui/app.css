@@ -540,8 +540,22 @@ button.btn-primary.btn-compact {
 .profiles-chrome > .meta,
 .profiles-chrome > .field,
 .profiles-chrome > .row,
-.profiles-chrome > .pack-tabs {
+.profiles-chrome > .pack-tabs,
+.profiles-chrome > .global-doc-flags {
   flex: none;
+}
+
+.global-doc-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.1rem;
+  align-items: center;
+  margin: 0.35rem 0 0.5rem;
+}
+
+.pack-editor.is-readonly,
+.pack-editor[readonly] {
+  opacity: 0.82;
 }
 
 .pack-editors {

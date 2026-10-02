@@ -449,6 +449,51 @@ commands.allow = ["ui_prefs_set_hud_opacity"]
 identifier = "allow-ui-prefs-set-hud-mic-muted"
 description = "Save HUD mic mute preference."
 commands.allow = ["ui_prefs_set_hud_mic_muted"]
+
+[[permission]]
+identifier = "allow-ui-prefs-set-hud-shrunk"
+description = "Save the shrunk HUD square (ui-prefs.json hud_shrunk_px)."
+commands.allow = ["ui_prefs_set_hud_shrunk_px"]
+
+[[permission]]
+identifier = "allow-ui-prefs-set-hud-bloom"
+description = "Save bloom intensity percent (ui-prefs.json hud_bloom_intensity)."
+commands.allow = ["ui_prefs_set_hud_bloom_intensity"]
+
+[[permission]]
+identifier = "allow-ui-prefs-set-two-way"
+description = "Save 2-way intent (ui-prefs.json two_way)."
+commands.allow = ["ui_prefs_set_two_way"]
+
+[[permission]]
+identifier = "allow-show-settings"
+description = "Show or focus the Settings window from the HUD gear."
+commands.allow = ["show_settings"]
+
+[[permission]]
+identifier = "allow-hud-set-two-way"
+description = "Turn 2-way on (awake) or off (sleep, not hibernate)."
+commands.allow = ["hud_set_two_way"]
+
+[[permission]]
+identifier = "allow-hud-apply-shrunk-size"
+description = "Resize the shrunk HUD to hud_shrunk_px when it is already the orb."
+commands.allow = ["hud_apply_shrunk_size"]
+
+[[permission]]
+identifier = "allow-profile-set-global-flags"
+description = "Save Use global user/glossary/rules flags on a profile."
+commands.allow = ["profile_set_global_flags"]
+
+[[permission]]
+identifier = "allow-global-docs-snapshot"
+description = "Read the main profile user, rules, and glossary."
+commands.allow = ["global_docs_snapshot"]
+
+[[permission]]
+identifier = "allow-global-docs-save"
+description = "Write the main profile user, rules, and glossary."
+commands.allow = ["global_docs_save"]
 [[permission]]
 identifier = "allow-hud-seed-session"
 description = "Seed the awake model session with prior HUD turns."

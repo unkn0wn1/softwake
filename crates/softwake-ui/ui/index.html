@@ -11,6 +11,7 @@
       <nav class="rail glass" aria-label="Settings">
         <p class="eyebrow">Softwake</p>
         <button type="button" class="nav" id="nav-general" data-pane="general">General</button>
+        <button type="button" class="nav" id="nav-global" data-pane="global">Global</button>
         <button type="button" class="nav" id="nav-profiles" data-pane="profiles">Profiles</button>
         <div id="profiles-subnav" class="nav-sub hidden" hidden>
           <ul id="profiles-list" class="nav-sub-list" role="listbox" aria-label="Profiles"></ul>
@@ -50,9 +51,10 @@
           <h2 id="general-title">General</h2>
           <p id="app-build" class="meta build-stamp" role="status">Build: …</p>
           <p class="meta">
-            Agent name and soul-pack editors live under <strong>Profiles</strong>.
-            Each profile has its own name plus soul.md, user.md, rules.md, and glossary.md.
-            Switch the active profile there; Reload soul applies a valid pack on the next awake.
+            Agent name and soul.md live under <strong>Profiles</strong>.
+            User, glossary, and rules default to the <strong>Global</strong> copies (the main profile, usually <code>default</code>).
+            Uncheck Use global on a profile to edit that profile’s own file.
+            The main window stays open until you click the orb. 2-way off is sleep, not hibernate.
           </p>
           <label class="field">
             <span>UI text size</span>
@@ -69,21 +71,34 @@
           </p>
           <p id="ui-prefs-status" class="meta" role="status"></p>
           <p id="ui-prefs-error" class="error" role="status"></p>
+          <p id="hud-stay-hint" class="meta">
+            The main window stays open until you click the orb. Idle auto-collapse and the pin control are retired.
+            Old <code>hud_idle_collapse_ms</code> and <code>hud_pinned</code> values in ui-prefs.json are ignored.
+          </p>
           <label class="field">
-            <span>HUD idle collapse (seconds)</span>
+            <span>Shrunk HUD size (px)</span>
             <span class="idle-controls">
-              <input id="hud-idle-range" type="range" min="1" max="30" step="1" value="3" aria-describedby="hud-idle-hint" />
-              <input id="hud-idle-seconds" type="number" min="1" max="30" step="1" value="3" inputmode="numeric" aria-label="HUD idle collapse seconds" />
+              <input id="hud-shrunk-range" type="range" min="96" max="280" step="4" value="120" aria-describedby="hud-shrunk-hint" />
+              <input id="hud-shrunk-px" type="number" min="96" max="280" step="1" value="120" inputmode="numeric" aria-label="Shrunk HUD size in pixels" />
             </span>
           </label>
-          <p id="hud-idle-hint" class="meta">
-            After the pointer leaves the expanded HUD, it collapses back to the square bloom.
-            A non-empty ask draft keeps it open. Range 1–30 seconds, default 3.
-            Saved in ui-prefs.json as <code>hud_idle_collapse_ms</code> (1000–30000).
-            The HUD re-reads that file; softwaked does not restart.
+          <p id="hud-shrunk-hint" class="meta">
+            Square size of the shrunk orb. Range 96–280, default 120.
+            Saved as <code>hud_shrunk_px</code> in ui-prefs.json. The HUD applies it without restarting softwaked.
           </p>
-          <p id="hud-idle-status" class="meta" role="status"></p>
-          <p id="hud-idle-error" class="error" role="status"></p>
+          <p id="hud-shrunk-status" class="meta" role="status"></p>
+          <label class="field">
+            <span>Bloom intensity (%)</span>
+            <span class="idle-controls">
+              <input id="hud-bloom-range" type="range" min="25" max="200" step="5" value="100" aria-describedby="hud-bloom-hint" />
+              <input id="hud-bloom-percent" type="number" min="25" max="200" step="1" value="100" inputmode="numeric" aria-label="Bloom intensity percent" />
+            </span>
+          </label>
+          <p id="hud-bloom-hint" class="meta">
+            Multiplier on particle density and brightness. Capture level is still the base signal.
+            Range 25–200%, default 100. Saved as <code>hud_bloom_intensity</code>.
+          </p>
+          <p id="hud-bloom-status" class="meta" role="status"></p>
           <label class="field">
             <span>HUD transparency (expanded)</span>
             <span class="idle-controls">
@@ -169,7 +184,7 @@
             The next speak uses the new value. An in-flight clip keeps the deadline it started with.
             Changes debounce about 450&nbsp;ms.
             Env <code>SOFTWAKE_TTS_PLAYBACK_TIMEOUT_MS</code> wins over the file when set.
-            Chat wait stays 120 seconds. Free-speech silence, wake-word sensitivity, HUD idle collapse, and the short mute after playback are unchanged.
+            Chat wait stays 120 seconds. Free-speech silence, wake-word sensitivity, and the short mute after playback are unchanged.
           </p>
           <p id="tts-playback-status" class="meta" role="status"></p>
           <p id="tts-playback-error" class="error" role="status"></p>
@@ -182,6 +197,39 @@
             Microphone speech is not sent to the chat model. Default off.
             A serve restart clears this unless serve was started with <code>--voice-test</code>.
           </p>
+        </section>
+
+        <section id="pane-global" class="pane glass pane-fill hidden" hidden aria-labelledby="global-title">
+          <div class="profiles-detail-panel">
+            <div class="profiles-chrome">
+              <h2 id="global-title">Global</h2>
+              <p class="meta">
+                These are the main profile’s <code>user.md</code>, <code>glossary.md</code>, and <code>rules.md</code>
+                (profile id <code id="global-main-id">default</code>).
+                Other profiles use them while <em>Use global</em> is checked.
+                Soul stays on each profile.
+              </p>
+              <p id="global-dir" class="meta">Directory: …</p>
+              <div class="pack-tabs" role="tablist" aria-label="Global pack docs">
+                <button type="button" class="pack-tab btn-compact" id="global-tab-user" data-global-tab="user" role="tab" aria-selected="true">User</button>
+                <button type="button" class="pack-tab btn-compact" id="global-tab-glossary" data-global-tab="glossary" role="tab" aria-selected="false">Glossary</button>
+                <button type="button" class="pack-tab btn-compact" id="global-tab-rules" data-global-tab="rules" role="tab" aria-selected="false">Rules</button>
+              </div>
+            </div>
+            <div class="pack-editors">
+              <textarea id="global-user" class="pack-editor" spellcheck="false" aria-label="Global user.md"></textarea>
+              <textarea id="global-glossary" class="pack-editor hidden" hidden spellcheck="false" aria-label="Global glossary.md"></textarea>
+              <textarea id="global-rules" class="pack-editor hidden" hidden spellcheck="false" aria-label="Global rules.md"></textarea>
+            </div>
+            <div class="profiles-footer">
+              <div class="row row-compact">
+                <button type="button" class="btn-primary btn-compact" id="global-save">Save global docs</button>
+                <button type="button" class="btn-compact" id="global-reload">Reload</button>
+              </div>
+              <p id="global-status" class="meta" role="status"></p>
+              <p id="global-error" class="error" role="status"></p>
+            </div>
+          </div>
         </section>
 
         <section id="pane-profiles" class="pane glass pane-fill hidden" hidden aria-labelledby="profiles-title">
@@ -205,6 +253,13 @@
               </div>
               <p id="pack-dir" class="meta">Directory: …</p>
               <p id="pack-validity" class="meta">Pack: …</p>
+              <div id="global-doc-flags" class="global-doc-flags">
+                <label class="field row-check"><input id="use-global-user" type="checkbox" checked /> <span>Use global user</span></label>
+                <label class="field row-check"><input id="use-global-glossary" type="checkbox" checked /> <span>Use global glossary</span></label>
+                <label class="field row-check"><input id="use-global-rules" type="checkbox" checked /> <span>Use global rules</span></label>
+                <p id="global-doc-note" class="meta">Checked docs show the global file and cannot be edited here. Uncheck to edit this profile’s copy.</p>
+                <button type="button" class="btn-compact" id="insert-doc-scaffold" hidden>Replace with commented scaffold</button>
+              </div>
               <div class="pack-tabs" role="tablist" aria-label="Pack files">
                 <button type="button" class="pack-tab btn-compact" id="pack-tab-soul" role="tab" aria-selected="true" aria-controls="pack-soul">Soul</button>
                 <button type="button" class="pack-tab btn-compact" id="pack-tab-user" role="tab" aria-selected="false" aria-controls="pack-user">User</button>
@@ -772,10 +827,10 @@
           <p id="pending" class="detail"></p>
           <p id="error" class="error" role="status"></p>
           <div class="actions">
-            <button type="button" id="hibernate">Hibernate</button>
-            <button type="button" id="resume">Resume</button>
-            <button type="button" id="wake">Wake</button>
-            <button type="button" id="sleep">Sleep</button>
+            <button type="button" id="hibernate" title="Hibernate stops the mic until Resume. This is not the HUD 2-way control.">Hibernate</button>
+            <button type="button" id="resume" title="Leave hibernate and land in sleep. Wake word works again. 2-way stays off until you turn it on.">Resume</button>
+            <button type="button" id="wake" title="Wake into 2-way listening.">Wake</button>
+            <button type="button" id="sleep" title="Sleep: 2-way off. The wake word can still wake Softwake.">Sleep</button>
             <button type="button" id="reload-soul">Reload soul</button>
             <button type="button" class="btn-primary" id="confirm" disabled>Confirm</button>
             <button type="button" id="cancel" disabled>Cancel</button>

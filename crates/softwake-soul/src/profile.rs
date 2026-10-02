@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! softwake.json                 # { "version": 1, "active_profile": "<id>", optional kws_*_milli, free_speech_end_silence_ms, tts_playback_timeout_ms, webhook_enabled, webhook_port, voice_agent_s2s }
-//! profiles/<id>/profile.json    # { "id": "<id>", "name": "<agent name>" }
+//! profiles/<id>/profile.json    # id, name, use_global_user/glossary/rules (default true)
 //! profiles/<id>/{soul,user,rules,glossary}.md
 //! soul/                         # legacy pack; migration source only
 //! ```
@@ -141,13 +141,30 @@ impl Default for AppConfig {
     }
 }
 
-/// Metadata for one profile (agent name).
+fn default_use_global() -> bool {
+    true
+}
+
+/// Metadata for one profile (agent name plus global-doc inheritance).
+///
+/// `use_global_*` defaults **true**. The main profile (`default`, or the
+/// first id when that folder is missing) always renders its own files; the
+/// flags cannot create a cycle. See ADR-0051.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProfileMeta {
     /// Stable folder id under `profiles/`.
     pub id: String,
     /// Agent display / prompt name.
     pub name: String,
+    /// When true, and this profile is not main, render main `user.md`.
+    #[serde(default = "default_use_global")]
+    pub use_global_user: bool,
+    /// When true, and this profile is not main, render main `glossary.md`.
+    #[serde(default = "default_use_global")]
+    pub use_global_glossary: bool,
+    /// When true, and this profile is not main, render main `rules.md`.
+    #[serde(default = "default_use_global")]
+    pub use_global_rules: bool,
 }
 
 impl ProfileMeta {
@@ -162,8 +179,81 @@ impl ProfileMeta {
         Self {
             id: id.into(),
             name: name.into().trim().to_owned(),
+            use_global_user: true,
+            use_global_glossary: true,
+            use_global_rules: true,
         }
     }
+}
+
+/// Main profile id: `default` when that folder exists, otherwise the first
+/// listed id. `ensure_migrated` recreates `default`, so the usual answer is
+/// `default`.
+///
+/// # Errors
+///
+/// Config I/O, or no profile directory after migrate.
+pub fn resolve_main_profile_id(config_dir: &Path) -> Result<String, SoulError> {
+    ensure_migrated(config_dir)?;
+    let default_dir = profile_pack_dir(config_dir, DEFAULT_PROFILE_ID);
+    if default_dir.is_dir() {
+        return Ok(DEFAULT_PROFILE_ID.to_owned());
+    }
+    let profiles = list_profiles(config_dir)?;
+    profiles
+        .into_iter()
+        .next()
+        .map(|meta| meta.id)
+        .ok_or_else(|| SoulError::InvalidConfig {
+            path: config_dir.join(PROFILES_DIR_NAME),
+            detail: "no profile to use as the global pack".to_owned(),
+        })
+}
+
+/// If `pack_dir` is `…/profiles/<id>`, return `(config_dir, id)`.
+#[must_use]
+pub fn profile_owner_from_pack_dir(pack_dir: &Path) -> Option<(PathBuf, String)> {
+    let id = pack_dir.file_name()?.to_str()?.to_owned();
+    if id.is_empty() || id.starts_with('.') {
+        return None;
+    }
+    let profiles = pack_dir.parent()?;
+    if profiles.file_name().and_then(|name| name.to_str()) != Some(PROFILES_DIR_NAME) {
+        return None;
+    }
+    let config = profiles.parent()?.to_path_buf();
+    Some((config, id))
+}
+
+/// Write the three global-doc flags. Main always stays on its own files;
+/// storing `false` on main is ignored and rewritten as `true`.
+///
+/// # Errors
+///
+/// Unknown profile or write failure.
+pub fn set_global_doc_flags(
+    config_dir: &Path,
+    profile_id: &str,
+    use_global_user: bool,
+    use_global_glossary: bool,
+    use_global_rules: bool,
+) -> Result<ProfileMeta, SoulError> {
+    ensure_migrated(config_dir)?;
+    let main = resolve_main_profile_id(config_dir)?;
+    let dir = profile_pack_dir(config_dir, profile_id);
+    if !dir.is_dir() {
+        return Err(SoulError::UnknownProfile {
+            id: profile_id.to_owned(),
+        });
+    }
+    let mut meta = load_profile_meta(&dir);
+    profile_id.clone_into(&mut meta.id);
+    let owns_global = profile_id == main;
+    meta.use_global_user = owns_global || use_global_user;
+    meta.use_global_glossary = owns_global || use_global_glossary;
+    meta.use_global_rules = owns_global || use_global_rules;
+    write_profile_meta(&dir, &meta)?;
+    Ok(meta)
 }
 
 /// Softwake config root from XDG or `$HOME/.config/softwake`.
@@ -1033,6 +1123,29 @@ mod tests {
         assert_eq!(
             high.free_speech_end_silence_ms,
             FREE_SPEECH_END_SILENCE_MS_DEFAULT
+        );
+    }
+
+    #[test]
+    fn global_doc_flags_default_true_and_main_cannot_opt_out() {
+        let raw: ProfileMeta = serde_json::from_str(r#"{"id":"ada","name":"Ada"}"#).expect("parse");
+        assert!(raw.use_global_user);
+        assert!(raw.use_global_glossary);
+        assert!(raw.use_global_rules);
+
+        let root = TempDir::new("global-flags");
+        ensure_migrated(&root.path).expect("migrate");
+        let created = create_profile(&root.path, "Ada", None).expect("create");
+        let forced = set_global_doc_flags(&root.path, DEFAULT_PROFILE_ID, false, false, false)
+            .expect("main");
+        assert!(forced.use_global_user && forced.use_global_glossary && forced.use_global_rules);
+        let ada = set_global_doc_flags(&root.path, &created.id, false, true, false).expect("ada");
+        assert!(!ada.use_global_user);
+        assert!(ada.use_global_glossary);
+        assert!(!ada.use_global_rules);
+        assert_eq!(
+            resolve_main_profile_id(&root.path).expect("main id"),
+            "default"
         );
     }
 }

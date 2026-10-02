@@ -65,6 +65,7 @@ pub fn run() {
             commands::hud_talk_start,
             commands::hud_talk_stop,
             commands::hud_set_layout,
+            commands::hud_apply_shrunk_size,
             commands::hud_start_drag,
             commands::hud_save_position,
             commands::hud_reset_position,
@@ -139,6 +140,14 @@ pub fn run() {
             ui_prefs::ui_prefs_set_hud_expanded_size,
             ui_prefs::ui_prefs_set_hud_opacity,
             ui_prefs::ui_prefs_set_hud_mic_muted,
+            ui_prefs::ui_prefs_set_hud_shrunk_px,
+            ui_prefs::ui_prefs_set_hud_bloom_intensity,
+            ui_prefs::ui_prefs_set_two_way,
+            commands::show_settings,
+            commands::hud_set_two_way,
+            profiles::profile_set_global_flags,
+            profiles::global_docs_snapshot,
+            profiles::global_docs_save,
             commands::hud_save_size,
             commands::hud_seed_session,
             commands::hud_drop_session_turns,
@@ -185,20 +194,18 @@ pub fn run() {
         .expect("softwake-ui failed to start");
 }
 
-/// Collapsed HUD: square bloom only. Particles are centered in this window.
-const HUD_COLLAPSED_W: f64 = 120.0;
-const HUD_COLLAPSED_H: f64 = 120.0;
 const HUD_MARGIN: f64 = 16.0;
 
 fn hud_logical_size(expanded: bool) -> (f64, f64) {
+    let prefs = ui_prefs::load();
     if expanded {
-        let prefs = ui_prefs::load();
         (
             f64::from(prefs.hud_expanded_w),
             f64::from(prefs.hud_expanded_h),
         )
     } else {
-        (HUD_COLLAPSED_W, HUD_COLLAPSED_H)
+        let side = f64::from(prefs.hud_shrunk_px);
+        (side, side)
     }
 }
 
@@ -398,7 +405,8 @@ pub(crate) fn save_hud_size<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(),
 }
 
 fn open_hud<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    let (width, height) = hud_logical_size(false);
+    // ADR-0051: the shell starts as the expanded main window.
+    let (width, height) = hud_logical_size(true);
     let (x, y) = match hud_pos::load() {
         Some(pos) => (pos.x, pos.y),
         None => default_hud_position(app, width, height),
@@ -406,7 +414,7 @@ fn open_hud<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let builder = WebviewWindowBuilder::new(app, "hud", WebviewUrl::App("hud.html".into()))
         .title("Softwake")
         .inner_size(width, height)
-        .resizable(false)
+        .resizable(true)
         .decorations(false)
         .always_on_top(true)
         .skip_taskbar(true)
@@ -418,6 +426,10 @@ fn open_hud<R: tauri::Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let window = builder.build()?;
     // Wayland / some compositors ignore builder.position — force after create.
     let _ = window.set_size(LogicalSize::new(width, height));
+    let _ = window.set_min_size(Some(LogicalSize::new(
+        f64::from(ui_prefs::HUD_EXPANDED_W_MIN),
+        f64::from(ui_prefs::HUD_EXPANDED_H_MIN),
+    )));
     let _ = window.set_position(LogicalPosition::new(x, y));
     let _ = window.set_always_on_top(true);
     let _ = window.show();
@@ -478,6 +490,7 @@ mod tests {
         "hud_talk_start",
         "hud_talk_stop",
         "hud_set_layout",
+        "hud_apply_shrunk_size",
         "hud_start_drag",
         "hud_save_position",
         "hud_reset_position",
@@ -552,6 +565,14 @@ mod tests {
         "ui_prefs_set_hud_expanded_size",
         "ui_prefs_set_hud_opacity",
         "ui_prefs_set_hud_mic_muted",
+        "ui_prefs_set_hud_shrunk_px",
+        "ui_prefs_set_hud_bloom_intensity",
+        "ui_prefs_set_two_way",
+        "show_settings",
+        "hud_set_two_way",
+        "profile_set_global_flags",
+        "global_docs_snapshot",
+        "global_docs_save",
         "hud_save_size",
         "hud_seed_session",
         "hud_drop_session_turns",
@@ -635,6 +656,15 @@ mod tests {
         "allow-ui-prefs-set-hud-size",
         "allow-ui-prefs-set-hud-opacity",
         "allow-ui-prefs-set-hud-mic-muted",
+        "allow-ui-prefs-set-hud-shrunk",
+        "allow-ui-prefs-set-hud-bloom",
+        "allow-ui-prefs-set-two-way",
+        "allow-show-settings",
+        "allow-hud-set-two-way",
+        "allow-hud-apply-shrunk-size",
+        "allow-profile-set-global-flags",
+        "allow-global-docs-snapshot",
+        "allow-global-docs-save",
         "allow-hud-save-size",
         "allow-hud-seed-session",
         "allow-hud-drop-session-turns",
@@ -704,10 +734,10 @@ mod tests {
     #[allow(clippy::float_cmp, reason = "window sizes are exact logical pixels")]
     fn collapsed_hud_is_a_square_bloom() {
         let (width, height) = super::hud_logical_size(false);
-        assert_eq!(width, 120.0);
-        assert_eq!(height, 120.0);
+        assert_eq!(width, height);
+        assert!((96.0..=280.0).contains(&width));
         let (expanded_w, expanded_h) = super::hud_logical_size(true);
-        assert!(expanded_w > width);
-        assert!(expanded_h > height);
+        assert!(expanded_w >= 360.0);
+        assert!(expanded_h >= 420.0);
     }
 }

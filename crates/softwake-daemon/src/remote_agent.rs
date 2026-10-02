@@ -517,9 +517,16 @@ pub(crate) fn mirror_soul_skills_tools() {
         let read =
             |name: &str| -> String { std::fs::read_to_string(pack.join(name)).unwrap_or_default() };
         let soul_md = read("soul.md");
-        let user_md = read("user.md");
-        let rules_md = read("rules.md");
-        let glossary_md = read("glossary.md");
+        // Mirror the same bodies the daemon renders (global user/rules/glossary).
+        let (user_md, rules_md, glossary_md) =
+            match softwake_soul::try_load_effective(&config, &profile_id) {
+                Ok(effective) => (
+                    effective.user_profile().to_owned(),
+                    effective.rules().to_owned(),
+                    effective.glossary().to_owned(),
+                ),
+                Err(_) => (read("user.md"), read("rules.md"), read("glossary.md")),
+            };
         if soul_md.trim().is_empty() {
             continue;
         }

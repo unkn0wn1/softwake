@@ -117,6 +117,60 @@ pub fn cancel_tool(pending_id: String) -> Result<Status, String> {
         .map_err(|error| error.to_string())
 }
 
+/// Show or focus the Settings window. Same path as the tray Settings item.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri injects an owned AppHandle into commands that touch windows"
+)]
+pub fn show_settings(app: tauri::AppHandle) {
+    crate::tray::show_settings(&app);
+}
+
+/// Turn 2-way listening on or off.
+///
+/// ON enters awake (from hibernate: Resume to sleep, then wake). OFF enters
+/// sleep and does **not** hibernate, so the wake word can still fire and a
+/// typed HUD ask can wake. The choice is stored in `ui-prefs.json` `two_way`.
+///
+/// # Errors
+///
+/// Returns the daemon or socket error as text. A failed wake does not store ON.
+#[tauri::command]
+pub fn hud_set_two_way(enabled: bool) -> Result<Status, String> {
+    let mut client = connect()?;
+    let status = client
+        .call(Command::GetStatus)
+        .map_err(|error| error.to_string())?;
+    let next = if enabled {
+        match status.state {
+            VoiceState::Awake => status,
+            VoiceState::Hibernate => {
+                let slept = client
+                    .call(Command::WakeFromUi)
+                    .map_err(|error| error.to_string())?;
+                if slept.state == VoiceState::Awake {
+                    slept
+                } else {
+                    client.call_wake().map_err(|error| error.to_string())?
+                }
+            }
+            VoiceState::Sleep => client.call_wake().map_err(|error| error.to_string())?,
+        }
+    } else if status.state == VoiceState::Awake {
+        client
+            .call(Command::Sleep)
+            .map_err(|error| error.to_string())?
+    } else {
+        // Already sleep, or hibernate. Do not leave hibernate just to sleep.
+        status
+    };
+    let mut prefs = crate::ui_prefs::load();
+    prefs.two_way = enabled;
+    crate::ui_prefs::save(&prefs)?;
+    Ok(next)
+}
+
 /// Enter awake from sleep when the soul pack is valid (`ctl wake`).
 ///
 /// # Errors
@@ -419,6 +473,34 @@ pub async fn hud_set_mic_mute(muted: bool) -> Result<Status, String> {
 )]
 pub fn hud_set_layout(app: tauri::AppHandle, expanded: bool) -> Result<(), String> {
     crate::set_hud_layout(&app, expanded)
+}
+
+/// Re-read `hud_shrunk_px` and resize only when the HUD is already the shrunk square.
+///
+/// An expanded main window is left alone. The next shrink reads the new size.
+///
+/// # Errors
+///
+/// Returns a sentence when the HUD window is missing or the window API fails.
+#[tauri::command]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri injects an owned AppHandle into commands that touch windows"
+)]
+pub fn hud_apply_shrunk_size(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("hud")
+        .ok_or_else(|| "HUD window is not open".to_owned())?;
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let size = window
+        .inner_size()
+        .map_err(|error| error.to_string())?
+        .to_logical::<f64>(scale);
+    let shrunk_max = f64::from(crate::ui_prefs::HUD_SHRUNK_PX_MAX) + 12.0;
+    if size.width <= shrunk_max && size.height <= shrunk_max {
+        crate::set_hud_layout(&app, false)?;
+    }
+    Ok(())
 }
 
 /// Begin a native window drag for the HUD capsule.

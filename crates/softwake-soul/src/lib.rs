@@ -21,7 +21,7 @@ pub use error::{SoulError, SoulFile};
 pub use glossary::{
     ConfirmEcho, EchoReply, EchoReplyError, Glossary, GlossaryError, classify_echo_reply,
 };
-pub use load::{MAX_FILE_BYTES, SoulPack, SoulStatus, load, try_load};
+pub use load::{MAX_FILE_BYTES, SoulPack, SoulStatus, load, try_load, try_load_effective};
 pub use paths::{SoulDir, SoulPaths, resolve_soul_dir, resolve_soul_dir_from};
 pub use profile::{
     APP_CONFIG_FILE_NAME, AppConfig, DEFAULT_AGENT_NAME, DEFAULT_PROFILE_ID, DEFAULT_WEBHOOK_PORT,
@@ -31,8 +31,9 @@ pub use profile::{
     TTS_PLAYBACK_TIMEOUT_MS_DEFAULT, TTS_PLAYBACK_TIMEOUT_MS_MAX, TTS_PLAYBACK_TIMEOUT_MS_MIN,
     clamp_free_speech_end_silence_ms, clamp_kws_threshold_milli, clamp_tts_playback_timeout_ms,
     create_profile, ensure_migrated, legacy_soul_dir, list_profiles, load_app_config,
-    load_profile_meta, profile_name_in, profile_pack_dir, rename_profile, resolve_active_pack_dir,
-    resolve_config_dir, set_active_profile, set_free_speech_end_silence_ms, set_kws_thresholds,
+    load_profile_meta, profile_name_in, profile_owner_from_pack_dir, profile_pack_dir,
+    rename_profile, resolve_active_pack_dir, resolve_config_dir, resolve_main_profile_id,
+    set_active_profile, set_free_speech_end_silence_ms, set_global_doc_flags, set_kws_thresholds,
     set_tts_playback_timeout_ms, set_voice_agent_s2s, set_webhook_enabled, set_webhook_port,
     write_app_config, write_profile_meta,
 };

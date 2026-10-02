@@ -216,6 +216,58 @@ pub fn try_load(dir: &Path) -> Result<SoulPack, SoulError> {
     load(&SoulPaths::in_dir(dir))
 }
 
+/// Load a profile pack, substituting main `user.md` / `rules.md` / `glossary.md`
+/// when that profile's `use_global_*` flag is set.
+///
+/// The main profile always uses its own three files (cycle guard). `soul.md`
+/// always comes from the profile. The glossary alias map is parsed from the
+/// body that will be rendered.
+///
+/// # Errors
+///
+/// Same as [`load`], plus config errors when the profile registry cannot be read.
+pub fn try_load_effective(config_dir: &Path, profile_id: &str) -> Result<SoulPack, SoulError> {
+    let main_id = crate::profile::resolve_main_profile_id(config_dir)?;
+    let dir = crate::profile::profile_pack_dir(config_dir, profile_id);
+    let main_dir = crate::profile::profile_pack_dir(config_dir, &main_id);
+    let meta = crate::profile::load_profile_meta(&dir);
+    let is_main = profile_id == main_id;
+    let paths = SoulPaths::in_dir(&dir);
+    let main_paths = SoulPaths::in_dir(&main_dir);
+    let identity = read_markdown(paths.soul(), SoulFile::Soul)?;
+    let profile = if is_main || !meta.use_global_user {
+        read_markdown(paths.user(), SoulFile::User)?
+    } else {
+        read_markdown(main_paths.user(), SoulFile::User)?
+    };
+    let rules = if is_main || !meta.use_global_rules {
+        read_markdown(paths.rules(), SoulFile::Rules)?
+    } else {
+        read_markdown(main_paths.rules(), SoulFile::Rules)?
+    };
+    let glossary = if is_main || !meta.use_global_glossary {
+        read_markdown(paths.glossary(), SoulFile::Glossary)?
+    } else {
+        read_markdown(main_paths.glossary(), SoulFile::Glossary)?
+    };
+    let glossary_path = if is_main || !meta.use_global_glossary {
+        paths.glossary().to_path_buf()
+    } else {
+        main_paths.glossary().to_path_buf()
+    };
+    let aliases = Glossary::parse(&glossary).map_err(|error| SoulError::InvalidGlossary {
+        path: glossary_path,
+        detail: error.to_string(),
+    })?;
+    Ok(SoulPack {
+        identity,
+        profile,
+        rules,
+        glossary,
+        aliases,
+    })
+}
+
 fn read_markdown(path: &Path, file: SoulFile) -> Result<String, SoulError> {
     let path = path.to_path_buf();
     let opened = match File::open(&path) {
@@ -693,5 +745,57 @@ mod tests {
         let status = SoulStatus::invalid("missing soul.md");
         assert!(!status.is_valid());
         assert_eq!(status.reason(), Some("missing soul.md"));
+    }
+
+    #[test]
+    fn effective_load_uses_global_docs_except_on_main() {
+        let root = TempPack::new();
+        let config = &root.path;
+        let default_dir = config.join("profiles").join("default");
+        let ada_dir = config.join("profiles").join("ada");
+        fs::create_dir_all(&default_dir).expect("default");
+        fs::create_dir_all(&ada_dir).expect("ada");
+        let write = |dir: &std::path::Path, user: &str, rules: &str, glossary: &str| {
+            fs::write(dir.join("soul.md"), "soul\n").expect("soul");
+            fs::write(dir.join("user.md"), user).expect("user");
+            fs::write(dir.join("rules.md"), rules).expect("rules");
+            fs::write(dir.join("glossary.md"), glossary).expect("glossary");
+        };
+        write(
+            &default_dir,
+            "GLOBAL USER\n",
+            "GLOBAL RULES\n",
+            "docs → /global/docs\n",
+        );
+        write(&ada_dir, "OWN USER\n", "OWN RULES\n", "docs → /own/docs\n");
+        fs::write(
+            default_dir.join("profile.json"),
+            r#"{"id":"default","name":"Softwake","use_global_user":false,"use_global_glossary":false,"use_global_rules":false}"#,
+        )
+        .expect("default meta");
+        fs::write(
+            config.join("softwake.json"),
+            r#"{"version":1,"active_profile":"ada"}"#,
+        )
+        .expect("app");
+
+        let inherited = super::try_load_effective(config, "ada").expect("ada");
+        let text = inherited.render_instructions();
+        assert!(text.contains("GLOBAL USER"));
+        assert!(text.contains("GLOBAL RULES"));
+        assert!(!text.contains("OWN USER"));
+        assert!(!text.contains("OWN RULES"));
+        assert_eq!(inherited.aliases().get("docs"), Some("/global/docs"));
+
+        crate::set_global_doc_flags(config, "ada", false, false, true).expect("flags");
+        let own = super::try_load_effective(config, "ada").expect("own docs");
+        let own_text = own.render_instructions();
+        assert!(own_text.contains("OWN USER"));
+        assert!(own_text.contains("GLOBAL RULES"));
+        assert_eq!(own.aliases().get("docs"), Some("/own/docs"));
+
+        let main = super::try_load_effective(config, "default").expect("main");
+        assert!(main.user_profile().contains("GLOBAL USER"));
+        assert_eq!(main.aliases().get("docs"), Some("/global/docs"));
     }
 }

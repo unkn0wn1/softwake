@@ -124,3 +124,4 @@ Linux and Windows x86_64 GitHub Releases (AppImage, tar.gz + systemd --user inst
 - [x] Free-speech ambient reply latch → auto-sleep; NL self-sleep markers
 
 - [x] HUD UX: opacity, mic mute, off-thread Settings, reply-before-TTS phases ([ADR-0046](ADR-0046-hud-ux-thread.md))
+- [x] Shell redesign (stay-open orb, 2-way sleep, global user/glossary/rules) — P0–P2 implemented ([ADR-0051](ADR-0051-shell-redesign.md))
