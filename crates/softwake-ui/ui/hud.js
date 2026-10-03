@@ -849,6 +849,11 @@ function isThinking(message) {
   return message === "thinking…" || message === "thinking...";
 }
 
+/** Daemon ack after RoomPost. Not a profile chat reply. */
+function isRoomPostAck(message) {
+  return /^room `[^`]+`: operator posted;/.test(message || "");
+}
+
 function phaseLabel(phase, detail) {
   switch (phase) {
     case "listening":
@@ -957,6 +962,14 @@ function considerStatus(message, detail, phase) {
   if (!text) {
     return;
   }
+  // RoomPost ack is status text, not a turn in the open profile chat.
+  if (isRoomPostAck(text)) {
+    lastReplyKey = text + "\0" + (detail || "") + "\0" + (phase || "");
+    if (!talkPending && !streamingTurn && !holding) {
+      setLive("", false);
+    }
+    return;
+  }
   // Mid-ask token deltas: grow the assistant bubble without waiting for settle.
   if ((phase === "streaming" || phase === "thinking") && !isThinking(text) && !isPhaseToken(text)) {
     lastReplyKey = text + "\0" + (detail || "") + "\0" + (phase || "");
@@ -1045,7 +1058,10 @@ async function refreshHudPrefs() {
   } catch (_error) {
     // Prefs are best-effort; keep defaults when the snapshot fails.
   }
-  if (roomComposeForm) {
+  capsule.dataset.idleMs = String(configuredIdleMs);
+}
+
+if (roomComposeForm) {
   roomComposeForm.addEventListener("submit", (event) => {
     void sendRoomMessage(event);
   });
@@ -1066,9 +1082,6 @@ if (roomCompose) {
       void sendRoomMessage(event);
     }
   });
-}
-
-capsule.dataset.idleMs = String(configuredIdleMs);
 }
 
 if (pinBtn) {
@@ -1148,7 +1161,7 @@ function renderProfileRail(snap) {
     btn.className = "profile-rail-item";
     btn.setAttribute("role", "option");
     btn.dataset.profileId = id;
-    const selected = id === activeId;
+    const selected = !roomViewOpen && id === activeId;
     btn.setAttribute("aria-selected", selected ? "true" : "false");
     btn.title = profileChipLabel(row) + " [" + id + "]";
     btn.textContent = profileChipLabel(row);
@@ -1186,6 +1199,18 @@ function setRoomView(open) {
       el.hidden = el.dataset.roomPrevHidden === "1";
       delete el.dataset.roomPrevHidden;
     }
+  }
+  syncProfileRailSelection();
+}
+
+function syncProfileRailSelection() {
+  if (!profileRailList) {
+    return;
+  }
+  for (const btn of profileRailList.querySelectorAll(".profile-rail-item")) {
+    const id = btn.dataset.profileId || "";
+    const on = !roomViewOpen && id === profileId;
+    btn.setAttribute("aria-selected", on ? "true" : "false");
   }
 }
 
@@ -2091,6 +2116,9 @@ window.addEventListener("keydown", (event) => {
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
+  if (roomViewOpen) {
+    return;
+  }
   const asked = input.value.trim();
   if (!asked || talkPending) {
     return;
