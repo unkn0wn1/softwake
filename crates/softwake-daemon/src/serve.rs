@@ -462,6 +462,7 @@ fn handle_next(shared: &Arc<Shared>, tx: &SyncSender<Outbound>, reader: &mut Ser
                 }
                 remember_status(shared, &outcome);
             }
+            spawn_pending_room_fanouts(shared);
             ok
         }
         Ok(ClientMessage::ToolRequest { id, name, args }) => {
@@ -500,7 +501,9 @@ fn handle_next(shared: &Arc<Shared>, tx: &SyncSender<Outbound>, reader: &mut Ser
         Ok(ClientMessage::TalkStop { id }) => {
             publish_thinking(shared, "press to talk");
             let outcome = lock(&shared.runtime).talk_stop();
-            reply(shared, tx, id, outcome)
+            let ok = reply(shared, tx, id, outcome);
+            spawn_pending_room_fanouts(shared);
+            ok
         }
         Ok(ClientMessage::SetVoiceTest { id, enabled }) => {
             let outcome = lock(&shared.runtime).set_voice_test(enabled);
@@ -534,6 +537,12 @@ fn handle_next(shared: &Arc<Shared>, tx: &SyncSender<Outbound>, reader: &mut Ser
         Ok(ClientMessage::DropChatTurns { id, turns }) => {
             let outcome = lock(&shared.runtime).drop_chat_turns_from_ui(&turns);
             reply(shared, tx, id, outcome)
+        }
+        Ok(ClientMessage::SetOpenRoom { id, room_id }) => {
+            let outcome = lock(&shared.runtime).set_open_room(room_id);
+            let ok = reply(shared, tx, id, outcome);
+            spawn_pending_room_fanouts(shared);
+            ok
         }
         Ok(ClientMessage::RoomPost { id, room_id, text }) => {
             publish_thinking(shared, "room post");
@@ -703,6 +712,16 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn spawn_pending_room_fanouts(shared: &Arc<Shared>) {
+    loop {
+        let job = lock(&shared.runtime).take_pending_room_fanout();
+        let Some(job) = job else {
+            break;
+        };
+        spawn_room_fanout(shared, job);
     }
 }
 

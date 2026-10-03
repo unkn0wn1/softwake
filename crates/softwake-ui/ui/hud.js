@@ -964,9 +964,15 @@ function considerStatus(message, detail, phase) {
   }
   // RoomPost ack is status text, not a turn in the open profile chat.
   if (isRoomPostAck(text)) {
-    lastReplyKey = text + "\0" + (detail || "") + "\0" + (phase || "");
+    const key = text + "\0" + (detail || "") + "\0" + (phase || "");
+    const changed = lastReplyKey !== key;
+    lastReplyKey = key;
     if (!talkPending && !streamingTurn && !holding) {
       setLive("", false);
+    }
+    if (changed && roomViewOpen) {
+      void refreshRoomsRail();
+      startRoomFanoutPoll();
     }
     return;
   }
@@ -1070,7 +1076,7 @@ if (roomPanelBack) {
   roomPanelBack.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    closeRoomChat();
+    void closeRoomChat();
     markActivity();
   });
 }
@@ -1168,8 +1174,10 @@ function renderProfileRail(snap) {
     btn.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      closeRoomChat();
-      void switchHudProfile(id);
+      void (async () => {
+        await closeRoomChat();
+        await switchHudProfile(id);
+      })();
     });
     li.appendChild(btn);
     profileRailList.appendChild(li);
@@ -1214,7 +1222,19 @@ function syncProfileRailSelection() {
   }
 }
 
-function closeRoomChat() {
+async function clearOpenRoomComposer() {
+  try {
+    await invoke("hud_set_open_room", { roomId: null });
+  } catch (_error) {
+    try {
+      await invoke("hud_set_open_room", { roomId: null });
+    } catch (_retry) {
+      // Profile talk stays if the daemon never saw the clear.
+    }
+  }
+}
+
+async function closeRoomChat() {
   stopRoomFanoutPoll();
   selectedRoomId = "";
   setRoomView(false);
@@ -1226,6 +1246,7 @@ function closeRoomChat() {
       btn.setAttribute("aria-selected", "false");
     }
   }
+  await clearOpenRoomComposer();
 }
 
 /** Stable pastel-ish bubble colors from profile id (operator + members). */
@@ -1350,6 +1371,15 @@ async function openRoomChat(id, title) {
   if (roomPanelTitle) roomPanelTitle.textContent = title || next;
   setRoomView(true);
   markActivity();
+  try {
+    await invoke("hud_set_open_room", { roomId: next });
+  } catch (error) {
+    await closeRoomChat();
+    if (roomPanelStatus) {
+      roomPanelStatus.textContent = errorText(error, "could not open room talk");
+    }
+    return;
+  }
   if (roomCompose) {
     roomCompose.focus();
   }
@@ -1866,9 +1896,18 @@ function endTalk() {
         });
         const message = (status && (status.message || status.detail)) || "(no reply text)";
         const detail = (status && status.detail) || "";
+        const phase = (status && status.phase) || "";
+        if (isRoomPostAck(message)) {
+          lastReplyKey = message + "\0" + detail + "\0" + phase;
+          lastStatusMessage = message;
+          setLive("", false);
+          endTurnUi(status, false);
+          void refreshRoomsRail();
+          startRoomFanoutPoll();
+          return;
+        }
         lastReplyKey = message + "\0" + detail;
         lastStatusMessage = message;
-        const phase = (status && status.phase) || "";
         if (phase) {
           applyPhase(phase, message, detail);
         }

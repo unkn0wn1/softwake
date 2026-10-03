@@ -210,6 +210,11 @@ description = "Release press-to-talk, transcribe, ask, and speak the reply."
 commands.allow = ["hud_talk_stop"]
 
 [[permission]]
+identifier = "allow-hud-set-open-room"
+description = "Tell the daemon which HUD room composer is open so speech posts there."
+commands.allow = ["hud_set_open_room"]
+
+[[permission]]
 identifier = "allow-hud-set-layout"
 description = "Resize and re-anchor the HUD capsule when expanding or collapsing."
 commands.allow = ["hud_set_layout"]
