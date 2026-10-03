@@ -4,12 +4,16 @@
 //! this module owns the broader operator surface and disk helpers.
 
 use softwake_providers::{
-    FileProviderSettings, REASONING_EFFORT_MODES, normalize_reasoning_effort,
-    reasoning_effort_label, resolve_providers_file, resolve_tts_voice, tts_voice_roster,
+    FileProviderSettings, REASONING_EFFORT_MODES, canonical_stored_tts_voice,
+    normalize_reasoning_effort, reasoning_effort_label, resolve_providers_file, resolve_tts_voice,
+    tts_voice_roster,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use softwake_soul::{list_profiles, load_app_config, resolve_config_dir, set_active_profile};
+use softwake_soul::{
+    list_profiles, load_app_config, load_profile_meta, profile_pack_dir, resolve_config_dir,
+    set_active_profile, set_profile_tts_voice,
+};
 
 /// Operator command parsed from an awake ask line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,20 +110,31 @@ pub(crate) fn parse_slash_command(text: &str) -> Option<SlashCommand> {
 /// Help text for `/help`.
 #[must_use]
 pub(crate) fn help_text() -> String {
-    "Commands: /help /status /clear /halve|/reduce /compact /model [ai|voice <id>] /voice [list|<id>] /reasoning [list|<mode>] /new /profile [<name>] /sleep /hibernate /resume /refresh. /sleep is 2-way off (wake word still works). /hibernate stops the mic until /resume or Settings Resume. The HUD 2-way control uses sleep, not hibernate. /profile resets TTS voice to Default."
+    "Commands: /help /status /clear /halve|/reduce /compact /model [ai|voice <id>] /voice [list|<id>] /reasoning [list|<mode>] /new /profile [<name>] /sleep /hibernate /resume /refresh. /sleep is 2-way off (wake word still works). /hibernate stops the mic until /resume or Settings Resume. The HUD 2-way control uses sleep, not hibernate. /profile applies that profile's saved TTS voice."
         .to_owned()
 }
 
-/// Clear `selected_tts_voice` so the next speak resolves to Default (Eve on xAI).
+/// Copy `profile.json` `tts_voice` into `selected_tts_voice`.
 ///
-/// Profile switches call this. Empty is the source of truth; do not store the
-/// resolved id. Best-effort: a missing providers file is an error for the caller
-/// to ignore.
-pub(crate) fn clear_tts_voice_default() -> Result<(), String> {
+/// Unknown stored text becomes empty (Default / Eve at speak time). Does not
+/// rewrite the profile file. Does not reload S2S: the caller already holds the
+/// runtime lock and stops the voice agent itself. A missing providers file is
+/// an error for the caller to ignore.
+pub(crate) fn apply_profile_tts_voice(config: &Path, profile_id: &str) -> Result<(), String> {
+    let meta = load_profile_meta(&profile_pack_dir(config, profile_id));
+    let voice = canonical_stored_tts_voice(&meta.tts_voice).unwrap_or_default();
     let store = open_provider_store()?;
     let mut settings = store.load().map_err(|e| e.to_string())?;
-    settings.selected_tts_voice.clear();
+    voice.clone_into(&mut settings.selected_tts_voice);
     store.save(&settings).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Save `voice` onto the active profile. Does not write `providers.json`.
+fn write_back_active_profile_voice(voice: &str) -> Result<(), String> {
+    let config = config_dir()?;
+    let app = load_app_config(&config).map_err(|e| e.to_string())?;
+    set_profile_tts_voice(&config, &app.active_profile, voice).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -228,6 +243,7 @@ pub(crate) fn set_tts_voice(name: &str) -> Result<String, String> {
     };
     voice.clone_into(&mut settings.selected_tts_voice);
     store.save(&settings).map_err(|e| e.to_string())?;
+    write_back_active_profile_voice(&settings.selected_tts_voice)?;
     Ok(format!("TTS voice set to {voice}"))
 }
 
@@ -319,6 +335,9 @@ pub(crate) fn resolve_profile_id(name_or_id: &str) -> Result<String, String> {
 pub(crate) fn activate_profile(name_or_id: &str) -> Result<String, String> {
     let id = resolve_profile_id(name_or_id)?;
     let config = config_dir()?;
+    // Voice file before the active id, so a HUD poll that notices the switch
+    // reads this profile's saved voice.
+    let _ = apply_profile_tts_voice(&config, &id);
     set_active_profile(&config, &id).map_err(|e| e.to_string())?;
     let profiles = list_profiles(&config).map_err(|e| e.to_string())?;
     let name = profiles

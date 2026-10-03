@@ -1440,7 +1440,7 @@ async function switchHudProfile(nextId) {
     const failed = result && result.refresh_ok === false;
     setLive(msg, !!failed);
     sessionHudSeeded = false;
-    void resetVoiceToDefault();
+    void loadVoiceRoster();
   } catch (error) {
     setLive(errorText(error, "profile switch failed"), true);
   } finally {
@@ -1469,7 +1469,7 @@ async function refreshProfileName(force) {
       const previous = profileId;
       profileId = nextId;
       if (previous) {
-        void resetVoiceToDefault();
+        void loadVoiceRoster();
       }
       if (previous && vaultUnlocked) {
         await persistChat();
@@ -2348,15 +2348,6 @@ function syncTwoWay(on) {
   twoWayBtn.title = on
     ? "2-way on — awake and listening. Click for sleep (wake word still works)."
     : "2-way off — sleep. Wake word still works. Click to wake.";
-}
-
-async function resetVoiceToDefault() {
-  try {
-    await invoke("provider_set_tts_voice", { voiceId: "" });
-  } catch (_error) {
-    // Non-xAI providers have no TTS voice. The daemon/profile path also clears.
-  }
-  void loadVoiceRoster();
 }
 
 async function loadVoiceRoster() {

@@ -543,6 +543,20 @@ async function providerAction(command, args) {
           : "Voice model: None.";
       } else if (command === "provider_clear_cred") {
         testStatus.textContent = "Cleared saved credential.";
+      } else if (command === "provider_set_tts_voice") {
+        testStatus.textContent = "Saved.";
+        const voice = snap.selected_tts_voice || "";
+        const profileVoice = document.querySelector("#profile-tts-voice");
+        if (
+          profileVoice &&
+          profilesSnap &&
+          selectedProfileId &&
+          selectedProfileId === profilesSnap.active_id
+        ) {
+          profilesSnap.tts_voice = voice;
+          const has = Array.from(profileVoice.options).some((opt) => opt.value === voice);
+          profileVoice.value = has ? voice : "";
+        }
       } else {
         testStatus.textContent = "Saved.";
       }
@@ -858,6 +872,12 @@ function applyProfilesSnapshot(snap, statusText) {
   if (allowAll) allowAll.checked = !!snap.allow_all;
   const role = document.querySelector("#profile-role");
   if (role) role.value = snap.role === "coding" ? "coding" : "general";
+  const profileVoice = document.querySelector("#profile-tts-voice");
+  if (profileVoice) {
+    const voice = snap.tts_voice || "";
+    const has = Array.from(profileVoice.options).some((opt) => opt.value === voice);
+    profileVoice.value = has ? voice : "";
+  }
   applyPackSnapshot(snap.pack || {}, statusText || "");
   profilesLoaded = true;
   updateScaffoldButton();
@@ -3127,6 +3147,23 @@ document.querySelector("#profile-role")?.addEventListener("change", async (ev) =
       await invoke("profile_set_role", { id: selectedProfileId, role: ev.target.value }),
       "Role saved."
     );
+  } catch (error) {
+    packErrorEl.textContent = errorText(error);
+  }
+});
+document.querySelector("#profile-tts-voice")?.addEventListener("change", async (ev) => {
+  if (!selectedProfileId) return;
+  try {
+    const snap = await invoke("profile_set_tts_voice", {
+      id: selectedProfileId,
+      voice: ev.target.value || "",
+    });
+    applyProfilesSnapshot(snap, "Voice saved.");
+    if (ttsVoiceSelect && snap.active_id === selectedProfileId) {
+      const voice = snap.tts_voice || "";
+      const has = Array.from(ttsVoiceSelect.options).some((opt) => opt.value === voice);
+      if (has || voice === "") ttsVoiceSelect.value = voice;
+    }
   } catch (error) {
     packErrorEl.textContent = errorText(error);
   }

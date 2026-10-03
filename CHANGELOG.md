@@ -17,13 +17,15 @@
 
 ### Added
 
+- **Per-profile TTS voice:** each profile stores `tts_voice` (empty means Eve). The Profiles editor dropdown sets it. Switching to a profile applies that voice to `selected_tts_voice`. The HUD chevron, Providers TTS picker, and `/voice` write the choice back onto the active profile.
+
 - **ADR-0052 agent team / local power:** per-profile agent homes (`$XDG_DATA_HOME/softwake/homes/<id>/`), profile `allow_all` + `role`, confirm-gated `software_install`, rooms with light turn cool-down, peer DM `agent_message`, profile-scoped schedule `agent_task`, and first-class `goal_run` goal loop (plan/execute/verify with caps, human gate, progress log; softwake or local `grok` CLI backend). Settings → Profiles (Allow all / Role) and Settings → Rooms. PROTOCOL stays 1.
 
 ## Unreleased
 
 ### Added
 
-- **Shell (ADR 0051):** the main window opens expanded and stays open until the orb is clicked. Idle auto-collapse and the pin control are retired (`hud_idle_collapse_ms` and `hud_pinned` are ignored). Shrunk size is `hud_shrunk_px` (96–280, default 120). Bloom intensity is `hud_bloom_intensity` (25–200%, default 100) on top of capture level. Gear on the main window and the shrunk orb opens Settings. The 2-way control turns listening on (awake) or off (**sleep**, not hibernate, so the wake word still works). When Voice Agent S2S owns the mic, 2-way does not also arm free-speech. The voice chevron writes `selected_tts_voice`; a profile switch clears it to Default. Settings → **Global** edits the main profile’s user, glossary, and rules. Each other profile has Use global user / glossary / rules (default on, `use_global_*`). Checked is a read-only global preview; unchecked edits that profile’s file and seeds a commented scaffold when the file is empty. Main (`default`, or the first profile id) always owns its own files. See [ADR 0051](docs/ADR-0051-shell-redesign.md).
+- **Shell (ADR 0051):** the main window opens expanded and stays open until the orb is clicked. Idle auto-collapse and the pin control are retired (`hud_idle_collapse_ms` and `hud_pinned` are ignored). Shrunk size is `hud_shrunk_px` (96–280, default 120). Bloom intensity is `hud_bloom_intensity` (25–200%, default 100) on top of capture level. Gear on the main window and the shrunk orb opens Settings. The 2-way control turns listening on (awake) or off (**sleep**, not hibernate, so the wake word still works). When Voice Agent S2S owns the mic, 2-way does not also arm free-speech. The voice chevron writes `selected_tts_voice`. A profile switch applies that profile's saved `tts_voice` (empty means Eve). The Profiles editor voice dropdown and the HUD and Providers pickers write `tts_voice` on the active profile. Settings → **Global** edits the main profile’s user, glossary, and rules. Each other profile has Use global user / glossary / rules (default on, `use_global_*`). Checked is a read-only global preview; unchecked edits that profile’s file and seeds a commented scaffold when the file is empty. Main (`default`, or the first profile id) always owns its own files. See [ADR 0051](docs/ADR-0051-shell-redesign.md).
 
 - **Speech speed (xAI Providers):** Settings presets 0.5×–2× on Providers (xAI only). Wired into unary/streaming TTS (`speed`) and Voice Agent (`audio.output.speed`). Softwake clamps to the xAI API range 0.7–1.5.
 

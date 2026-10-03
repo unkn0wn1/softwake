@@ -138,6 +138,24 @@ pub fn resolve_tts_voice(provider: ProviderId, selected: &str) -> Option<&'stati
         .copied()
 }
 
+/// Value to persist for a TTS voice choice.
+///
+/// Empty stays empty so Default still means Eve at speak time via
+/// [`resolve_tts_voice`]. A roster id is returned in canonical lowercase.
+/// Unknown text returns [`None`]. This does not consult the selected provider,
+/// so a profile can store a voice while the live provider is not xAI.
+#[must_use]
+pub fn canonical_stored_tts_voice(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Some(String::new());
+    }
+    XAI_TTS_VOICES
+        .iter()
+        .find(|id| id.eq_ignore_ascii_case(trimmed))
+        .map(|id| (*id).to_owned())
+}
+
 /// STT model id. Empty Settings means [`XAI_VOICE_SEED`] for xAI.
 #[must_use]
 pub fn resolve_stt_model(provider: ProviderId, selected: &str) -> String {
@@ -305,9 +323,9 @@ pub fn wav_from_pcm16(samples: &[i16]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        TTS_MAX_CHARS, VoiceHttpError, clamp_tts_speed, family_speaks_xai, parse_tts_speed,
-        resolve_stt_model, resolve_tts_voice, speed_from_milli, speed_to_milli, stt_transcribe,
-        tts_synthesize, tts_voice_roster, wav_from_pcm16,
+        TTS_MAX_CHARS, VoiceHttpError, canonical_stored_tts_voice, clamp_tts_speed,
+        family_speaks_xai, parse_tts_speed, resolve_stt_model, resolve_tts_voice, speed_from_milli,
+        speed_to_milli, stt_transcribe, tts_synthesize, tts_voice_roster, wav_from_pcm16,
     };
 
     #[test]
@@ -344,6 +362,10 @@ mod tests {
         assert_eq!(resolve_tts_voice(ProviderId::XaiKey, "ara"), Some("ara"));
         assert_eq!(resolve_tts_voice(ProviderId::XaiKey, "not-a-voice"), None);
         assert_eq!(resolve_tts_voice(ProviderId::Openai, "eve"), None);
+        assert_eq!(canonical_stored_tts_voice(""), Some(String::new()));
+        assert_eq!(canonical_stored_tts_voice("EVE"), Some("eve".to_owned()));
+        assert_eq!(canonical_stored_tts_voice("Ara"), Some("ara".to_owned()));
+        assert_eq!(canonical_stored_tts_voice("not-a-voice"), None);
         assert_eq!(resolve_stt_model(ProviderId::XaiKey, ""), XAI_VOICE_SEED);
         assert_eq!(
             resolve_stt_model(ProviderId::XaiKey, " grok-voice-transcribe-1.0 "),

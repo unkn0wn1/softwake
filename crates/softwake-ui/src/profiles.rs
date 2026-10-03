@@ -13,7 +13,8 @@ use softwake_soul::{
     create_profile, ensure_migrated, list_profiles, load_app_config, load_profile_meta,
     profile_name_in, profile_owner_from_pack_dir, profile_pack_dir, rename_profile,
     resolve_config_dir, resolve_main_profile_id, resolve_soul_dir, set_active_profile,
-    set_allow_all, set_global_doc_flags, set_profile_role, try_load_effective,
+    set_allow_all, set_global_doc_flags, set_profile_role, set_profile_tts_voice,
+    try_load_effective,
 };
 
 use crate::pack::{self, PackSnapshot};
@@ -64,6 +65,8 @@ pub struct ProfilesSnapshot {
     pub allow_all: bool,
     /// Profile role (`general` or `coding`).
     pub role: String,
+    /// Saved TTS voice for the selected profile. Empty means Default (Eve).
+    pub tts_voice: String,
     /// Main `user.md` body for the read-only preview.
     pub global_user: String,
     /// Main `rules.md` body for the read-only preview.
@@ -154,6 +157,7 @@ fn snapshot_at(config: &Path, selected_id: &str) -> Result<ProfilesSnapshot, Str
         use_global_rules: is_main || meta.use_global_rules,
         allow_all: meta.allow_all,
         role: meta.role.clone(),
+        tts_voice: meta.tts_voice,
         global_user: global.user,
         global_rules: global.rules,
         global_glossary: global.glossary,
@@ -205,10 +209,12 @@ pub fn profile_set_active(id: String) -> Result<ProfilesSnapshot, String> {
     let previous = load_app_config(&config)
         .map(|app| app.active_profile)
         .unwrap_or_default();
-    set_active_profile(&config, &id).map_err(|error| error.to_string())?;
     if previous != id {
-        let _ = crate::providers::clear_selected_tts_voice();
+        // Voice file first, so a HUD poll that sees the new active id also
+        // sees this profile's saved voice.
+        let _ = apply_saved_tts_voice(&config, &id);
     }
+    set_active_profile(&config, &id).map_err(|error| error.to_string())?;
     snapshot_at(&config, &id)
 }
 
@@ -244,6 +250,34 @@ pub fn profile_set_role(id: String, role: String) -> Result<ProfilesSnapshot, St
     let config = config_dir()?;
     set_profile_role(&config, &id, &role).map_err(|error| error.to_string())?;
     snapshot_at(&config, id.trim())
+}
+
+/// Save the selected profile's TTS voice. Empty is Default (Eve).
+///
+/// When `id` is the active profile, also write the live `selected_tts_voice`.
+#[tauri::command]
+pub fn profile_set_tts_voice(id: String, voice: String) -> Result<ProfilesSnapshot, String> {
+    let config = config_dir()?;
+    let id = id.trim();
+    let canonical = softwake_providers::canonical_stored_tts_voice(&voice)
+        .ok_or_else(|| "that voice is not a built-in xAI TTS voice".to_owned())?;
+    set_profile_tts_voice(&config, id, &canonical).map_err(|error| error.to_string())?;
+    let active = load_app_config(&config)
+        .map(|app| app.active_profile)
+        .unwrap_or_default();
+    if active == id {
+        crate::providers::write_live_tts_voice(&canonical)?;
+    }
+    snapshot_at(&config, id)
+}
+
+/// Copy a profile's saved TTS voice into `selected_tts_voice`.
+///
+/// Unknown stored text becomes empty. Does not rewrite `profile.json`.
+fn apply_saved_tts_voice(config: &Path, profile_id: &str) -> Result<(), String> {
+    let meta = load_profile_meta(&profile_pack_dir(config, profile_id));
+    let voice = softwake_providers::canonical_stored_tts_voice(&meta.tts_voice).unwrap_or_default();
+    crate::providers::write_live_tts_voice(&voice)
 }
 
 /// Read the main profile's user, rules, and glossary for the Global pane.
@@ -304,9 +338,8 @@ pub fn hud_switch_profile(id: String) -> Result<HudSwitchProfileResult, String> 
     let app = load_app_config(&config).map_err(|error| error.to_string())?;
     let already = app.active_profile == id;
     if !already {
+        let _ = apply_saved_tts_voice(&config, &id);
         set_active_profile(&config, &id).map_err(|error| error.to_string())?;
-        // One voice store: profile switch returns to Default (empty).
-        let _ = crate::providers::clear_selected_tts_voice();
     }
     let snapshot = snapshot_at(&config, &id)?;
     let (refresh_ok, refresh_message) = match ask_refresh() {

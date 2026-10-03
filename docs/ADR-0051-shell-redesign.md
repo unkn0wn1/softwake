@@ -4,6 +4,10 @@
 - **Date:** 2026-10-02 (accepted); implemented 2026-10-03 on an explicit full go (P0–P2 together)
 - **Related:** [ADR 0015](ADR-0015-tray-hud.md), [ADR 0017](ADR-0017-profiles.md), [ADR 0022](ADR-0022-voice-modes.md), [ADR 0041](ADR-0041-hud-profile-rail.md), [ADR 0046](ADR-0046-hud-ux-thread.md), [ADR 0049](ADR-0049-duplex-barge-stream-tts.md), [ADR 0050](ADR-0050-voice-agent-s2s.md)
 
+### Amendment (2026-10-03): per-profile TTS voice
+
+Spencer overrides the voice decision in section 5. Each profile stores `tts_voice` on `profile.json`. Absent or empty means Default, which `resolve_tts_voice` still speaks as Eve. The Profiles editor has a dropdown: Default plus the xAI roster. Switching to a profile copies `tts_voice` into `providers.json` `selected_tts_voice`. The HUD voice chevron, Settings Providers TTS picker, and `/voice` still change the live field, and that choice is also saved on the active profile. Section 5 bullets 2 to 4, the non-goal about a required per-profile voice field, the P1 voice-stickiness bullet, and alternative 3 are superseded by this amendment.
+
 ## Context
 
 Softwake’s daily surface is still the **HUD capsule** from [ADR 0015](ADR-0015-tray-hud.md): a collapsed **120×120 bloom**, single-click expand to a resizable chat strip (~520×620 default), idle auto-collapse (default 3 s unless pinned), and Settings as a **separate** tray-opened window. There is no separate “main chat window” today — expanded HUD *is* the chat shell.
@@ -68,6 +72,8 @@ This ADR locks those product decisions. P0–P2 shipped together on 2026-10-03. 
 6. Mic mute ([ADR 0046](ADR-0046-hud-ux-thread.md)) remains: mute stops listening paths but keeps typed ask; it is not a substitute for 2-way OFF.
 
 ### 5. Voice stickiness
+
+Superseded 2026-10-03 by the amendment at the top.
 
 1. Remember the **last selected TTS / Voice Agent voice** across the Softwake UI session.
 2. On **profile switch** (HUD rail, `/profile`, Settings set-active that triggers live refresh), fall back to **Default** (empty / Eve via existing `resolve_tts_voice`).

@@ -931,8 +931,8 @@ impl Runtime {
             Ok(line) => line,
             Err(err) => return self.quiet_slash(err),
         };
-        // Profile switch resets TTS to Default and must not keep the old S2S voice.
-        let _ = crate::slash::clear_tts_voice_default();
+        // activate_profile already copied the saved voice. Stop S2S so the
+        // next session speaks that voice instead of the previous one.
         self.stop_voice_agent();
         if self.soul_path_locked {
             return self.quiet_slash(format!(
