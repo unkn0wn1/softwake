@@ -33,6 +33,8 @@ pub(crate) enum BridgeEvent {
     /// Assistant audio finished (`output_audio.done` / `response.done`).
     AudioDone,
     SpeechStarted,
+    /// Final user transcript from the open Voice Agent socket.
+    UserTranscript(String),
     Error(String),
     /// Background thread exited (socket closed or fatal).
     Stopped,
@@ -45,9 +47,34 @@ pub(crate) enum VaHudPhase {
     Listening,
 }
 
+/// One drain of the Voice Agent event channel.
+#[derive(Debug, Default)]
+pub(crate) struct VaPump {
+    /// Assistant transcript or a short HUD note.
+    pub note: Option<String>,
+    /// Speaking or listening hint.
+    pub phase: Option<VaHudPhase>,
+    /// Finished user transcripts. Not assistant speech.
+    pub user_transcripts: Vec<String>,
+    /// How many `speech_started` events were in this drain.
+    pub speech_starts: u32,
+}
+
+/// When true, the worker drops assistant PCM and cancels the response.
+///
+/// The socket stays open. This is not a second session.
+#[must_use]
+pub(crate) fn room_route_suppresses_assistant_audio(room_route: bool) -> bool {
+    room_route
+}
+
 enum BridgeCmd {
     Pcm(Vec<i16>),
     Cancel,
+    /// Room composer is open (`true`) or talk is back on the profile (`false`).
+    ///
+    /// Does not close the socket or send `session.update`.
+    SetRoomRoute(bool),
     Stop,
 }
 
@@ -116,6 +143,13 @@ impl VoiceAgentBridge {
         let _ = self.cmd_tx.send(BridgeCmd::Pcm(samples.to_vec()));
     }
 
+    /// Tell the live worker whether a room composer owns finished speech.
+    ///
+    /// Does not stop the thread or open another socket.
+    pub(crate) fn set_room_route(&self, enabled: bool) {
+        let _ = self.cmd_tx.send(BridgeCmd::SetRoomRoute(enabled));
+    }
+
     /// Cancel in-flight assistant audio on the server and locally.
     pub(crate) fn cancel(&mut self) {
         // Always nudge the worker: it owns the player and ignores idle cancels.
@@ -130,9 +164,12 @@ impl VoiceAgentBridge {
     ///
     /// Assistant PCM is opened/written on the Voice Agent worker as soon as the
     /// first `output_audio.delta` arrives — not deferred to this HUD poll pump.
-    pub(crate) fn pump(&mut self) -> (Option<String>, Option<VaHudPhase>) {
+    /// User transcripts stay out of [`Self::live_transcript`].
+    pub(crate) fn pump(&mut self) -> VaPump {
         let mut note = None;
         let mut phase = None;
+        let mut user_transcripts = Vec::new();
+        let mut speech_starts = 0_u32;
         loop {
             match self.event_rx.try_recv() {
                 Ok(BridgeEvent::AudioPlaying) => {
@@ -161,6 +198,13 @@ impl VoiceAgentBridge {
                     self.response_active = false;
                     note = Some("listening…".to_owned());
                     phase = Some(VaHudPhase::Listening);
+                    speech_starts = speech_starts.saturating_add(1);
+                }
+                Ok(BridgeEvent::UserTranscript(text)) => {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        user_transcripts.push(trimmed.to_owned());
+                    }
                 }
                 Ok(BridgeEvent::Error(message)) => {
                     // Server noise when we cancel with nothing in flight — ignore.
@@ -183,7 +227,12 @@ impl VoiceAgentBridge {
                 }
             }
         }
-        (note, phase)
+        VaPump {
+            note,
+            phase,
+            user_transcripts,
+            speech_starts,
+        }
     }
 
     /// True while the worker thread is still running.
@@ -306,6 +355,9 @@ fn worker_loop(
     // do not wait for HUD GetStatus → pump() (often 900ms).
     let mut player: Option<softwake_voice::PcmPipePlayer> = None;
     let mut response_active = false;
+    // Room composer: keep this socket, drop assistant audio. Not a new session.
+    let mut room_route = false;
+    let mut room_cancelled = false;
 
     loop {
         // Pump outbound PCM / control first.
@@ -326,6 +378,17 @@ fn worker_loop(
                     session.cancel_response();
                     abort_va_player(&mut player);
                     response_active = false;
+                }
+                Ok(BridgeCmd::SetRoomRoute(enabled)) => {
+                    room_route = enabled;
+                    if room_route_suppresses_assistant_audio(enabled) {
+                        session.cancel_response();
+                        abort_va_player(&mut player);
+                        response_active = false;
+                        room_cancelled = true;
+                    } else {
+                        room_cancelled = false;
+                    }
                 }
                 Ok(BridgeCmd::Stop) => {
                     session.cancel_response();
@@ -350,17 +413,26 @@ fn worker_loop(
                 thread::sleep(Duration::from_millis(5));
             }
             Ok(Some(VoiceAgentEvent::OutputAudioDelta(bytes))) => {
-                let first_chunk = player.is_none();
-                response_active = true;
-                match write_va_audio(&mut player, &bytes) {
-                    Ok(()) => {
-                        // One HUD speaking nudge per utterance — PCM already playing.
-                        if first_chunk {
-                            let _ = event_tx.send(BridgeEvent::AudioPlaying);
-                        }
+                if room_route_suppresses_assistant_audio(room_route) {
+                    if !room_cancelled {
+                        session.cancel_response();
+                        room_cancelled = true;
                     }
-                    Err(error) => {
-                        let _ = event_tx.send(BridgeEvent::Error(error));
+                    abort_va_player(&mut player);
+                    response_active = false;
+                } else {
+                    let first_chunk = player.is_none();
+                    response_active = true;
+                    match write_va_audio(&mut player, &bytes) {
+                        Ok(()) => {
+                            // One HUD speaking nudge per utterance — PCM already playing.
+                            if first_chunk {
+                                let _ = event_tx.send(BridgeEvent::AudioPlaying);
+                            }
+                        }
+                        Err(error) => {
+                            let _ = event_tx.send(BridgeEvent::Error(error));
+                        }
                     }
                 }
             }
@@ -372,14 +444,26 @@ fn worker_loop(
                 response_active = false;
                 let _ = event_tx.send(BridgeEvent::TranscriptDone(text));
             }
+            Ok(Some(VoiceAgentEvent::InputTranscript(text))) => {
+                let _ = event_tx.send(BridgeEvent::UserTranscript(text));
+            }
             Ok(Some(VoiceAgentEvent::SpeechStarted)) => {
                 let had = response_active || player.is_some();
                 abort_va_player(&mut player);
-                if had {
+                if had || room_route_suppresses_assistant_audio(room_route) {
                     session.cancel_response();
                 }
+                room_cancelled = room_route_suppresses_assistant_audio(room_route);
                 response_active = false;
                 let _ = event_tx.send(BridgeEvent::SpeechStarted);
+            }
+            Ok(Some(VoiceAgentEvent::SpeechStopped)) => {
+                if room_route_suppresses_assistant_audio(room_route) && !room_cancelled {
+                    session.cancel_response();
+                    room_cancelled = true;
+                    abort_va_player(&mut player);
+                    response_active = false;
+                }
             }
             Ok(Some(VoiceAgentEvent::Error(message))) => {
                 if !is_idle_cancel_error(&message) {
@@ -393,11 +477,7 @@ fn worker_loop(
                 response_active = false;
                 let _ = event_tx.send(BridgeEvent::AudioDone);
             }
-            Ok(Some(
-                VoiceAgentEvent::SpeechStopped
-                | VoiceAgentEvent::SessionUpdated
-                | VoiceAgentEvent::Ignored,
-            )) => {}
+            Ok(Some(VoiceAgentEvent::SessionUpdated | VoiceAgentEvent::Ignored)) => {}
             Err(_) => {
                 abort_va_player(&mut player);
                 let _ = event_tx.send(BridgeEvent::Error("Voice Agent socket closed".to_owned()));
@@ -482,5 +562,32 @@ mod tests {
         assert!(text.contains("Sally"));
         assert!(text.contains("Hands tools are not available"));
         assert!(text.contains("Be witty."));
+    }
+
+    #[test]
+    fn room_route_suppresses_playback() {
+        assert!(room_route_suppresses_assistant_audio(true));
+        assert!(!room_route_suppresses_assistant_audio(false));
+    }
+
+    #[test]
+    fn user_transcript_does_not_replace_assistant_line() {
+        let (cmd_tx, _cmd_rx) = std::sync::mpsc::channel();
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let mut bridge = VoiceAgentBridge {
+            cmd_tx,
+            event_rx,
+            join: None,
+            live_transcript: "assistant line".to_owned(),
+            response_active: false,
+        };
+        event_tx
+            .send(BridgeEvent::UserTranscript("hello room".to_owned()))
+            .expect("send");
+        let pumped = bridge.pump();
+        assert_eq!(bridge.live_transcript, "assistant line");
+        assert_eq!(pumped.user_transcripts, vec!["hello room".to_owned()]);
+        assert!(pumped.note.is_none());
+        assert_eq!(pumped.speech_starts, 0);
     }
 }
