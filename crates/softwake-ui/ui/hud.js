@@ -43,6 +43,16 @@ const deleteSelectedBtn = document.querySelector("#delete-selected");
 const selectCountEl = document.querySelector("#select-count");
 const profileRail = document.querySelector("#profile-rail");
 const profileRailList = document.querySelector("#profile-rail-list");
+const roomsRailList = document.querySelector("#rooms-rail-list");
+const roomsRailEmpty = document.querySelector("#rooms-rail-empty");
+const roomPanel = document.querySelector("#room-panel");
+const roomPanelTitle = document.querySelector("#room-panel-title");
+const roomPanelLog = document.querySelector("#room-panel-log");
+const roomPanelStatus = document.querySelector("#room-panel-status");
+const roomComposeForm = document.querySelector("#room-compose-form");
+const roomCompose = document.querySelector("#room-compose");
+const roomSendBtn = document.querySelector("#room-send");
+const roomPanelBack = document.querySelector("#room-panel-back");
 
 const IDLE_MIN_MS = 1000;
 const IDLE_MAX_MS = 30000;
@@ -93,6 +103,11 @@ let selecting = false;
 const selectedIdx = new Set();
 /** True while a left-rail profile switch is in flight. */
 let profileSwitchBusy = false;
+/** Open room id when the HUD is showing room chat instead of the profile log. */
+let selectedRoomId = "";
+let roomViewOpen = false;
+let roomSendBusy = false;
+const roomHiddenIds = ["chat-toolbar", "log", "ask-form", "context-meter", "live"];
 
 function invoke(command, args) {
   const core = window.__TAURI__ && window.__TAURI__.core;
@@ -1023,7 +1038,30 @@ async function refreshHudPrefs() {
   } catch (_error) {
     // Prefs are best-effort; keep defaults when the snapshot fails.
   }
-  capsule.dataset.idleMs = String(configuredIdleMs);
+  if (roomComposeForm) {
+  roomComposeForm.addEventListener("submit", (event) => {
+    void sendRoomMessage(event);
+  });
+}
+if (roomPanelBack) {
+  roomPanelBack.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    closeRoomChat();
+    markActivity();
+  });
+}
+if (roomCompose) {
+  roomCompose.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void sendRoomMessage(event);
+    }
+  });
+}
+
+capsule.dataset.idleMs = String(configuredIdleMs);
 }
 
 if (pinBtn) {
@@ -1110,13 +1148,158 @@ function renderProfileRail(snap) {
     btn.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
+      closeRoomChat();
       void switchHudProfile(id);
     });
     li.appendChild(btn);
     profileRailList.appendChild(li);
   }
   if (profileRail) {
-    profileRail.hidden = rows.length === 0;
+    profileRail.hidden = false;
+  }
+}
+
+function setRoomView(open) {
+  roomViewOpen = !!open;
+  if (roomPanel) {
+    roomPanel.hidden = !roomViewOpen;
+  }
+  for (const id of roomHiddenIds) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    if (roomViewOpen) {
+      if (el.dataset.roomPrevHidden == null) {
+        el.dataset.roomPrevHidden = el.hidden ? "1" : "0";
+      }
+      el.hidden = true;
+    } else if (el.dataset.roomPrevHidden != null) {
+      el.hidden = el.dataset.roomPrevHidden === "1";
+      delete el.dataset.roomPrevHidden;
+    }
+  }
+}
+
+function closeRoomChat() {
+  selectedRoomId = "";
+  setRoomView(false);
+  if (roomsRailList) {
+    for (const btn of roomsRailList.querySelectorAll(".profile-rail-item")) {
+      btn.setAttribute("aria-selected", "false");
+    }
+  }
+}
+
+function renderRoomLog(snap) {
+  if (!roomPanelLog) return;
+  roomPanelLog.innerHTML = "";
+  const lines = (snap && snap.log) || [];
+  if (!lines.length) {
+    roomPanelLog.textContent = "No messages yet. Send as operator to wake every member.";
+    return;
+  }
+  for (const line of lines) {
+    const row = document.createElement("div");
+    const kind = line.kind || "say";
+    row.className = "room-line " + kind + (line.profile_id === "operator" ? " operator" : "");
+    const who = document.createElement("span");
+    who.className = "who";
+    const label = line.name || line.profile_id || "?";
+    who.textContent = label;
+    row.appendChild(who);
+    row.appendChild(document.createTextNode(": " + (line.text || "")));
+    roomPanelLog.appendChild(row);
+  }
+  roomPanelLog.scrollTop = roomPanelLog.scrollHeight;
+}
+
+function renderRoomsRail(snap) {
+  if (!roomsRailList) return;
+  const rooms = (snap && snap.rooms) || [];
+  roomsRailList.innerHTML = "";
+  if (roomsRailEmpty) roomsRailEmpty.hidden = rooms.length > 0;
+  for (const room of rooms) {
+    if (!room || !room.id) continue;
+    const id = String(room.id);
+    const li = document.createElement("li");
+    li.setAttribute("role", "presentation");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "profile-rail-item";
+    btn.setAttribute("role", "option");
+    btn.dataset.roomId = id;
+    const title = (room.title && String(room.title).trim()) || id;
+    btn.title = title;
+    btn.textContent = title;
+    const selected = roomViewOpen && id === selectedRoomId;
+    btn.setAttribute("aria-selected", selected ? "true" : "false");
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void openRoomChat(id, title);
+    });
+    li.appendChild(btn);
+    roomsRailList.appendChild(li);
+  }
+  if (roomViewOpen && roomPanelTitle) {
+    const current = rooms.find((room) => room && String(room.id) === selectedRoomId);
+    if (current) {
+      roomPanelTitle.textContent = (current.title && String(current.title).trim()) || selectedRoomId;
+    }
+  }
+}
+
+async function refreshRoomsRail(statusText) {
+  if (roomSendBusy) return null;
+  try {
+    const args = {};
+    if (selectedRoomId) args.selectedId = selectedRoomId;
+    const snap = await invoke("rooms_snapshot", args);
+    renderRoomsRail(snap);
+    if (roomViewOpen) renderRoomLog(snap);
+    if (statusText && roomPanelStatus) roomPanelStatus.textContent = statusText;
+    return snap;
+  } catch (error) {
+    if (roomPanelStatus) {
+      roomPanelStatus.textContent = errorText(error, "rooms unavailable");
+    }
+    return null;
+  }
+}
+
+async function openRoomChat(id, title) {
+  const next = String(id || "").trim();
+  if (!next) return;
+  selectedRoomId = next;
+  if (roomPanelTitle) roomPanelTitle.textContent = title || next;
+  setRoomView(true);
+  markActivity();
+  if (roomPanelStatus) roomPanelStatus.textContent = "";
+  await refreshRoomsRail();
+}
+
+async function sendRoomMessage(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  const text = (roomCompose && roomCompose.value ? roomCompose.value : "").trim();
+  if (!selectedRoomId || !text || roomSendBusy) return;
+  roomSendBusy = true;
+  if (roomSendBtn) roomSendBtn.disabled = true;
+  if (roomPanelStatus) roomPanelStatus.textContent = "Waking every member…";
+  markActivity();
+  try {
+    const snap = await invoke("room_post", { roomId: selectedRoomId, text });
+    if (roomCompose) roomCompose.value = "";
+    renderRoomsRail(snap);
+    renderRoomLog(snap);
+    if (roomPanelStatus) roomPanelStatus.textContent = "Posted. Each member was asked.";
+  } catch (error) {
+    if (roomPanelStatus) roomPanelStatus.textContent = errorText(error, "room post failed");
+  } finally {
+    roomSendBusy = false;
+    if (roomSendBtn) roomSendBtn.disabled = false;
+    markActivity();
   }
 }
 
@@ -1182,6 +1365,7 @@ async function refreshProfileName(force) {
     profileName = name || "Softwake";
     capsule.dataset.profile = profileName;
     renderProfileRail(snap);
+    void refreshRoomsRail();
     if (nextId && nextId !== profileId) {
       const previous = profileId;
       profileId = nextId;
@@ -1655,7 +1839,7 @@ function isInteractiveTarget(target) {
     return false;
   }
   return !!target.closest(
-    "#ask-form, #talk, #ask-send, #ask-input, #log, #live, #hud-pending, #hud-allow, #pin, #resize-grip, #chat-toolbar, #profile-rail, #vault-gate, #orb-controls, #two-way, #voice-select, #gear, button, input, textarea, select, a, .bubble",
+    "#ask-form, #talk, #ask-send, #ask-input, #log, #live, #hud-pending, #hud-allow, #pin, #resize-grip, #chat-toolbar, #profile-rail, #room-panel, #vault-gate, #orb-controls, #two-way, #voice-select, #gear, button, input, textarea, select, a, .bubble",
   );
 }
 
@@ -1986,6 +2170,7 @@ updateHint();
 void bootstrapVault().finally(() => {
   refresh();
   void refreshProfileName(true);
+  void refreshRoomsRail();
 });
 
 let lastChatReloadMs = 0;

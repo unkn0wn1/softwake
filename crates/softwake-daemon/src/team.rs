@@ -1,6 +1,7 @@
 //! Agent team helpers: peer DM wake + `goal_run` outer loop (ADR-0052).
 
 use std::env;
+use std::fmt::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -18,21 +19,109 @@ use softwake_tools::{
 
 use crate::runtime::Runtime;
 
-/// Resolve profile meta by id or case-insensitive name.
+/// Match a member token to a profile: exact id, case-insensitive id, then display name.
+#[must_use]
+pub(crate) fn find_profile_meta<'a>(
+    profiles: &'a [ProfileMeta],
+    needle: &str,
+) -> Option<&'a ProfileMeta> {
+    let needle = needle.trim();
+    if needle.is_empty() {
+        return None;
+    }
+    if let Some(meta) = profiles.iter().find(|p| p.id == needle) {
+        return Some(meta);
+    }
+    if let Some(meta) = profiles.iter().find(|p| p.id.eq_ignore_ascii_case(needle)) {
+        return Some(meta);
+    }
+    let lower = needle.to_ascii_lowercase();
+    profiles
+        .iter()
+        .find(|p| p.name.trim().to_ascii_lowercase() == lower)
+}
+
+/// Resolve profile meta by id or display name (case-insensitive).
 pub(crate) fn resolve_profile_meta(to: &str) -> Result<ProfileMeta, String> {
     let xdg = env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
     let home = env::var_os("HOME").map(PathBuf::from);
     let config = resolve_config_dir(xdg.as_deref(), home.as_deref()).map_err(|e| e.to_string())?;
     let profiles = list_profiles(&config).map_err(|e| e.to_string())?;
     let needle = to.trim();
-    if let Some(meta) = profiles.iter().find(|p| p.id == needle) {
-        return Ok(meta.clone());
-    }
-    let lower = needle.to_ascii_lowercase();
-    profiles
-        .into_iter()
-        .find(|p| p.name.to_ascii_lowercase() == lower)
+    find_profile_meta(&profiles, needle)
+        .cloned()
         .ok_or_else(|| format!("unknown profile `{needle}`"))
+}
+
+/// Wake order for a room post.
+///
+/// Every distinct member is included. Tokens may be profile ids or display names.
+/// Resolution does not stop after the first match.
+#[must_use]
+pub(crate) fn resolve_fanout_members(
+    raw_members: &[String],
+    profiles: &[ProfileMeta],
+) -> (Vec<ProfileMeta>, Vec<String>) {
+    let mut resolved = Vec::new();
+    let mut unknown = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for raw in raw_members {
+        let needle = raw.trim();
+        if needle.is_empty() {
+            continue;
+        }
+        match find_profile_meta(profiles, needle) {
+            Some(meta) => {
+                if seen.insert(meta.id.clone()) {
+                    resolved.push(meta.clone());
+                }
+            }
+            None => unknown.push(needle.to_owned()),
+        }
+    }
+    (resolved, unknown)
+}
+
+fn room_lists_member(members: &[String], target: &ProfileMeta) -> bool {
+    members.iter().any(|token| {
+        let token = token.trim();
+        !token.is_empty()
+            && (token == target.id
+                || token.eq_ignore_ascii_case(&target.id)
+                || token.eq_ignore_ascii_case(target.name.trim()))
+    })
+}
+
+fn is_no_reply(text: &str) -> bool {
+    let lower = text
+        .trim()
+        .trim_matches(|c: char| c == '.' || c == '!' || c == '"')
+        .to_ascii_lowercase();
+    lower.is_empty() || lower == "no_reply" || lower == "no reply"
+}
+
+/// One in-flight room fan-out. Later posts wait so members do not interleave.
+fn room_fanout_single_flight() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    let lock = LOCK.get_or_init(|| std::sync::Mutex::new(()));
+    lock.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn wait_room_cooldown(path: &std::path::Path) {
+    let now = softwake_tools::now_ms();
+    if let Ok(room_now) = softwake_tools::load_room(path) {
+        if !room_cooldown_elapsed(room_now.last_turn_ms, now, ROOM_COOLDOWN_MS) {
+            let wait = ROOM_COOLDOWN_MS.saturating_sub(now.saturating_sub(room_now.last_turn_ms));
+            if wait > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(wait));
+            }
+        }
+    }
+}
+
+fn pause_between_members() {
+    std::thread::sleep(std::time::Duration::from_millis(ROOM_COOLDOWN_MS));
 }
 
 /// Load rendered instructions for a profile pack (global flags applied).
@@ -128,7 +217,7 @@ pub(crate) fn run_agent_message(
         let (rooms_dir, _) = rooms_dirs()?;
         let path = softwake_tools::room_file_path(&rooms_dir, room_id);
         if let Ok(room) = softwake_tools::load_room(&path) {
-            if !room.members.iter().any(|m| m == &target.id) {
+            if !room_lists_member(&room.members, &target) {
                 return Err(format!(
                     "profile `{}` is not a member of room `{room_id}`",
                     target.id
@@ -406,11 +495,12 @@ fn run_grok_prompt(prompt: &str, cwd: &std::path::Path, plan_mode: bool) -> Resu
     }
 }
 
-/// Operator room post: log the message, then offer each member a oneshot.
+/// Operator room post: log the message, then wake every member to decide.
 ///
-/// Each member decides whether to reply (stimulus includes the operator text /
-/// reply policy). Cool-down + sequential turns keep agents from piling on.
-/// Single-flight is the daemon runtime lock (serve serializes requests).
+/// Members may be profile ids or display names. Each resolved profile gets a
+/// oneshot (reply or `NO_REPLY`). A reply does not cancel the remaining members.
+/// Turns are sequential with [`ROOM_COOLDOWN_MS`] between them, and
+/// [`room_fanout_single_flight`] keeps a second post from interleaving.
 #[allow(
     clippy::too_many_lines,
     reason = "room fan-out + cool-down stay in one ADR-0052 flow"
@@ -420,6 +510,7 @@ pub(crate) fn run_room_post(
     room_id: &str,
     operator_text: &str,
 ) -> Result<String, String> {
+    let _fanout_flight = room_fanout_single_flight();
     let text = operator_text.trim();
     if text.is_empty() {
         return Err("room post needs text".into());
@@ -461,24 +552,32 @@ pub(crate) fn run_room_post(
     )?;
     let _ = mark_room_turn(&rooms_dir, room_id, "operator");
 
+    let xdg = env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
+    let home = env::var_os("HOME").map(PathBuf::from);
+    let config = resolve_config_dir(xdg.as_deref(), home.as_deref()).map_err(|e| e.to_string())?;
+    let profiles = list_profiles(&config).map_err(|e| e.to_string())?;
+    let (members, unknown) = resolve_fanout_members(&room.members, &profiles);
+
     let mut replied: Vec<String> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
+    for raw in &unknown {
+        skipped.push(format!("{raw} (unknown profile)"));
+    }
     let title = if room.title.is_empty() {
-        room_id
+        room_id.to_owned()
     } else {
-        room.title.as_str()
+        room.title.clone()
     };
+    let mut thread_notes = String::new();
 
-    for member_id in &room.members {
-        let now = softwake_tools::now_ms();
-        if let Ok(room_now) = softwake_tools::load_room(&path) {
-            if !room_cooldown_elapsed(room_now.last_turn_ms, now, ROOM_COOLDOWN_MS) {
-                let wait =
-                    ROOM_COOLDOWN_MS.saturating_sub(now.saturating_sub(room_now.last_turn_ms));
-                std::thread::sleep(std::time::Duration::from_millis(wait));
-            }
+    // Every resolved member is asked. Do not return after the first speaker.
+    for (index, member) in members.iter().enumerate() {
+        if index > 0 {
+            pause_between_members();
         }
+        wait_room_cooldown(&path);
 
+        let member_id = member.id.as_str();
         let Ok((meta, instructions)) = load_profile_instructions(member_id) else {
             skipped.push(format!("{member_id} (unknown profile)"));
             continue;
@@ -489,8 +588,15 @@ pub(crate) fn run_room_post(
         } else {
             meta.name.clone()
         };
+        let prior = if thread_notes.is_empty() {
+            recent_ctx.clone()
+        } else if recent_ctx.is_empty() {
+            thread_notes.clone()
+        } else {
+            format!("{recent_ctx}\n{thread_notes}")
+        };
         let stimulus = format!(
-            "You are in Softwake room `{room_id}` (title: {title}).\n\nRecent room context:\n{recent_ctx}\n\nOperator message (may include reply policy such as \"only one reply\" or a named speaker):\n{text}\n\nDecide whether YOU should speak now. Respect any reply policy in the operator message and light turn-taking (do not pile on if someone else already covered it).\n- If you should reply, write your room message only (no preamble).\n- If you should stay quiet, reply with exactly: NO_REPLY"
+            "You are in Softwake room `{room_id}` (title: {title}). You are {display} (profile id `{member_id}`).\n\nRecent room context:\n{prior}\n\nOperator message:\n{text}\n\nSoftwake wakes every room member, one at a time, with a cool-down between turns. Another member already speaking does not cancel your turn.\nDecide for yourself:\n- If you should reply, write your room message only (no preamble).\n- If you should stay quiet, reply with exactly: NO_REPLY"
         );
         let reply =
             match runtime.oneshot_as_profile(member_id, &instructions, meta.allow_all, &stimulus) {
@@ -500,28 +606,32 @@ pub(crate) fn run_room_post(
                     continue;
                 }
             };
-        let trimmed = reply.trim();
-        if trimmed.is_empty()
-            || trimmed.eq_ignore_ascii_case("NO_REPLY")
-            || trimmed.eq_ignore_ascii_case("NO REPLY")
-        {
-            skipped.push(member_id.clone());
+        if is_no_reply(&reply) {
+            skipped.push(format!("{member_id} (NO_REPLY)"));
             continue;
         }
-        append_room_log(
+        let trimmed = reply.trim();
+        if let Err(error) = append_room_log(
             &state_dir,
             room_id,
             &RoomLogLine {
                 ts_ms: softwake_tools::now_ms(),
-                profile_id: member_id.clone(),
+                profile_id: member_id.to_owned(),
                 name: display.clone(),
                 kind: RoomLogKind::Say,
                 text: trimmed.to_owned(),
                 iteration: None,
                 phase: None,
             },
-        )?;
+        ) {
+            skipped.push(format!("{member_id} (log error: {error})"));
+            continue;
+        }
         let _ = mark_room_turn(&rooms_dir, room_id, member_id);
+        if !thread_notes.is_empty() {
+            thread_notes.push('\n');
+        }
+        let _ = write!(thread_notes, "[say] {display}: {trimmed}");
         replied.push(format!("{display} ({member_id})"));
     }
 
@@ -536,7 +646,8 @@ pub(crate) fn run_room_post(
         skipped.join(", ")
     };
     Ok(format!(
-        "room `{room_id}`: operator posted; replied: {replied_s}; quiet: {skipped_s}"
+        "room `{room_id}`: operator posted; woke {}; replied: {replied_s}; quiet: {skipped_s}",
+        members.len()
     ))
 }
 
@@ -547,5 +658,56 @@ mod tests {
     #[test]
     fn grant_path_compiles_helpers() {
         let _ = ROOM_COOLDOWN_MS;
+    }
+
+    #[test]
+    fn fanout_resolves_display_names_and_wakes_every_member() {
+        let profiles = vec![
+            ProfileMeta::new("p-sally", "Sally"),
+            ProfileMeta::new("spencer", "Spencer"),
+            ProfileMeta::new("nova", "Nova"),
+        ];
+        let raw = vec![
+            "Sally".into(),
+            "spencer".into(),
+            "missing".into(),
+            "NOVA".into(),
+            "Sally".into(),
+        ];
+        let (resolved, unknown) = resolve_fanout_members(&raw, &profiles);
+        let ids: Vec<_> = resolved.iter().map(|meta| meta.id.as_str()).collect();
+        assert_eq!(ids, vec!["p-sally", "spencer", "nova"]);
+        assert_eq!(unknown, vec!["missing".to_owned()]);
+        assert!(
+            resolved.len() > 1,
+            "fan-out must not stop after the first speaker"
+        );
+    }
+
+    #[test]
+    fn fanout_matches_id_case_insensitively() {
+        let profiles = vec![ProfileMeta::new("sally", "Agent Sally")];
+        let (resolved, unknown) = resolve_fanout_members(&["Sally".into()], &profiles);
+        assert!(unknown.is_empty());
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].id, "sally");
+    }
+
+    #[test]
+    fn no_reply_token_is_quiet_not_a_message() {
+        assert!(is_no_reply(""));
+        assert!(is_no_reply("  NO_REPLY  "));
+        assert!(is_no_reply("no reply."));
+        assert!(!is_no_reply("NO_REPLY but actually here is a thought"));
+    }
+
+    #[test]
+    fn room_membership_accepts_display_name() {
+        let target = ProfileMeta::new("p-sally", "Sally");
+        assert!(room_lists_member(
+            &["Sally".into(), "spencer".into()],
+            &target
+        ));
+        assert!(!room_lists_member(&["spencer".into()], &target));
     }
 }

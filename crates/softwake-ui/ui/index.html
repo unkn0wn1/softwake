@@ -407,7 +407,7 @@
         
         <section id="pane-rooms" class="pane glass pane-fill hidden" hidden aria-labelledby="rooms-title">
           <h2 id="rooms-title">Rooms</h2>
-          <p class="meta">Multi-agent rooms (ADR-0052). Chat below is the operator view. Settings fields create/edit members. Softwake cool-down + single-flight keep agents from piling on; each member decides whether to reply. Your message may include reply policy (e.g. only one reply, named speaker).</p>
+          <p class="meta">Multi-agent rooms (ADR-0052). Day-to-day chat is on the HUD left rail (Profiles, then Rooms halfway down). This page is for creating rooms and editing members (profile id or display name). A post wakes every member in order; each decides to reply or NO_REPLY. Cool-down and single-flight keep them from piling on at once.</p>
           <p id="rooms-path" class="meta"></p>
           <label for="rooms-list" class="visually-hidden">Rooms</label>
           <select id="rooms-list" aria-label="Room list" size="4" class="rooms-list-select"></select>
@@ -426,8 +426,8 @@
             <input id="room-id" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="standup" />
             <label for="room-title">Title</label>
             <input id="room-title" type="text" maxlength="120" autocomplete="off" />
-            <label for="room-members">Members (profile ids, comma-separated)</label>
-            <input id="room-members" type="text" autocomplete="off" placeholder="default, sally" />
+            <label for="room-members">Members (profile id or display name, comma-separated)</label>
+            <input id="room-members" type="text" autocomplete="off" placeholder="default, Sally" />
             <div class="row">
               <button type="button" class="btn" id="rooms-new">New</button>
               <button type="button" class="btn" id="rooms-save">Save</button>

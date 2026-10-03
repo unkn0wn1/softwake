@@ -24,10 +24,30 @@
         <button type="button" id="gear" class="orb-btn" aria-label="Settings" title="Settings">⚙</button>
       </div>
       <div id="strip" class="strip">
-      <nav id="profile-rail" class="profile-rail" aria-label="Profiles">
-        <ul id="profile-rail-list" class="profile-rail-list" role="listbox" aria-label="Active profile"></ul>
+      <nav id="profile-rail" class="profile-rail" aria-label="Profiles and rooms">
+        <section class="rail-section rail-profiles" aria-labelledby="rail-profiles-heading">
+          <h2 id="rail-profiles-heading" class="rail-heading">Profiles</h2>
+          <ul id="profile-rail-list" class="profile-rail-list" role="listbox" aria-label="Active profile"></ul>
+        </section>
+        <section id="rooms-rail" class="rail-section rail-rooms" aria-labelledby="rail-rooms-heading">
+          <h2 id="rail-rooms-heading" class="rail-heading">Rooms</h2>
+          <ul id="rooms-rail-list" class="profile-rail-list" role="listbox" aria-label="Rooms"></ul>
+          <p id="rooms-rail-empty" class="rail-empty" hidden>No rooms yet. Create one in Settings.</p>
+        </section>
       </nav>
       <div id="strip-main" class="strip-main">
+      <div id="room-panel" class="room-panel" hidden>
+        <div class="room-panel-bar">
+          <strong id="room-panel-title">Room</strong>
+          <button type="button" id="room-panel-back" title="Back to profile chat">Profile</button>
+        </div>
+        <div id="room-panel-log" class="log room-panel-log" role="log" aria-live="polite"></div>
+        <p id="room-panel-status" class="room-panel-status" role="status"></p>
+        <form id="room-compose-form" autocomplete="off">
+          <textarea id="room-compose" rows="2" maxlength="8000" placeholder="Message the room…" aria-label="Message the room"></textarea>
+          <button type="submit" id="room-send">Send</button>
+        </form>
+      </div>
       <div id="vault-gate" class="vault-gate" hidden>
         <p id="vault-title" class="vault-title">Chat lock</p>
         <p id="vault-hint" class="vault-hint"></p>

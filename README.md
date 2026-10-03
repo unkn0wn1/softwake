@@ -92,7 +92,7 @@ Softwake profiles can act as a small local team ([ADR 0052](docs/ADR-0052-agent-
 
 - Each profile has an **agent home** under `$XDG_DATA_HOME/softwake/homes/<profile_id>/` (else `~/.local/share/softwake/homes/<profile_id>/`). Confirmed `shell` runs with that directory as cwd and `HOME`.
 - **Allow all** (per profile) turns Ask tools into Always allow for that profile; `software_install` still asks unless that tool is Always allow.
-- **Rooms** (Settings → Rooms): pick member profiles; Softwake applies a short cool-down so agents do not pile on. Progress from `goal_run` and peer DM appends to the room log.
+- **Rooms**: day-to-day chat is on the HUD left rail — **Profiles** at the top, **Rooms** halfway down (history, compose, member replies). Settings → Rooms creates rooms and edits members (profile id or display name). A post wakes every member in order to reply or `NO_REPLY`, with a short cool-down and single-flight so they do not pile on at once. Progress from `goal_run` and peer DM appends to the room log.
 - **Peer DM** (`agent_message`): message another profile; Softwake wakes it for a oneshot reply without stealing the HUD active profile.
 - **`goal_run`**: first-class goal + acceptance loop (plan → execute → verify) with iteration caps and logged progress. Coding profiles may use a local `grok` CLI backend when available.
 
