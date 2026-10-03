@@ -8,13 +8,13 @@
 //! See [ADR 0022](../../docs/ADR-0022-voice-modes.md).
 
 #[cfg(not(test))]
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(not(test))]
 use std::sync::{Mutex, OnceLock};
 #[cfg(not(test))]
 use std::thread;
 #[cfg(not(test))]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use softwake_providers::ChatMessage;
 #[cfg(not(test))]
@@ -159,6 +159,141 @@ pub(crate) fn spawn_fixed_line(line: String, profile: String, verbosity: u8) {
                 playback_follow_on(&ready, &line, &profile, verbosity);
             }
         });
+}
+
+/// Bumped on each operator room post so the previous post's member lines do not play.
+#[cfg(not(test))]
+fn room_speech_generation() -> &'static AtomicU64 {
+    static GEN: AtomicU64 = AtomicU64::new(1);
+    &GEN
+}
+
+/// True from just before a room clip starts until that clip's wait finishes.
+#[cfg(not(test))]
+fn room_owns_player() -> &'static AtomicBool {
+    static OWNS: AtomicBool = AtomicBool::new(false);
+    &OWNS
+}
+
+#[cfg(not(test))]
+#[must_use]
+fn room_generation_matches(job_gen: u64) -> bool {
+    crate::team::room_speech_generation_current(
+        job_gen,
+        room_speech_generation().load(Ordering::SeqCst),
+    )
+}
+
+/// Drop queued member lines from the previous operator post.
+///
+/// Returns the generation stamped onto the new fan-out. Interrupts the shared
+/// player only when a room clip owns it, so an ask or Voice Agent player stays up.
+#[cfg(not(test))]
+#[must_use]
+pub(crate) fn clear_room_speech() -> u64 {
+    let next = room_speech_generation().fetch_add(1, Ordering::SeqCst) + 1;
+    if room_owns_player().swap(false, Ordering::SeqCst) {
+        softwake_voice::interrupt_playback();
+        softwake_voice::force_clear_input_mute();
+    }
+    next
+}
+
+/// Wait until the shared player is quiet, or until this room post is stale.
+///
+/// False means `job_gen` no longer matches and the caller must not start a clip.
+/// After [`QUEUE_IDLE_WAIT`] a stuck player does not block the queue forever.
+#[cfg(not(test))]
+#[must_use]
+fn wait_until_playback_quiet(job_gen: u64) -> bool {
+    let start = Instant::now();
+    loop {
+        if !room_generation_matches(job_gen) {
+            return false;
+        }
+        if !softwake_voice::playback_busy() {
+            return true;
+        }
+        if start.elapsed() >= QUEUE_IDLE_WAIT {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(40));
+    }
+}
+
+/// Speak one member reply on the existing TTS player, in `voice`.
+///
+/// `voice` is the profile's stored `tts_voice` (empty means Eve inside
+/// `resolve_tts_voice`). The value is copied onto a local `DiskChat`
+/// and is not written back to Settings. `job_gen` is the generation from the
+/// operator post that produced this reply. A newer post makes the line a no-op.
+#[cfg(not(test))]
+pub(crate) fn spawn_room_line(line: String, voice: String, job_gen: u64) {
+    let _ = thread::Builder::new()
+        .name("softwake-room-voice".to_owned())
+        .spawn(move || play_room_line(&line, &voice, job_gen));
+}
+
+#[cfg(not(test))]
+fn play_room_line(line: &str, voice: &str, job_gen: u64) {
+    let _guard = speak_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !room_generation_matches(job_gen) || !wait_until_playback_quiet(job_gen) {
+        return;
+    }
+    // Own the player before speak, so a new post can interrupt this clip.
+    room_owns_player().store(true, Ordering::SeqCst);
+    if !room_generation_matches(job_gen) {
+        room_owns_player().store(false, Ordering::SeqCst);
+        return;
+    }
+    let spoke = speak_room_line(line, voice, job_gen);
+    if !room_generation_matches(job_gen) {
+        if room_owns_player().swap(false, Ordering::SeqCst) {
+            softwake_voice::interrupt_playback();
+            softwake_voice::force_clear_input_mute();
+        }
+        return;
+    }
+    if spoke && !wait_until_playback_quiet(job_gen) {
+        softwake_voice::interrupt_playback();
+        softwake_voice::force_clear_input_mute();
+    }
+    room_owns_player().store(false, Ordering::SeqCst);
+}
+
+/// Returns true when a clip was handed to the player.
+#[cfg(not(test))]
+#[must_use]
+fn speak_room_line(line: &str, voice: &str, job_gen: u64) -> bool {
+    let mut ready = match crate::chat::load_disk_chat() {
+        Ok(ready) => ready,
+        Err(message) => {
+            log_skip(1, "room", &format!("voice skipped: {message}"));
+            return false;
+        }
+    };
+    if !family_speaks_xai(ready.prepared.provider) {
+        log_skip(1, "room", "voice skipped: provider has no TTS");
+        return false;
+    }
+    if resolve_tts_voice(ready.prepared.provider, voice).is_none() {
+        log_skip(1, "room", "voice skipped: no TTS voice");
+        return false;
+    }
+    // Re-check after disk load. A post during load must not start this clip.
+    if !room_generation_matches(job_gen) {
+        return false;
+    }
+    voice.clone_into(&mut ready.tts_voice);
+    match crate::talk::speak_reply_with_interrupt(&ready, line, false) {
+        Ok(()) => true,
+        Err(message) => {
+            log_skip(1, "room", &format!("voice skipped: {message}"));
+            false
+        }
+    }
 }
 
 #[cfg(not(test))]

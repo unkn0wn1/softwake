@@ -33,7 +33,7 @@ pub use playback::{
     INPUT_MUTE_TEST_LOCK, Mp3PipePlayer, PLAYBACK_MUTE_GRACE, PLAYBACK_TIMEOUT, PcmPipePlayer,
     PlaybackMode, PlayedClip, begin_input_mute, clear_input_mute_for_test, end_input_mute,
     force_clear_input_mute, input_muted, interrupt_playback, play_audio, play_audio_with_interrupt,
-    play_mp3_pipe_start, play_pcm_pipe_start, wait_for_playback_idle,
+    play_mp3_pipe_start, play_pcm_pipe_start, playback_busy, wait_for_playback_idle,
 };
 #[cfg(feature = "sherpa-asr")]
 pub use sherpa_asr::SherpaAsr;
