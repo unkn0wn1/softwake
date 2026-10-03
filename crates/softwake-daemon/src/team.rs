@@ -100,6 +100,54 @@ fn is_no_reply(text: &str) -> bool {
     lower.is_empty() || lower == "no_reply" || lower == "no reply"
 }
 
+/// Profile id on the operator's typed room line. Member replies use real profile ids.
+const ROOM_OPERATOR_ID: &str = "operator";
+
+/// Text and stored voice for one member reply that should be spoken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RoomSpeechRequest {
+    /// Trimmed reply text.
+    pub text: String,
+    /// Profile `tts_voice` as stored. Empty stays empty so speak time maps it to Eve.
+    pub voice: String,
+}
+
+/// Member `Say` lines are spoken. The operator line, quiet replies, and other kinds are not.
+#[must_use]
+pub(crate) fn room_speech_request(
+    kind: RoomLogKind,
+    profile_id: &str,
+    text: &str,
+    tts_voice: &str,
+) -> Option<RoomSpeechRequest> {
+    if kind != RoomLogKind::Say || profile_id == ROOM_OPERATOR_ID || is_no_reply(text) {
+        return None;
+    }
+    Some(RoomSpeechRequest {
+        text: text.trim().to_owned(),
+        voice: tts_voice.to_owned(),
+    })
+}
+
+/// True when a queued line still belongs to the operator post that is current.
+#[must_use]
+pub(crate) const fn room_speech_generation_current(enqueued: u64, live: u64) -> bool {
+    enqueued == live
+}
+
+/// Queue playback for a logged member reply. Tests do not open a player.
+fn enqueue_member_speech(profile_id: &str, text: &str, tts_voice: &str, speech_gen: u64) {
+    let Some(request) = room_speech_request(RoomLogKind::Say, profile_id, text, tts_voice) else {
+        return;
+    };
+    #[cfg(not(test))]
+    crate::announce::spawn_room_line(request.text, request.voice, speech_gen);
+    #[cfg(test)]
+    {
+        let _ = (request, speech_gen);
+    }
+}
+
 /// One in-flight room fan-out. Later posts wait so members do not interleave.
 fn room_fanout_single_flight() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
@@ -510,6 +558,8 @@ pub(crate) struct RoomFanoutJob {
     pub rooms_dir: PathBuf,
     pub state_dir: PathBuf,
     pub room_path: PathBuf,
+    /// Speech generation captured when this post cleared the previous queue.
+    pub speech_gen: u64,
 }
 
 /// Write the operator line and return immediately with an optional fan-out job.
@@ -545,12 +595,19 @@ pub(crate) fn commit_operator_room_post(
         .collect::<Vec<_>>()
         .join("\n");
 
+    // A new typed line drops unplayed member audio from the previous post.
+    // Reads above can still fail without cutting speech that is already playing.
+    #[cfg(not(test))]
+    let speech_gen = crate::announce::clear_room_speech();
+    #[cfg(test)]
+    let speech_gen = 0u64;
+
     append_room_log(
         &state_dir,
         room_id,
         &RoomLogLine {
             ts_ms: softwake_tools::now_ms(),
-            profile_id: "operator".into(),
+            profile_id: ROOM_OPERATOR_ID.into(),
             name: "Operator".into(),
             kind: RoomLogKind::Say,
             text: text.to_owned(),
@@ -586,6 +643,7 @@ pub(crate) fn commit_operator_room_post(
         rooms_dir,
         state_dir,
         room_path: path,
+        speech_gen,
     };
     Ok((message, Some(job)))
 }
@@ -669,6 +727,7 @@ where
             continue;
         }
         let _ = mark_room_turn(&job.rooms_dir, room_id, member_id);
+        enqueue_member_speech(member_id, trimmed, &meta.tts_voice, job.speech_gen);
         if !thread_notes.is_empty() {
             thread_notes.push('\n');
         }
@@ -750,5 +809,32 @@ mod tests {
             &target
         ));
         assert!(!room_lists_member(&["spencer".into()], &target));
+    }
+
+    #[test]
+    fn room_speech_request_speaks_member_say_only() {
+        use softwake_providers::{ProviderId, resolve_tts_voice};
+
+        let say = room_speech_request(RoomLogKind::Say, "sally", " hello ", "").expect("say");
+        assert_eq!(say.text, "hello");
+        assert_eq!(say.voice, "");
+        assert_eq!(
+            resolve_tts_voice(ProviderId::XaiKey, &say.voice),
+            Some("eve")
+        );
+        let ara = room_speech_request(RoomLogKind::Say, "nova", "yo", "ara").expect("ara");
+        assert_eq!(ara.text, "yo");
+        assert_eq!(ara.voice, "ara");
+        assert_eq!(
+            resolve_tts_voice(ProviderId::XaiKey, &ara.voice),
+            Some("ara")
+        );
+        assert!(room_speech_request(RoomLogKind::Say, "operator", "hi", "rex").is_none());
+        assert!(room_speech_request(RoomLogKind::Say, "sally", "NO_REPLY", "leo").is_none());
+        assert!(room_speech_request(RoomLogKind::GoalProgress, "sally", "step", "leo").is_none());
+        assert!(room_speech_request(RoomLogKind::Dm, "sally", "dm", "leo").is_none());
+        assert!(room_speech_request(RoomLogKind::System, "sally", "note", "").is_none());
+        assert!(!room_speech_generation_current(1, 2));
+        assert!(room_speech_generation_current(2, 2));
     }
 }

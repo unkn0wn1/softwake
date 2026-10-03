@@ -207,6 +207,22 @@ pub fn wait_for_playback_idle(timeout: Duration) -> bool {
     true
 }
 
+/// True while a spawned player pid is still remembered, or mic mute is held.
+///
+/// Voice Agent playback does not arm mute, but it still records the player
+/// pid. Room speech waits on this so it does not open a second player over
+/// that clip. [`wait_for_playback_idle`] stays mute-only for ask TTS.
+#[must_use]
+pub fn playback_busy() -> bool {
+    if input_muted() {
+        return true;
+    }
+    let guard = LAST_PLAYER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard.is_some()
+}
+
 /// Stop the last spawned player, if Softwake still knows its pid.
 ///
 /// Hard-kill (SIGKILL) + brief drain so a barge / new Voice Agent reply never
