@@ -198,6 +198,25 @@ body {
   display: none !important;
 }
 
+/* Author `display` on #log, #ask-form, and .chat-toolbar beats the user-agent
+   [hidden] rule. Setting hidden left the profile transcript and Send on screen
+   under a half-height room pane (two composers). room-open drops those siblings
+   so the one room pane fills the column. Tool approval cards stay. */
+#log[hidden],
+#ask-form[hidden],
+.chat-toolbar[hidden] {
+  display: none !important;
+}
+
+#strip-main.room-open > :not(#room-panel):not(#hud-pending):not(#hud-allow) {
+  display: none !important;
+}
+
+#strip-main.room-open > #room-panel {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
 .room-panel-bar {
   display: flex;
   align-items: center;

@@ -2,6 +2,7 @@ const capsule = document.querySelector("#capsule");
 const canvas = document.querySelector("#bloom");
 const ctx = canvas.getContext("2d");
 const strip = document.querySelector("#strip");
+const stripMain = document.querySelector("#strip-main");
 const logEl = document.querySelector("#log");
 const liveEl = document.querySelector("#live");
 const form = document.querySelector("#ask-form");
@@ -335,7 +336,7 @@ function setExpanded(next) {
   if (next) {
     strip.hidden = false;
     if (chatToolbar) {
-      chatToolbar.hidden = false;
+      chatToolbar.hidden = roomViewOpen;
     }
     if (pinBtn) {
       pinBtn.hidden = false;
@@ -346,7 +347,11 @@ function setExpanded(next) {
     if (resizeGrip) {
       resizeGrip.hidden = false;
     }
-    input.focus();
+    if (roomViewOpen && roomCompose) {
+      roomCompose.focus();
+    } else {
+      input.focus();
+    }
     markActivity();
     void refreshProfileName(true);
   } else {
@@ -1161,6 +1166,9 @@ function renderProfileRail(snap) {
 
 function setRoomView(open) {
   roomViewOpen = !!open;
+  if (stripMain) {
+    stripMain.classList.toggle("room-open", roomViewOpen);
+  }
   if (roomPanel) {
     roomPanel.hidden = !roomViewOpen;
   }
@@ -1182,6 +1190,9 @@ function setRoomView(open) {
 function closeRoomChat() {
   selectedRoomId = "";
   setRoomView(false);
+  if (expanded && input) {
+    input.focus();
+  }
   if (roomsRailList) {
     for (const btn of roomsRailList.querySelectorAll(".profile-rail-item")) {
       btn.setAttribute("aria-selected", "false");
@@ -1273,6 +1284,9 @@ async function openRoomChat(id, title) {
   if (roomPanelTitle) roomPanelTitle.textContent = title || next;
   setRoomView(true);
   markActivity();
+  if (roomCompose) {
+    roomCompose.focus();
+  }
   if (roomPanelStatus) roomPanelStatus.textContent = "";
   await refreshRoomsRail();
 }
@@ -1543,7 +1557,7 @@ function applyContextMeter(snap) {
   const awake = (snap && snap.state) === "awake";
   const used = snap && snap.context_used != null ? Number(snap.context_used) : null;
   const limit = snap && snap.context_limit != null ? Number(snap.context_limit) : null;
-  if (!awake || used == null || limit == null || !(limit > 0)) {
+  if (roomViewOpen || !awake || used == null || limit == null || !(limit > 0)) {
     contextMeter.hidden = true;
     contextMeterLabel.textContent = "";
     contextMeterFill.style.width = "0%";
