@@ -4,7 +4,12 @@
 
 ### Fixed
 
-- **Rooms (ADR-0052):** Settings list shows persisted rooms after Save (create-on-first-use / upsert); New is an action, not a fake top room; missing room reads return a clear `not found` instead of raw ENOENT; operator room chat pane posts with member fan-out (optional reply, cool-down + single-flight); `goal_run` logs plan/revise/gate/execute to room + HUD.
+- **Room fan-out:** an operator post wakes every member to decide (reply or `NO_REPLY`), sequentially with cool-down and single-flight. Member tokens resolve from profile id or display name, and the first speaker does not cancel the rest.
+- **Rooms (ADR-0052):** Settings list shows persisted rooms after Save Settings list shows persisted rooms after Save (create-on-first-use / upsert); New is an action, not a fake top room; missing room reads return a clear `not found` instead of raw ENOENT; operator room chat pane posts with member fan-out (optional reply, cool-down + single-flight); `goal_run` logs plan/revise/gate/execute to room + HUD.
+
+### Changed
+
+- **HUD left rail:** **Profiles** stays at the top. **Rooms** sits halfway down the same rail and opens room history, compose, and member replies. Settings → Rooms remains for create/members admin.
 
 ### Added
 
