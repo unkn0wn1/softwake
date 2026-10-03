@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- **HUD room chat:** clicking a room replaces the single chat pane (history, one composer, one Send), the same way switching profiles refreshes that pane. The profile log and Send no longer stay visible underneath, so a second composer does not stack in the top half.
+
 - **Room fan-out:** an operator post wakes every member to decide (reply or `NO_REPLY`), sequentially with cool-down and single-flight. Member tokens resolve from profile id or display name, and the first speaker does not cancel the rest.
 - **Rooms (ADR-0052):** Settings list shows persisted rooms after Save Settings list shows persisted rooms after Save (create-on-first-use / upsert); New is an action, not a fake top room; missing room reads return a clear `not found` instead of raw ENOENT; operator room chat pane posts with member fan-out (optional reply, cool-down + single-flight); `goal_run` logs plan/revise/gate/execute to room + HUD.
 
