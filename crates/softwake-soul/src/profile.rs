@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! softwake.json                 # { "version": 1, "active_profile": "<id>", optional kws_*_milli, free_speech_end_silence_ms, tts_playback_timeout_ms, webhook_enabled, webhook_port, voice_agent_s2s }
-//! profiles/<id>/profile.json    # id, name, use_global_user/glossary/rules (default true)
+//! profiles/<id>/profile.json    # id, name, use_global_user/glossary/rules (default true), tts_voice (empty = Default)
 //! profiles/<id>/{soul,user,rules,glossary}.md
 //! soul/                         # legacy pack; migration source only
 //! ```
@@ -185,6 +185,11 @@ pub struct ProfileMeta {
     /// Agent role: `general` (default) or `coding` (prefer `grok_cli` goal backend).
     #[serde(default = "default_profile_role")]
     pub role: String,
+    /// Saved xAI TTS voice id. Empty means Default (Eve at speak time).
+    ///
+    /// Absent on older `profile.json` files. Callers store a roster id or `""`.
+    #[serde(default)]
+    pub tts_voice: String,
 }
 
 impl ProfileMeta {
@@ -204,6 +209,7 @@ impl ProfileMeta {
             use_global_rules: true,
             allow_all: false,
             role: default_profile_role(),
+            tts_voice: String::new(),
         }
     }
 
@@ -663,7 +669,33 @@ pub fn rename_profile(
             detail: "agent name cannot be empty".to_owned(),
         });
     }
-    let meta = ProfileMeta::new(profile_id, trimmed);
+    let mut meta = load_profile_meta(&dir);
+    profile_id.clone_into(&mut meta.id);
+    trimmed.clone_into(&mut meta.name);
+    write_profile_meta(&dir, &meta)?;
+    Ok(meta)
+}
+
+/// Store the profile TTS voice. Callers pass `""` or a canonical roster id.
+///
+/// # Errors
+///
+/// Unknown profile or write failure.
+pub fn set_profile_tts_voice(
+    config_dir: &Path,
+    profile_id: &str,
+    tts_voice: &str,
+) -> Result<ProfileMeta, SoulError> {
+    ensure_migrated(config_dir)?;
+    let dir = profile_pack_dir(config_dir, profile_id);
+    if !dir.is_dir() {
+        return Err(SoulError::UnknownProfile {
+            id: profile_id.to_owned(),
+        });
+    }
+    let mut meta = load_profile_meta(&dir);
+    profile_id.clone_into(&mut meta.id);
+    tts_voice.clone_into(&mut meta.tts_voice);
     write_profile_meta(&dir, &meta)?;
     Ok(meta)
 }
@@ -1230,5 +1262,29 @@ mod tests {
             resolve_main_profile_id(&root.path).expect("main id"),
             "default"
         );
+    }
+
+    #[test]
+    fn tts_voice_defaults_empty_round_trips_and_rename_preserves_meta() {
+        let raw: ProfileMeta = serde_json::from_str(r#"{"id":"ada","name":"Ada"}"#).expect("parse");
+        assert_eq!(raw.tts_voice, "");
+
+        let root = TempDir::new("tts-voice");
+        ensure_migrated(&root.path).expect("migrate");
+        let created = create_profile(&root.path, "Ada", None).expect("create");
+        assert_eq!(created.tts_voice, "");
+        let saved = set_profile_tts_voice(&root.path, &created.id, "ara").expect("voice");
+        assert_eq!(saved.tts_voice, "ara");
+        let dir = profile_pack_dir(&root.path, &created.id);
+        let mut meta = load_profile_meta(&dir);
+        meta.role = PROFILE_ROLE_CODING.to_owned();
+        meta.allow_all = true;
+        write_profile_meta(&dir, &meta).expect("meta");
+        let renamed = rename_profile(&root.path, &created.id, "Ada Two").expect("rename");
+        assert_eq!(renamed.name, "Ada Two");
+        assert_eq!(renamed.tts_voice, "ara");
+        assert_eq!(renamed.role, PROFILE_ROLE_CODING);
+        assert!(renamed.allow_all);
+        assert!(renamed.use_global_user);
     }
 }

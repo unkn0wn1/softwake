@@ -51,3 +51,7 @@ ADR 0011 defined the four-file pack in a single soul directory. Operators want m
 ## Amendment (2026-10-03) — global user, glossary, and rules ([ADR 0051](ADR-0051-shell-redesign.md))
 
 `profile.json` may also store `use_global_user`, `use_global_glossary`, and `use_global_rules` (default true when absent). The main profile is `default`, or the lexicographically first profile id if that folder is missing. Main always uses its own three files. Other profiles render the main file for each flag that is true, and the glossary alias map is parsed from that body. Soul stays on the profile. Settings → Global edits the main three files. A checked Use-global box is a read-only preview; unchecking an empty file seeds a commented scaffold.
+
+## Amendment (2026-10-03): per-profile TTS voice
+
+`profile.json` may store `tts_voice` (default empty). Empty means Default, which speaks as Eve. The Profiles editor, HUD voice chevron, Providers TTS picker, and `/voice` keep that field aligned with the live `selected_tts_voice` for the active profile. See the [ADR 0051](ADR-0051-shell-redesign.md) amendment of the same date.

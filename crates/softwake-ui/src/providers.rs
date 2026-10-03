@@ -585,21 +585,38 @@ pub fn provider_set_tts_voice(voice_id: String) -> Result<ProviderSnapshot, Stri
         voice.clone_into(&mut settings.selected_tts_voice);
     }
     store.save(&settings).map_err(|e| e.to_string())?;
+    let write_back = write_back_active_profile_voice(&settings.selected_tts_voice);
     // Restart S2S (if it is on) so the new voice is the one on the wire.
     poke_voice_agent_reload();
+    write_back?;
     load_snapshot()
 }
 
-/// Clear the stored TTS voice to Default (empty → Eve via `resolve_tts_voice`).
+/// Write an already-canonical TTS voice (or empty for Default) and reload S2S.
 ///
-/// Does not require an xAI provider. Profile switches call this so the chevron,
-/// `/voice`, and Providers stay on one field.
-pub fn clear_selected_tts_voice() -> Result<(), String> {
+/// Does not touch `profile.json`. Callers that must stick the choice across a
+/// profile switch use [`write_back_active_profile_voice`] separately.
+pub(crate) fn write_live_tts_voice(voice: &str) -> Result<(), String> {
     let store = open_settings()?;
     let mut settings = store.load().map_err(|e| e.to_string())?;
-    settings.selected_tts_voice.clear();
+    voice.clone_into(&mut settings.selected_tts_voice);
     store.save(&settings).map_err(|e| e.to_string())?;
     poke_voice_agent_reload();
+    Ok(())
+}
+
+/// Save `voice` onto the active profile. Does not write `providers.json`.
+fn write_back_active_profile_voice(voice: &str) -> Result<(), String> {
+    let xdg = std::env::var_os("XDG_CONFIG_HOME");
+    let home = std::env::var_os("HOME");
+    let config = softwake_soul::resolve_config_dir(
+        xdg.as_ref().map(std::path::PathBuf::from).as_deref(),
+        home.as_ref().map(std::path::PathBuf::from).as_deref(),
+    )
+    .map_err(|error| error.to_string())?;
+    let app = softwake_soul::load_app_config(&config).map_err(|error| error.to_string())?;
+    softwake_soul::set_profile_tts_voice(&config, &app.active_profile, voice)
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 

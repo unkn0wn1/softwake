@@ -506,7 +506,7 @@ The soul directory is the first match of `--soul-dir PATH` (on `serve` and `demo
 - Opens **expanded** (default 520×620, resizable; size in `ui-prefs.json`). The shrunk orb is a square bloom (`hud_shrunk_px`, default 120, range 96–280) with a minimal 2-way control, voice chevron, and gear. Click the bloom to shrink or expand. The window stays open until that click. Idle auto-collapse and the pin control are retired.
 - Chat log keeps up to 40 turns per profile in `profiles/<id>/hud-chat.json` (optional passphrase encryption — [ADR 0026](docs/ADR-0026-hud-chat-unlock.md)). On wake, a budgeted suffix seeds the model session so Softwake remembers prior turns after sleep. A pending tool still holds the panel open until Approve or Deny.
 - **2-way on** is awake listening. **2-way off** is sleep (the wake word still works). Hibernate is separate and stops the mic until Resume. If Voice Agent S2S is on, 2-way uses that path and does not also run free-speech.
-- The voice chevron writes `selected_tts_voice`. Switching profile resets it to Default.
+- The voice chevron writes `selected_tts_voice`. Switching profile applies that profile's saved voice (empty means Eve).
 - Drag the bloom to move it; Softwake persists that spot and keeps the bottom-right corner across expand/collapse until `hud-position.json` is cleared.
 - Particles follow capture level while listening ([ADR 0015](docs/ADR-0015-tray-hud.md), [ADR 0016](docs/ADR-0016-capture-level-hud.md)): daemon sends peak-normalized RMS on `Status` when PCM is scored; UI falls back to a local sine when that field is absent. Settings → General **bloom intensity** (`hud_bloom_intensity`, default 100%, range 25–200) multiplies density and brightness. Capture level stays the base.
 

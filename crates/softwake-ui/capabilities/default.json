@@ -97,6 +97,7 @@
     "allow-profile-set-global-flags",
     "allow-profile-set-allow-all",
     "allow-profile-set-role",
+    "allow-profile-set-tts-voice",
     "allow-rooms-snapshot",
     "allow-room-create",
     "allow-room-save",

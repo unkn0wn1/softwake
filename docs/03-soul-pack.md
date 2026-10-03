@@ -66,7 +66,7 @@ First match wins:
 2. `SOFTWAKE_SOUL_DIR` (same)
 3. Active profile pack: `$XDG_CONFIG_HOME/softwake/profiles/<id>/` (or `~/.config/softwake/profiles/<id>/`), after migrate from legacy `soul/` when needed
 
-`softwake.json` holds `active_profile`. Each profile directory has `profile.json` (`id`, `name`) plus the four markdown files. See [ADR 0017](ADR-0017-profiles.md).
+`softwake.json` holds `active_profile`. Each profile directory has `profile.json` (`id`, `name`, and `tts_voice`, empty for Default which speaks as Eve) plus the four markdown files. See [ADR 0017](ADR-0017-profiles.md).
 
 The directory does not have to exist at startup when a flag or env override is used. Profile resolution creates the default profile on first use. Status reports the pack as missing until the files are valid.
 
