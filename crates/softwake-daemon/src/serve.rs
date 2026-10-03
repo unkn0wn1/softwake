@@ -369,7 +369,7 @@ impl Shared {
     }
 }
 
-fn client_loop(stream: IpcStream, shared: &Shared) {
+fn client_loop(stream: IpcStream, shared: &Arc<Shared>) {
     // Subscribe before `hello_ok` so a state change cannot be broadcast in
     // the gap after the client has observed the handshake.
     let pending = match ServerConnection::begin(stream) {
@@ -442,7 +442,7 @@ fn cancel_ask_outcome(shared: &Shared) -> crate::runtime::Outcome {
     clippy::too_many_lines,
     reason = "client message match arms stay co-located; RoomPost is additive"
 )]
-fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerReader) -> bool {
+fn handle_next(shared: &Arc<Shared>, tx: &SyncSender<Outbound>, reader: &mut ServerReader) -> bool {
     match reader.read() {
         Ok(ClientMessage::Request { id, command }) => {
             let (outcome, pending_auto) = if matches!(command, Command::GetStatus) {
@@ -537,8 +537,17 @@ fn handle_next(shared: &Shared, tx: &SyncSender<Outbound>, reader: &mut ServerRe
         }
         Ok(ClientMessage::RoomPost { id, room_id, text }) => {
             publish_thinking(shared, "room post");
-            let outcome = lock(&shared.runtime).room_post_from_ui(&room_id, &text);
-            reply(shared, tx, id, outcome)
+            match crate::team::commit_operator_room_post(&room_id, &text) {
+                Ok((message, job)) => {
+                    let outcome = lock(&shared.runtime).ack_room_post(message);
+                    let ok = reply(shared, tx, id, outcome);
+                    if let Some(job) = job {
+                        spawn_room_fanout(shared, job);
+                    }
+                    ok
+                }
+                Err(message) => reply(shared, tx, id, Runtime::reject_room_post(message)),
+            }
         }
         Ok(ClientMessage::Hello { .. }) => false,
         Err(error) if error.is_disconnect() => false,
@@ -695,6 +704,18 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
+}
+
+fn spawn_room_fanout(shared: &Arc<Shared>, job: crate::team::RoomFanoutJob) {
+    let shared = Arc::clone(shared);
+    let _ = thread::Builder::new()
+        .name("softwake-room-fanout".to_owned())
+        .spawn(move || {
+            crate::team::run_room_fanout(&job, |profile_id, instructions, allow_all, stimulus| {
+                let mut runtime = lock(&shared.runtime);
+                runtime.oneshot_as_profile(profile_id, instructions, allow_all, stimulus)
+            });
+        });
 }
 
 fn spawn_telegram_poll(shared: Arc<Shared>) {

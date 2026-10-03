@@ -495,22 +495,30 @@ fn run_grok_prompt(prompt: &str, cwd: &std::path::Path, plan_mode: bool) -> Resu
     }
 }
 
-/// Operator room post: log the message, then wake every member to decide.
+/// Prepared member fan-out after the operator line is on disk.
 ///
-/// Members may be profile ids or display names. Each resolved profile gets a
-/// oneshot (reply or `NO_REPLY`). A reply does not cancel the remaining members.
-/// Turns are sequential with [`ROOM_COOLDOWN_MS`] between them, and
-/// [`room_fanout_single_flight`] keeps a second post from interleaving.
-#[allow(
-    clippy::too_many_lines,
-    reason = "room fan-out + cool-down stay in one ADR-0052 flow"
-)]
-pub(crate) fn run_room_post(
-    runtime: &mut Runtime,
+/// [`commit_operator_room_post`] returns this so the IPC path can reply, then
+/// [`run_room_fanout`] can run on a background thread.
+#[derive(Debug, Clone)]
+pub(crate) struct RoomFanoutJob {
+    pub room_id: String,
+    pub operator_text: String,
+    pub title: String,
+    pub members: Vec<ProfileMeta>,
+    pub unknown: Vec<String>,
+    pub recent_ctx: String,
+    pub rooms_dir: PathBuf,
+    pub state_dir: PathBuf,
+    pub room_path: PathBuf,
+}
+
+/// Write the operator line and return immediately with an optional fan-out job.
+///
+/// Does **not** call the LLM. Member oneshots belong in [`run_room_fanout`].
+pub(crate) fn commit_operator_room_post(
     room_id: &str,
     operator_text: &str,
-) -> Result<String, String> {
-    let _fanout_flight = room_fanout_single_flight();
+) -> Result<(String, Option<RoomFanoutJob>), String> {
     let text = operator_text.trim();
     if text.is_empty() {
         return Err("room post needs text".into());
@@ -557,25 +565,59 @@ pub(crate) fn run_room_post(
     let config = resolve_config_dir(xdg.as_deref(), home.as_deref()).map_err(|e| e.to_string())?;
     let profiles = list_profiles(&config).map_err(|e| e.to_string())?;
     let (members, unknown) = resolve_fanout_members(&room.members, &profiles);
-
-    let mut replied: Vec<String> = Vec::new();
-    let mut skipped: Vec<String> = Vec::new();
-    for raw in &unknown {
-        skipped.push(format!("{raw} (unknown profile)"));
-    }
     let title = if room.title.is_empty() {
         room_id.to_owned()
     } else {
         room.title.clone()
     };
+    let wake_n = members.len();
+    let message =
+        format!("room `{room_id}`: operator posted; waking {wake_n} member(s) in background");
+    if members.is_empty() && unknown.is_empty() {
+        return Ok((message, None));
+    }
+    let job = RoomFanoutJob {
+        room_id: room_id.to_owned(),
+        operator_text: text.to_owned(),
+        title,
+        members,
+        unknown,
+        recent_ctx,
+        rooms_dir,
+        state_dir,
+        room_path: path,
+    };
+    Ok((message, Some(job)))
+}
+
+/// Sequential member oneshots with cool-down + single-flight.
+///
+/// `oneshot` must lock the runtime only for the duration of one LLM turn so
+/// the UI/IPC path stays free. Replies append to the room log as they finish.
+#[allow(
+    clippy::too_many_lines,
+    reason = "room fan-out + cool-down stay in one ADR-0052 flow"
+)]
+pub(crate) fn run_room_fanout<F>(job: &RoomFanoutJob, mut oneshot: F)
+where
+    F: FnMut(&str, &str, bool, &str) -> Result<String, String>,
+{
+    let _fanout_flight = room_fanout_single_flight();
+    let room_id = job.room_id.as_str();
+    let text = job.operator_text.as_str();
+    let title = job.title.as_str();
+    let mut replied: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    for raw in &job.unknown {
+        skipped.push(format!("{raw} (unknown profile)"));
+    }
     let mut thread_notes = String::new();
 
-    // Every resolved member is asked. Do not return after the first speaker.
-    for (index, member) in members.iter().enumerate() {
+    for (index, member) in job.members.iter().enumerate() {
         if index > 0 {
             pause_between_members();
         }
-        wait_room_cooldown(&path);
+        wait_room_cooldown(&job.room_path);
 
         let member_id = member.id.as_str();
         let Ok((meta, instructions)) = load_profile_instructions(member_id) else {
@@ -589,30 +631,29 @@ pub(crate) fn run_room_post(
             meta.name.clone()
         };
         let prior = if thread_notes.is_empty() {
-            recent_ctx.clone()
-        } else if recent_ctx.is_empty() {
+            job.recent_ctx.clone()
+        } else if job.recent_ctx.is_empty() {
             thread_notes.clone()
         } else {
-            format!("{recent_ctx}\n{thread_notes}")
+            format!("{}\n{thread_notes}", job.recent_ctx)
         };
         let stimulus = format!(
             "You are in Softwake room `{room_id}` (title: {title}). You are {display} (profile id `{member_id}`).\n\nRecent room context:\n{prior}\n\nOperator message:\n{text}\n\nSoftwake wakes every room member, one at a time, with a cool-down between turns. Another member already speaking does not cancel your turn.\nDecide for yourself:\n- If you should reply, write your room message only (no preamble).\n- If you should stay quiet, reply with exactly: NO_REPLY"
         );
-        let reply =
-            match runtime.oneshot_as_profile(member_id, &instructions, meta.allow_all, &stimulus) {
-                Ok(r) => r,
-                Err(error) => {
-                    skipped.push(format!("{member_id} (error: {error})"));
-                    continue;
-                }
-            };
+        let reply = match oneshot(member_id, &instructions, meta.allow_all, &stimulus) {
+            Ok(r) => r,
+            Err(error) => {
+                skipped.push(format!("{member_id} (error: {error})"));
+                continue;
+            }
+        };
         if is_no_reply(&reply) {
             skipped.push(format!("{member_id} (NO_REPLY)"));
             continue;
         }
         let trimmed = reply.trim();
         if let Err(error) = append_room_log(
-            &state_dir,
+            &job.state_dir,
             room_id,
             &RoomLogLine {
                 ts_ms: softwake_tools::now_ms(),
@@ -627,7 +668,7 @@ pub(crate) fn run_room_post(
             skipped.push(format!("{member_id} (log error: {error})"));
             continue;
         }
-        let _ = mark_room_turn(&rooms_dir, room_id, member_id);
+        let _ = mark_room_turn(&job.rooms_dir, room_id, member_id);
         if !thread_notes.is_empty() {
             thread_notes.push('\n');
         }
@@ -645,10 +686,10 @@ pub(crate) fn run_room_post(
     } else {
         skipped.join(", ")
     };
-    Ok(format!(
-        "room `{room_id}`: operator posted; woke {}; replied: {replied_s}; quiet: {skipped_s}",
-        members.len()
-    ))
+    eprintln!(
+        "softwaked: room `{room_id}` fan-out done; woke {}; replied: {replied_s}; quiet: {skipped_s}",
+        job.members.len()
+    );
 }
 
 #[cfg(test)]

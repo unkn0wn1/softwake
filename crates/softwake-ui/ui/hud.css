@@ -246,21 +246,46 @@ body {
 }
 
 .room-panel-log {
-  white-space: pre-wrap;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  white-space: normal;
+  overflow: auto;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .room-line {
-  margin: 0 0 0.45rem;
+  margin: 0;
   font-size: 0.82rem;
   line-height: 1.35;
 }
 
-.room-line .who {
-  font-weight: 650;
+.room-bubble {
+  box-sizing: border-box;
+  max-width: 94%;
+  padding: 0.45rem 0.7rem;
+  border-radius: 0.85rem;
+  border: 1px solid oklch(0.55 0.06 210);
+  background: oklch(0.30 0.04 210);
+  align-self: flex-start;
 }
 
-.room-line.operator .who { color: var(--cyan); }
-.room-line.say .who { color: oklch(0.86 0.09 145); }
+.room-bubble.operator {
+  align-self: flex-end;
+}
+
+.room-bubble .who {
+  font-weight: 700;
+  font-size: 0.68rem;
+  letter-spacing: 0.01em;
+  margin-bottom: 0.15rem;
+}
+
+.room-bubble .text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 .room-panel-status {
   margin: 0;
