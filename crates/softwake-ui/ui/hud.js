@@ -108,6 +108,8 @@ let profileSwitchBusy = false;
 let selectedRoomId = "";
 let roomViewOpen = false;
 let roomSendBusy = false;
+let roomFanoutPollTimer = null;
+let roomFanoutPollTicks = 0;
 const roomHiddenIds = ["chat-toolbar", "log", "ask-form", "context-meter", "live"];
 
 function invoke(command, args) {
@@ -1188,6 +1190,7 @@ function setRoomView(open) {
 }
 
 function closeRoomChat() {
+  stopRoomFanoutPoll();
   selectedRoomId = "";
   setRoomView(false);
   if (expanded && input) {
@@ -1200,6 +1203,53 @@ function closeRoomChat() {
   }
 }
 
+/** Stable pastel-ish bubble colors from profile id (operator + members). */
+function roomParticipantStyle(profileId) {
+  const id = String(profileId || "unknown");
+  if (id === "operator") {
+    return {
+      bg: "oklch(0.30 0.05 210)",
+      border: "oklch(0.62 0.10 210)",
+      name: "oklch(0.86 0.08 210)",
+    };
+  }
+  let hash = 2166136261;
+  for (let i = 0; i < id.length; i++) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  const hue = Math.abs(hash) % 360;
+  return {
+    bg: `oklch(0.30 0.055 ${hue})`,
+    border: `oklch(0.58 0.09 ${hue})`,
+    name: `oklch(0.86 0.08 ${hue})`,
+  };
+}
+
+function appendRoomBubble(container, line) {
+  const kind = (line && line.kind) || "say";
+  const profileId = (line && line.profile_id) || "";
+  const colors = roomParticipantStyle(profileId);
+  const row = document.createElement("div");
+  row.className =
+    "room-bubble room-line " +
+    kind +
+    (profileId === "operator" ? " operator" : "");
+  row.style.background = colors.bg;
+  row.style.borderColor = colors.border;
+  const who = document.createElement("div");
+  who.className = "who";
+  who.style.color = colors.name;
+  who.textContent = (line && (line.name || line.profile_id)) || "?";
+  const body = document.createElement("div");
+  body.className = "text";
+  body.textContent = (line && line.text) || "";
+  row.appendChild(who);
+  row.appendChild(body);
+  container.appendChild(row);
+  return row;
+}
+
 function renderRoomLog(snap) {
   if (!roomPanelLog) return;
   roomPanelLog.innerHTML = "";
@@ -1209,16 +1259,7 @@ function renderRoomLog(snap) {
     return;
   }
   for (const line of lines) {
-    const row = document.createElement("div");
-    const kind = line.kind || "say";
-    row.className = "room-line " + kind + (line.profile_id === "operator" ? " operator" : "");
-    const who = document.createElement("span");
-    who.className = "who";
-    const label = line.name || line.profile_id || "?";
-    who.textContent = label;
-    row.appendChild(who);
-    row.appendChild(document.createTextNode(": " + (line.text || "")));
-    roomPanelLog.appendChild(row);
+    appendRoomBubble(roomPanelLog, line);
   }
   roomPanelLog.scrollTop = roomPanelLog.scrollHeight;
 }
@@ -1291,6 +1332,32 @@ async function openRoomChat(id, title) {
   await refreshRoomsRail();
 }
 
+function stopRoomFanoutPoll() {
+  if (roomFanoutPollTimer) {
+    clearInterval(roomFanoutPollTimer);
+    roomFanoutPollTimer = null;
+  }
+  roomFanoutPollTicks = 0;
+}
+
+function startRoomFanoutPoll() {
+  stopRoomFanoutPoll();
+  roomFanoutPollTicks = 0;
+  roomFanoutPollTimer = setInterval(() => {
+    roomFanoutPollTicks += 1;
+    if (!roomViewOpen || roomFanoutPollTicks > 45) {
+      stopRoomFanoutPoll();
+      if (roomPanelStatus && roomViewOpen) {
+        roomPanelStatus.textContent = "Members finished (or timed out).";
+      }
+      return;
+    }
+    void refreshRoomsRail(
+      roomFanoutPollTicks === 1 ? "Members waking…" : undefined
+    );
+  }, 1200);
+}
+
 async function sendRoomMessage(event) {
   if (event) {
     event.preventDefault();
@@ -1298,17 +1365,35 @@ async function sendRoomMessage(event) {
   }
   const text = (roomCompose && roomCompose.value ? roomCompose.value : "").trim();
   if (!selectedRoomId || !text || roomSendBusy) return;
+  // Clear composer immediately so Enter does not leave stale text.
+  if (roomCompose) roomCompose.value = "";
+  // Optimistic operator bubble before IPC returns.
+  if (roomPanelLog) {
+    if (!roomPanelLog.querySelector(".room-bubble")) {
+      roomPanelLog.innerHTML = "";
+    }
+    appendRoomBubble(roomPanelLog, {
+      profile_id: "operator",
+      name: "Operator",
+      kind: "say",
+      text,
+    });
+    roomPanelLog.scrollTop = roomPanelLog.scrollHeight;
+  }
   roomSendBusy = true;
   if (roomSendBtn) roomSendBtn.disabled = true;
-  if (roomPanelStatus) roomPanelStatus.textContent = "Waking every member…";
+  if (roomPanelStatus) roomPanelStatus.textContent = "Posted. Waking members…";
   markActivity();
   try {
     const snap = await invoke("room_post", { roomId: selectedRoomId, text });
-    if (roomCompose) roomCompose.value = "";
     renderRoomsRail(snap);
     renderRoomLog(snap);
-    if (roomPanelStatus) roomPanelStatus.textContent = "Posted. Each member was asked.";
+    if (roomPanelStatus) {
+      roomPanelStatus.textContent = "Posted. Members waking in background…";
+    }
+    startRoomFanoutPoll();
   } catch (error) {
+    stopRoomFanoutPoll();
     if (roomPanelStatus) roomPanelStatus.textContent = errorText(error, "room post failed");
   } finally {
     roomSendBusy = false;

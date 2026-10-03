@@ -644,6 +644,9 @@ button.btn-primary.btn-compact {
   flex: 1 1 auto;
 }
 .rooms-chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
   flex: 1 1 auto;
   min-height: 10rem;
   max-height: 22rem;
@@ -652,21 +655,31 @@ button.btn-primary.btn-compact {
   border-radius: 0.5rem;
   background: color-mix(in oklab, Canvas 88%, CanvasText 12%);
   border: 1px solid color-mix(in oklab, CanvasText 18%, transparent);
-  white-space: pre-wrap;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.85em;
+  white-space: normal;
+  font-size: 0.9em;
 }
-.rooms-chat-line {
-  margin: 0 0 0.45rem;
+.rooms-chat-line,
+.room-bubble.rooms-chat-line {
+  margin: 0;
+  box-sizing: border-box;
+  max-width: 94%;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.85rem;
+  border: 1px solid color-mix(in oklab, CanvasText 22%, transparent);
+  align-self: flex-start;
+}
+.rooms-chat-line.operator {
+  align-self: flex-end;
 }
 .rooms-chat-line .who {
-  font-weight: 600;
+  font-weight: 700;
+  font-size: 0.75em;
+  margin-bottom: 0.2rem;
 }
-.rooms-chat-line.operator .who { color: #6cf; }
-.rooms-chat-line.say .who { color: #9d8; }
-.rooms-chat-line.dm .who,
-.rooms-chat-line.goal_progress .who,
-.rooms-chat-line.system .who { color: #ccc; }
+.rooms-chat-line .text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .rooms-admin {
   margin-top: 0.5rem;
 }

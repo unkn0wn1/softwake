@@ -2874,6 +2874,24 @@ function renderRoomsSubnav(snap) {
   }
 }
 
+function roomsParticipantStyle(profileId) {
+  const id = String(profileId || "unknown");
+  if (id === "operator") {
+    return { bg: "oklch(0.88 0.04 210)", border: "oklch(0.62 0.09 210)", name: "oklch(0.42 0.08 210)" };
+  }
+  let hash = 2166136261;
+  for (let i = 0; i < id.length; i++) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  const hue = Math.abs(hash) % 360;
+  return {
+    bg: `oklch(0.90 0.045 ${hue})`,
+    border: `oklch(0.62 0.08 ${hue})`,
+    name: `oklch(0.40 0.08 ${hue})`,
+  };
+}
+
 function renderRoomsChatLog(snap) {
   const logEl = document.querySelector("#rooms-chat-log");
   if (!logEl) return;
@@ -2886,20 +2904,28 @@ function renderRoomsChatLog(snap) {
     return;
   }
   for (const line of linesArr) {
-    const row = document.createElement("div");
     const kind = line.kind || "say";
+    const profileId = line.profile_id || "";
+    const colors = roomsParticipantStyle(profileId);
+    const row = document.createElement("div");
     row.className =
-      "rooms-chat-line " +
+      "rooms-chat-line room-bubble " +
       kind +
-      (line.profile_id === "operator" ? " operator" : "");
-    const who = document.createElement("span");
+      (profileId === "operator" ? " operator" : "");
+    row.style.background = colors.bg;
+    row.style.borderColor = colors.border;
+    const who = document.createElement("div");
     who.className = "who";
+    who.style.color = colors.name;
     const label = line.name || line.profile_id || "?";
-    const phase = line.phase ? ` ${line.phase}` : "";
-    const iter = line.iteration != null ? `#${line.iteration}` : "";
-    who.textContent = `[${kind}${iter}${phase}] ${label}`;
+    const phase = line.phase ? ` · ${line.phase}` : "";
+    const iter = line.iteration != null ? ` #${line.iteration}` : "";
+    who.textContent = kind === "say" ? label : `${label}${iter}${phase} (${kind})`;
+    const body = document.createElement("div");
+    body.className = "text";
+    body.textContent = line.text || "";
     row.appendChild(who);
-    row.appendChild(document.createTextNode(": " + (line.text || "")));
+    row.appendChild(body);
     logEl.appendChild(row);
   }
   logEl.scrollTop = logEl.scrollHeight;
@@ -3138,13 +3164,32 @@ document.querySelector("#rooms-send")?.addEventListener("click", async () => {
   const roomId =
     (roomsSnap && roomsSnap.selected_id) ||
     (document.querySelector("#rooms-list")?.value || "").trim();
-  const composeText = (document.querySelector("#rooms-compose")?.value || "").trim();
+  const compose = document.querySelector("#rooms-compose");
+  const composeText = (compose?.value || "").trim();
+  if (!composeText) return;
+  // Clear composer immediately (async fan-out must not leave the draft).
+  if (compose) compose.value = "";
   try {
     const snap = await invoke("room_post", { roomId, text: composeText });
     roomsComposingNew = false;
-    applyRoomsSnapshot(snap, "Posted.");
-    const compose = document.querySelector("#rooms-compose");
-    if (compose) compose.value = "";
+    applyRoomsSnapshot(snap, "Posted. Members waking in background…");
+    // Light poll so member bubbles appear as fan-out finishes.
+    let ticks = 0;
+    const timer = setInterval(async () => {
+      ticks += 1;
+      if (ticks > 40) {
+        clearInterval(timer);
+        return;
+      }
+      try {
+        await refreshRooms(
+          roomId,
+          ticks === 1 ? "Members waking…" : undefined
+        );
+      } catch (_) {
+        clearInterval(timer);
+      }
+    }, 1200);
   } catch (error) {
     const err = document.querySelector("#rooms-error");
     if (err) err.textContent = errorText(error);

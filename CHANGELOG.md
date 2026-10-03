@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- **Room chat freeze:** `RoomPost` writes the operator line and returns immediately; member oneshots / cool-down / `NO_REPLY` fan-out run on a background thread and append bubbles as they finish. Composer clears on Enter/Send. Room log uses speech bubbles with a stable color per participant (operator + each profile) and the name on the bubble.
+
 - **HUD room chat:** clicking a room replaces the single chat pane (history, one composer, one Send), the same way switching profiles refreshes that pane. The profile log and Send no longer stay visible underneath, so a second composer does not stack in the top half.
 
 - **Room fan-out:** an operator post wakes every member to decide (reply or `NO_REPLY`), sequentially with cool-down and single-flight. Member tokens resolve from profile id or display name, and the first speaker does not cancel the rest.

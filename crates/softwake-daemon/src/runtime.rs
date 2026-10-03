@@ -2691,16 +2691,15 @@ impl Runtime {
         }
     }
 
-    /// Seed from softwake-ui when the vault held encrypted history.
-    /// Operator posts into a room; members may choose to reply (ADR-0052).
-    pub(crate) fn room_post_from_ui(&mut self, room_id: &str, text: &str) -> Outcome {
-        match crate::team::run_room_post(self, room_id, text) {
-            Ok(message) => {
-                self.last_status_message = Some(message.clone());
-                Self::quiet(self.snapshot(Some(message), None))
-            }
-            Err(message) => Self::rejected(softwake_ipc::IpcError::ChatRejected { message }),
-        }
+    /// Ack an operator room post after the line is on disk (fan-out is async).
+    pub(crate) fn ack_room_post(&mut self, message: String) -> Outcome {
+        self.last_status_message = Some(message.clone());
+        Self::quiet(self.snapshot(Some(message), None))
+    }
+
+    /// Reject a room post that failed before the operator line was written.
+    pub(crate) fn reject_room_post(message: String) -> Outcome {
+        Self::rejected(softwake_ipc::IpcError::ChatRejected { message })
     }
 
     pub(crate) fn seed_chat_from_ui(&mut self, turns: Vec<softwake_ipc::SeedChatTurn>) -> Outcome {
