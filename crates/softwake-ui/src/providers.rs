@@ -590,19 +590,6 @@ pub fn provider_set_tts_voice(voice_id: String) -> Result<ProviderSnapshot, Stri
     load_snapshot()
 }
 
-/// Clear the stored TTS voice to Default (empty → Eve via `resolve_tts_voice`).
-///
-/// Does not require an xAI provider. Profile switches call this so the chevron,
-/// `/voice`, and Providers stay on one field.
-pub fn clear_selected_tts_voice() -> Result<(), String> {
-    let store = open_settings()?;
-    let mut settings = store.load().map_err(|e| e.to_string())?;
-    settings.selected_tts_voice.clear();
-    store.save(&settings).map_err(|e| e.to_string())?;
-    poke_voice_agent_reload();
-    Ok(())
-}
-
 fn poke_voice_agent_reload() {
     let Ok(path) = softwake_ipc::resolve_socket_path(None) else {
         return;

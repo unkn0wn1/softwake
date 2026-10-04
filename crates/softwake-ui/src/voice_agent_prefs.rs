@@ -34,15 +34,26 @@ fn snapshot_from(enabled: bool, live_applied: bool, message: String) -> VoiceAge
     }
 }
 
+/// Read `voice_agent_s2s` from `dir/softwake.json`.
+///
+/// A missing file is off. A parse error or an unreadable path is an error so
+/// the UI does not paint the checkbox off and then save that.
+pub(crate) fn read_voice_agent_s2s_enabled(dir: &std::path::Path) -> Result<bool, String> {
+    match load_app_config(dir) {
+        Ok(app) => Ok(app.voice_agent_s2s),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 /// Load the current toggle from softwake.json (default off).
 #[tauri::command]
 pub fn voice_agent_s2s_snapshot() -> Result<VoiceAgentS2sSnapshot, String> {
     let dir = config_dir()?;
-    let app = load_app_config(&dir).unwrap_or_default();
+    let enabled = read_voice_agent_s2s_enabled(&dir)?;
     Ok(snapshot_from(
-        app.voice_agent_s2s,
+        enabled,
         false,
-        if app.voice_agent_s2s {
+        if enabled {
             "Voice Agent S2S on (file)".to_owned()
         } else {
             "Voice Agent S2S off (default STT→chat→TTS)".to_owned()
@@ -80,4 +91,36 @@ pub fn voice_agent_s2s_set(enabled: bool) -> Result<VoiceAgentS2sSnapshot, Strin
     }
 
     Ok(snapshot_from(app.voice_agent_s2s, live_applied, message))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_voice_agent_s2s_enabled;
+    use softwake_soul::APP_CONFIG_FILE_NAME;
+
+    #[test]
+    fn snapshot_read_errors_on_corrupt_or_unreadable_config() {
+        let root = std::env::temp_dir().join(format!(
+            "sw-s2s-snap-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        std::fs::create_dir_all(&root).expect("dir");
+        let missing = read_voice_agent_s2s_enabled(&root).expect("missing file is off");
+        assert!(!missing);
+
+        let path = root.join(APP_CONFIG_FILE_NAME);
+        std::fs::write(&path, b"{not json").expect("corrupt");
+        let corrupt = read_voice_agent_s2s_enabled(&root).expect_err("corrupt json");
+        assert!(!corrupt.is_empty(), "{corrupt}");
+
+        std::fs::remove_file(&path).expect("remove file");
+        std::fs::create_dir(&path).expect("directory named softwake.json");
+        let unreadable = read_voice_agent_s2s_enabled(&root).expect_err("directory");
+        assert!(!unreadable.is_empty(), "{unreadable}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

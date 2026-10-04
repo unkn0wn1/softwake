@@ -89,33 +89,62 @@ pub(crate) fn transcribe_pcm(
     }
 }
 
+/// Non-S2S voice for one speaker.
+///
+/// A non-empty profile id that [`resolve_tts_voice`] accepts wins. Otherwise
+/// the Settings id if it is accepted. Otherwise the provider default (`eve`
+/// on xAI). An empty profile voice is unset, so it does not become eve before
+/// Settings is tried. Non-xAI returns [`None`].
+#[must_use]
+pub(crate) fn resolve_spoken_voice(
+    provider: ProviderId,
+    profile_voice: &str,
+    settings_voice: &str,
+) -> Option<&'static str> {
+    let profile = profile_voice.trim();
+    if !profile.is_empty()
+        && let Some(voice) = resolve_tts_voice(provider, profile)
+    {
+        return Some(voice);
+    }
+    let settings = settings_voice.trim();
+    if !settings.is_empty()
+        && let Some(voice) = resolve_tts_voice(provider, settings)
+    {
+        return Some(voice);
+    }
+    resolve_tts_voice(provider, "")
+}
+
 /// Speak `text` with the xAI TTS voice when the selected provider is xAI.
 ///
-/// Other families and a missing voice return [`Ok`] (no TTS for that provider).
-/// A build without `live-http` returns [`Err`] so the HUD can show why Eve is
-/// silent. Playback errors are returned the same way.
+/// `profile_voice` is that speaker's `profile.json` `tts_voice`. Other families
+/// return [`Ok`] (no TTS). A build without `live-http` returns [`Err`] so the
+/// HUD can show why speech is silent. Playback errors are returned the same way.
 ///
 /// # Errors
 ///
 /// A voice, feature, or player sentence. The bearer is not included.
 #[cfg_attr(test, allow(dead_code))] // called only from `#[cfg(not(test))]` speak path
-pub(crate) fn speak_reply(ready: &DiskChat, text: &str) -> Result<(), String> {
-    speak_reply_with_interrupt(ready, text, true)
+pub(crate) fn speak_reply(ready: &DiskChat, text: &str, profile_voice: &str) -> Result<(), String> {
+    speak_reply_with_interrupt(ready, text, profile_voice, true)
 }
 
-/// Speak `text`. When `interrupt` is false, do not kill a still-playing clip —
-/// caller must wait for idle first (early-TTS sentence queue).
+/// Speak `text`. When `interrupt` is false, do not kill a still-playing clip.
+/// The caller must wait for idle first (early-TTS sentence queue, room lines).
 #[cfg_attr(test, allow(dead_code))] // called from `#[cfg(not(test))]` announce path
 pub(crate) fn speak_reply_with_interrupt(
     ready: &DiskChat,
     text: &str,
+    profile_voice: &str,
     interrupt: bool,
 ) -> Result<(), String> {
     let provider = ready.prepared.provider;
     if !family_speaks_xai(provider) {
         return Ok(());
     }
-    let Some(voice) = resolve_tts_voice(provider, ready.prepared_tts_voice()) else {
+    let Some(voice) = resolve_spoken_voice(provider, profile_voice, ready.prepared_tts_voice())
+    else {
         return Ok(());
     };
     #[cfg(not(feature = "live-http"))]
@@ -222,6 +251,21 @@ fn speak_via_stream(
     }
 }
 
+/// Speak one room-member line in that member's voice, after the log write.
+///
+/// Waits for the previous clip, plays with `interrupt` false, then waits again
+/// so the next member does not overlap. Does not open a Voice Agent session.
+#[cfg(not(test))]
+pub(crate) fn speak_room_member_line(profile_voice: &str, text: &str) {
+    let Ok(ready) = crate::chat::load_disk_chat() else {
+        return;
+    };
+    let idle = std::time::Duration::from_secs(120);
+    let _ = softwake_voice::wait_for_playback_idle(idle);
+    let _ = speak_reply_with_interrupt(&ready, text, profile_voice, false);
+    let _ = softwake_voice::wait_for_playback_idle(idle);
+}
+
 pub(crate) fn stt_model_for(provider: ProviderId, selected: &str) -> Result<String, String> {
     let model = resolve_stt_model(provider, selected);
     if model.is_empty() {
@@ -235,8 +279,31 @@ pub(crate) fn stt_model_for(provider: ProviderId, selected: &str) -> Result<Stri
 
 #[cfg(test)]
 mod tests {
-    use super::{TALK_TOO_SHORT, TalkSession};
+    use super::{TALK_TOO_SHORT, TalkSession, resolve_spoken_voice};
+    use softwake_providers::ProviderId;
     use softwake_voice::TALK_MIN_SAMPLES;
+
+    #[test]
+    fn spoken_voice_prefers_profile_then_settings_then_eve() {
+        let xai = ProviderId::XaiKey;
+        assert_eq!(resolve_spoken_voice(xai, "ara", "eve"), Some("ara"));
+        assert_eq!(resolve_spoken_voice(xai, "rex", "eve"), Some("rex"));
+        assert_eq!(resolve_spoken_voice(xai, " Ara ", "eve"), Some("ara"));
+        assert_eq!(resolve_spoken_voice(xai, "", "eve"), Some("eve"));
+        assert_eq!(resolve_spoken_voice(xai, "   ", "rex"), Some("rex"));
+        assert_eq!(resolve_spoken_voice(xai, "nope", "rex"), Some("rex"));
+        assert_eq!(resolve_spoken_voice(xai, "", ""), Some("eve"));
+        assert_eq!(resolve_spoken_voice(xai, "nope", "also-nope"), Some("eve"));
+        assert_eq!(resolve_spoken_voice(ProviderId::Openai, "ara", "eve"), None);
+    }
+
+    #[test]
+    fn room_line_voices_follow_each_member() {
+        let settings = "eve";
+        let voices = ["ara", "rex", ""]
+            .map(|profile| resolve_spoken_voice(ProviderId::XaiKey, profile, settings).unwrap());
+        assert_eq!(voices, ["ara", "rex", "eve"]);
+    }
 
     #[test]
     fn short_hold_is_refused_and_a_long_hold_returns_pcm() {

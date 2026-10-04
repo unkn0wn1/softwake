@@ -501,6 +501,11 @@ description = "Save profile role general|coding (ADR-0052)."
 commands.allow = ["profile_set_role"]
 
 [[permission]]
+identifier = "allow-profile-set-tts-voice"
+description = "Save this profile's non-S2S TTS voice. Does not change Settings."
+commands.allow = ["profile_set_tts_voice"]
+
+[[permission]]
 identifier = "allow-rooms-snapshot"
 description = "List Softwake rooms and log tail."
 commands.allow = ["rooms_snapshot"]

@@ -674,6 +674,11 @@ where
         }
         let _ = write!(thread_notes, "[say] {display}: {trimmed}");
         replied.push(format!("{display} ({member_id})"));
+        // Non-S2S path: one clip per member, in this member's voice, before the next.
+        #[cfg(not(test))]
+        {
+            crate::talk::speak_room_member_line(&meta.tts_voice, trimmed);
+        }
     }
 
     let replied_s = if replied.is_empty() {

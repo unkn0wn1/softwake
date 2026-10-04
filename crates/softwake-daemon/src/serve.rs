@@ -168,6 +168,12 @@ impl ServeHandle {
         lock(&self.shared.runtime).wake_phrase()
     }
 
+    /// Advance the phrase cooldown without waiting on the wall clock.
+    #[cfg(test)]
+    pub(crate) fn advance_phrase_clock_for_test(&self, by: std::time::Duration) {
+        lock(&self.shared.runtime).advance_clock_for_test(by);
+    }
+
     /// Install the in-test provider on the running daemon.
     #[cfg(test)]
     pub(crate) fn install_chat_fixture_for_test(&self, fixture: crate::chat::ChatFixture) {
@@ -290,6 +296,8 @@ impl Shared {
         let ask_cancel = runtime.ask_cancel_handle();
         let mcp_note = crate::mcp_bridge::rediscover();
         eprintln!("softwaked: {mcp_note}");
+        // After voice_test and MCP rediscover, before accept. Constructors stay asleep.
+        runtime.boot_awake_if_pack_valid();
         Ok(Self {
             runtime: Mutex::new(runtime),
             last_status,

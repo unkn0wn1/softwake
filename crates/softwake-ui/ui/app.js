@@ -434,7 +434,7 @@ function renderProviders(snap) {
     const selected = snap.selected_tts_voice || "";
     ttsVoiceSelect.value = ttsVoices.includes(selected) ? selected : "";
     ttsNote.textContent =
-      "Ask replies use this xAI voice and speech speed. Empty voice uses Eve. Speed outside 0.7–1.5 is clamped.";
+      "Fallback xAI voice and speech speed when a profile voice is empty. Empty uses Eve. Speed outside 0.7-1.5 is clamped.";
   }
   if (ttsVoiceField) {
     ttsVoiceField.classList.toggle("hidden", !xaiVoice);
@@ -466,6 +466,7 @@ function renderProviders(snap) {
   if (xaiVoice) {
     refreshVoiceAgentS2s();
   }
+  paintProfileTtsVoice();
 }
 
 function clearOauthLink(snap) {
@@ -846,6 +847,34 @@ function renderProfilesList(snap) {
   }
 }
 
+let profileTtsVoiceEditing = false;
+
+function paintProfileTtsVoice() {
+  const field = document.querySelector("#profile-tts-voice-field");
+  const select = document.querySelector("#profile-tts-voice");
+  if (!field || !select) return;
+  const xai = !!(providerSnap && providerSnap.tts_available);
+  field.classList.toggle("hidden", !xai);
+  field.hidden = !xai;
+  if (!xai) return;
+  const voices = providerSnap.tts_voices || [];
+  const current = (profilesSnap && profilesSnap.tts_voice) || "";
+  profileTtsVoiceEditing = true;
+  select.innerHTML = "";
+  const empty = document.createElement("option");
+  empty.value = "";
+  empty.textContent = "Settings voice (else eve)";
+  select.appendChild(empty);
+  for (const id of voices) {
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = id;
+    select.appendChild(option);
+  }
+  select.value = voices.includes(current) ? current : "";
+  profileTtsVoiceEditing = false;
+}
+
 function applyProfilesSnapshot(snap, statusText) {
   profilesSnap = snap;
   selectedProfileId = snap.selected_id || "";
@@ -858,6 +887,7 @@ function applyProfilesSnapshot(snap, statusText) {
   if (allowAll) allowAll.checked = !!snap.allow_all;
   const role = document.querySelector("#profile-role");
   if (role) role.value = snap.role === "coding" ? "coding" : "general";
+  paintProfileTtsVoice();
   applyPackSnapshot(snap.pack || {}, statusText || "");
   profilesLoaded = true;
   updateScaffoldButton();
@@ -1903,6 +1933,7 @@ const voiceAgentS2sBox = document.querySelector("#voice-agent-s2s");
 const voiceAgentS2sStatus = document.querySelector("#voice-agent-s2s-status");
 const voiceAgentS2sError = document.querySelector("#voice-agent-s2s-error");
 let voiceAgentS2sEditing = false;
+let voiceAgentS2sLoaded = null;
 
 function showVoiceAgentS2sError(error) {
   if (!voiceAgentS2sError) return;
@@ -1912,7 +1943,10 @@ function showVoiceAgentS2sError(error) {
 
 function applyVoiceAgentS2sSnapshot(snap) {
   if (voiceAgentS2sBox && snap && typeof snap.enabled === "boolean" && !voiceAgentS2sEditing) {
+    voiceAgentS2sEditing = true;
     voiceAgentS2sBox.checked = !!snap.enabled;
+    voiceAgentS2sLoaded = !!snap.enabled;
+    voiceAgentS2sEditing = false;
   }
   if (voiceAgentS2sStatus) {
     voiceAgentS2sStatus.textContent = (snap && snap.message) || "";
@@ -1931,8 +1965,12 @@ async function refreshVoiceAgentS2s() {
 }
 
 if (voiceAgentS2sBox) {
-  voiceAgentS2sBox.addEventListener("change", async () => {
-    const enabled = voiceAgentS2sBox.checked;
+  voiceAgentS2sBox.addEventListener("change", async (event) => {
+    if (voiceAgentS2sEditing) return;
+    const enabled = !!voiceAgentS2sBox.checked;
+    const user = !!(event && event.isTrusted);
+    if (!user) return;
+    if (voiceAgentS2sLoaded !== null && enabled === voiceAgentS2sLoaded) return;
     voiceAgentS2sEditing = true;
     try {
       if (voiceAgentS2sError) voiceAgentS2sError.textContent = "";
@@ -3126,6 +3164,22 @@ document.querySelector("#profile-role")?.addEventListener("change", async (ev) =
     applyProfilesSnapshot(
       await invoke("profile_set_role", { id: selectedProfileId, role: ev.target.value }),
       "Role saved."
+    );
+  } catch (error) {
+    packErrorEl.textContent = errorText(error);
+  }
+});
+document.querySelector("#profile-tts-voice")?.addEventListener("change", async (ev) => {
+  if (profileTtsVoiceEditing) return;
+  if (!selectedProfileId) return;
+  if (ev && ev.isTrusted === false) return;
+  try {
+    applyProfilesSnapshot(
+      await invoke("profile_set_tts_voice", {
+        id: selectedProfileId,
+        voice: ev.target.value,
+      }),
+      "Profile voice saved."
     );
   } catch (error) {
     packErrorEl.textContent = errorText(error);

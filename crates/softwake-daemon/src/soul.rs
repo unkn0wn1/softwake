@@ -155,6 +155,16 @@ impl LoadedSoul {
         }
     }
 
+    /// `profile.json` `tts_voice` for this loaded pack. Empty means unset.
+    ///
+    /// Ask, early TTS, and state announcements speak this id when it is a
+    /// known xAI voice. Callers fall back to Settings, then eve. A test soul
+    /// directory with no `profile.json` stays empty.
+    #[must_use]
+    pub(crate) fn playback_tts_voice(&self) -> String {
+        softwake_soul::load_profile_meta(self.dir.path()).tts_voice
+    }
+
     pub(crate) fn applied_instructions(&self) -> Option<&str> {
         self.applied.as_deref()
     }

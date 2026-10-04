@@ -54,7 +54,7 @@ fn ctl_hibernate_then_resume_lands_in_sleep() {
     .expect("serve");
 
     let status = ctl::call(temp.path(), Command::GetStatus).expect("status");
-    assert_eq!(status.state, VoiceState::Sleep);
+    assert_eq!(status.state, VoiceState::Awake);
     assert!(status.capture_running);
     assert!(!status.soul_reload_pending);
     assert!(status.soul.as_ref().is_some_and(|report| report.ok));
@@ -62,7 +62,7 @@ fn ctl_hibernate_then_resume_lands_in_sleep() {
     let hibernated = ctl::call(temp.path(), Command::Hibernate).expect("hibernate");
     assert_eq!(hibernated.state, VoiceState::Hibernate);
     assert!(!hibernated.capture_running);
-    assert_eq!(hibernated.detail.as_deref(), Some("sleep -> hibernate"));
+    assert_eq!(hibernated.detail.as_deref(), Some("awake -> hibernate"));
 
     let after = ctl::call(temp.path(), Command::GetStatus).expect("status");
     assert_eq!(after.state, VoiceState::Hibernate);
@@ -106,7 +106,7 @@ fn reload_soul_rereads_and_a_second_client_sees_state_changed() {
     let message = reload_message(true, None);
     assert_eq!(reloaded.message.as_deref(), Some(message.as_str()));
     let printed = ctl::format_status(&reloaded);
-    assert!(printed.contains("state: sleep"), "{printed}");
+    assert!(printed.contains("state: awake"), "{printed}");
     assert!(printed.contains("capture: running"), "{printed}");
     assert!(printed.contains("soul: ok"), "{printed}");
     assert!(printed.contains("soul reload: pending"), "{printed}");
@@ -136,7 +136,7 @@ fn reload_soul_rereads_and_a_second_client_sees_state_changed() {
                 },
         } => {
             assert_eq!(state, VoiceState::Hibernate);
-            assert_eq!(previous, VoiceState::Sleep);
+            assert_eq!(previous, VoiceState::Awake);
             assert!(!capture_running);
         }
         other => panic!("expected state_changed, got {other:?}"),
@@ -188,7 +188,7 @@ fn a_live_socket_is_kept_and_a_bad_hello_does_not_stop_serve() {
     ));
 
     let status = ctl::call(temp.path(), Command::GetStatus).expect("still up");
-    assert_eq!(status.state, VoiceState::Sleep);
+    assert_eq!(status.state, VoiceState::Awake);
     drop(server);
 
     let restarted = serve::spawn(
@@ -262,6 +262,9 @@ fn ctl_tool_is_refused_until_awake_then_echo_is_deterministic() {
         false,
     )
     .expect("serve");
+    let slept = ctl::call(temp.path(), Command::Sleep).expect("sleep from boot");
+    assert_eq!(slept.state, VoiceState::Sleep);
+    server.advance_phrase_clock_for_test(Duration::from_secs(1));
 
     let asleep = ctl::call_tool(temp.path(), "echo", &["hello".to_owned()]).expect_err("asleep");
     assert!(
@@ -353,8 +356,6 @@ fn ctl_notify_confirms_once_and_cancel_does_not_run() {
         false,
     )
     .expect("serve");
-    let woke = server.wake_phrase_for_test();
-    assert!(woke.body.status().is_some(), "wake should apply: {woke:?}");
 
     let mut watcher = Client::connect(temp.path()).expect("watcher");
     watcher
@@ -444,10 +445,6 @@ fn ctl_cancel_and_hibernate_clear_a_pending_notification() {
         false,
     )
     .expect("serve");
-    assert!(
-        server.wake_phrase_for_test().body.status().is_some(),
-        "wake should apply"
-    );
 
     let mut watcher = Client::connect(temp.path()).expect("watcher");
     watcher
@@ -536,8 +533,6 @@ fn ctl_email_send_confirms_once() {
         false,
     )
     .expect("serve");
-    let woke = server.wake_phrase_for_test();
-    assert!(woke.body.status().is_some(), "wake should apply: {woke:?}");
 
     let mut watcher = Client::connect(temp.path()).expect("watcher");
     watcher
@@ -641,6 +636,9 @@ fn ctl_ask_is_refused_until_awake_then_returns_the_fixture_reply() {
         Some("sk-test-secret"),
         "pong",
     ));
+    let slept = ctl::call(temp.path(), Command::Sleep).expect("sleep from boot");
+    assert_eq!(slept.state, VoiceState::Sleep);
+    server.advance_phrase_clock_for_test(Duration::from_secs(1));
 
     let asleep = ctl::call_ask(temp.path(), "hello").expect_err("asleep");
     assert_eq!(
@@ -737,8 +735,6 @@ fn ctl_ask_rejects_a_failed_test_and_a_missing_bearer() {
         false,
     )
     .expect("serve");
-    let woke = server.wake_phrase_for_test();
-    assert!(woke.body.status().is_some(), "wake should apply: {woke:?}");
 
     server.install_chat_fixture_for_test(crate::chat::xai_key_fixture(
         false,
@@ -793,6 +789,11 @@ fn ctl_wake_enters_awake_and_ask_returns_the_fixture() {
         Some("sk-test-secret"),
         "pong",
     ));
+    let booted = ctl::call(temp.path(), Command::GetStatus).expect("boot");
+    assert_eq!(booted.state, VoiceState::Awake);
+    let slept = ctl::call(temp.path(), Command::Sleep).expect("sleep from boot");
+    assert_eq!(slept.state, VoiceState::Sleep);
+    server.advance_phrase_clock_for_test(Duration::from_secs(1));
 
     let mut watcher = Client::connect(temp.path()).expect("watcher");
     watcher
@@ -947,7 +948,7 @@ fn get_status_returns_cached_snapshot_while_runtime_lock_is_held() {
     .expect("serve");
 
     let seeded = ctl::call(temp.path(), Command::GetStatus).expect("seed cache");
-    assert_eq!(seeded.state, VoiceState::Sleep);
+    assert_eq!(seeded.state, VoiceState::Awake);
 
     let held = AtomicBool::new(false);
     let release = AtomicBool::new(false);
