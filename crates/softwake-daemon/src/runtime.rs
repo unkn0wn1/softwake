@@ -191,6 +191,15 @@ pub(crate) struct Runtime {
     s2s_room_last_frag: Option<Instant>,
 }
 
+/// Chat request copied off the runtime so member threads can call HTTP together.
+pub(crate) struct ProfileOneshotRequest {
+    pub(crate) prepared: softwake_providers::PreparedChat,
+    pub(crate) bearer: String,
+    pub(crate) system: String,
+    pub(crate) tools: Vec<serde_json::Value>,
+    pub(crate) turns: Vec<softwake_session::SessionMessage>,
+}
+
 impl Runtime {
     /// Sleep, with mock capture already running and the soul directory read.
     #[cfg(test)]
@@ -643,6 +652,49 @@ impl Runtime {
             .set_acting_profile(Some(profile_id.to_owned()), allow_all);
         let result = self.messenger_ask_oneshot_with_system(instructions, text);
         // restore
+        self.hands.set_acting_profile(prev_id, prev_allow);
+        result
+    }
+
+    /// Copy what a profile oneshot needs so HTTP can run without the runtime lock.
+    ///
+    /// Tool calls still take the lock via [`Self::invoke_chat_as_profile`].
+    pub(crate) fn prepare_profile_oneshot(
+        &self,
+        instructions: &str,
+        text: &str,
+    ) -> Result<ProfileOneshotRequest, String> {
+        let ready = crate::chat::load_disk_chat()?;
+        crate::chat::gate_live_http(&ready.prepared, &ready.bearer, text)?;
+        let memory =
+            crate::chat::appendix_for_ask(text, Option::<&softwake_memory::MockMemory>::None);
+        let tools_settings = self.hands.tools_settings();
+        let appendix = crate::chat::system_appendix(&memory, &tools_settings);
+        let system = softwake_session::assemble_system(instructions, &appendix);
+        let mut tools = softwake_tools::advertise_chat_tools(&tools_settings);
+        crate::mcp_bridge::append_mcp_chat_tools(&tools_settings, &mut tools);
+        Ok(ProfileOneshotRequest {
+            prepared: ready.prepared,
+            bearer: ready.bearer,
+            system,
+            tools,
+            turns: vec![softwake_session::SessionMessage::user(text)],
+        })
+    }
+
+    /// Run one chat tool as `profile_id`, then restore the previous acting profile.
+    pub(crate) fn invoke_chat_as_profile(
+        &mut self,
+        profile_id: &str,
+        allow_all: bool,
+        name: &str,
+        args: &[String],
+    ) -> crate::tool_loop::ToolInvokeResult {
+        let prev_id = self.hands.acting_profile_id().map(str::to_owned);
+        let prev_allow = self.hands.acting_allow_all_for_restore();
+        self.hands
+            .set_acting_profile(Some(profile_id.to_owned()), allow_all);
+        let result = self.invoke_for_chat(name, args);
         self.hands.set_acting_profile(prev_id, prev_allow);
         result
     }
