@@ -1,8 +1,9 @@
 //! One-shot state announcements.
 //!
-//! A transition speaks a short line in the active profile voice. The line is
-//! a single completion: soul instructions as system, one fixed instruction as
-//! the only user turn, then the existing TTS path. It is not [`crate::chat::perform_ask`]
+//! A transition speaks a short line in that profile's voice (`profile.json`
+//! `tts_voice`, else Settings, else eve). The line is a single completion:
+//! soul instructions as system, one fixed instruction as the only user turn,
+//! then the existing TTS path. It is not [`crate::chat::perform_ask`]
 //! and it is not appended to the awake session.
 //!
 //! See [ADR 0022](../../docs/ADR-0022-voice-modes.md).
@@ -18,7 +19,7 @@ use std::time::Duration;
 
 use softwake_providers::ChatMessage;
 #[cfg(not(test))]
-use softwake_providers::{family_speaks_xai, resolve_tts_voice};
+use softwake_providers::family_speaks_xai;
 use softwake_state::VoiceState;
 
 /// Awake announcement instruction. Spoken text comes back from the model.
@@ -115,6 +116,7 @@ pub(crate) fn spawn_announcement(
     system: String,
     state: VoiceState,
     profile: String,
+    profile_voice: String,
     verbosity: u8,
 ) {
     let prompt = prompt_for(state).to_owned();
@@ -132,14 +134,19 @@ pub(crate) fn spawn_announcement(
             if speak_generation().load(Ordering::SeqCst) != speak_gen {
                 return;
             }
-            speak_now(&system, state, &prompt, &profile, verbosity);
+            speak_now(&system, state, &prompt, &profile, &profile_voice, verbosity);
         });
 }
 
 /// Speak `line` as-is. Confirm prompts skip the one-shot completion so the
 /// 15s answer window is not spent waiting on a model.
 #[cfg(not(test))]
-pub(crate) fn spawn_fixed_line(line: String, profile: String, verbosity: u8) {
+pub(crate) fn spawn_fixed_line(
+    line: String,
+    profile: String,
+    profile_voice: String,
+    verbosity: u8,
+) {
     let speak_gen = speak_generation().load(Ordering::SeqCst);
     let _ = thread::Builder::new()
         .name("softwake-state-voice".to_owned())
@@ -150,20 +157,27 @@ pub(crate) fn spawn_fixed_line(line: String, profile: String, verbosity: u8) {
             if speak_generation().load(Ordering::SeqCst) != speak_gen {
                 return;
             }
-            // Wait for the prior clip to finish — do not interrupt (early TTS queue).
+            // Wait for the prior clip to finish. Do not interrupt (early TTS queue).
             let _ = softwake_voice::wait_for_playback_idle(QUEUE_IDLE_WAIT);
             if speak_generation().load(Ordering::SeqCst) != speak_gen {
                 return;
             }
-            if let Some(ready) = prepare_speaker(&profile, verbosity) {
-                playback_follow_on(&ready, &line, &profile, verbosity);
+            if let Some(ready) = prepare_speaker(&profile, &profile_voice, verbosity) {
+                playback_follow_on(&ready, &line, &profile, &profile_voice, verbosity);
             }
         });
 }
 
 #[cfg(not(test))]
-fn speak_now(system: &str, state: VoiceState, prompt: &str, profile: &str, verbosity: u8) {
-    let Some(ready) = prepare_speaker(profile, verbosity) else {
+fn speak_now(
+    system: &str,
+    state: VoiceState,
+    prompt: &str,
+    profile: &str,
+    profile_voice: &str,
+    verbosity: u8,
+) {
+    let Some(ready) = prepare_speaker(profile, profile_voice, verbosity) else {
         return;
     };
     let line = if system.trim().is_empty() {
@@ -180,12 +194,16 @@ fn speak_now(system: &str, state: VoiceState, prompt: &str, profile: &str, verbo
             _ => fallback_line(state).to_owned(),
         }
     };
-    playback_follow_on(&ready, &line, profile, verbosity);
+    playback_follow_on(&ready, &line, profile, profile_voice, verbosity);
 }
 
 /// Load chat settings when this profile can speak. Logs and returns `None` otherwise.
 #[cfg(not(test))]
-fn prepare_speaker(profile: &str, verbosity: u8) -> Option<crate::chat::DiskChat> {
+fn prepare_speaker(
+    profile: &str,
+    profile_voice: &str,
+    verbosity: u8,
+) -> Option<crate::chat::DiskChat> {
     let ready = match crate::chat::load_disk_chat() {
         Ok(ready) => ready,
         Err(message) => {
@@ -205,7 +223,13 @@ fn prepare_speaker(profile: &str, verbosity: u8) -> Option<crate::chat::DiskChat
         );
         return None;
     }
-    if resolve_tts_voice(ready.prepared.provider, ready.prepared_tts_voice()).is_none() {
+    if crate::talk::resolve_spoken_voice(
+        ready.prepared.provider,
+        profile_voice,
+        ready.prepared_tts_voice(),
+    )
+    .is_none()
+    {
         log_skip(verbosity, profile, "state voice skipped: no TTS voice");
         return None;
     }
@@ -213,8 +237,15 @@ fn prepare_speaker(profile: &str, verbosity: u8) -> Option<crate::chat::DiskChat
 }
 
 #[cfg(not(test))]
-fn playback_follow_on(ready: &crate::chat::DiskChat, line: &str, profile: &str, verbosity: u8) {
-    if let Err(message) = crate::talk::speak_reply_with_interrupt(ready, line, false) {
+fn playback_follow_on(
+    ready: &crate::chat::DiskChat,
+    line: &str,
+    profile: &str,
+    profile_voice: &str,
+    verbosity: u8,
+) {
+    if let Err(message) = crate::talk::speak_reply_with_interrupt(ready, line, profile_voice, false)
+    {
         let hint = if message.contains("rejected the credentials") {
             format!(
                 "state voice skipped: {message} Re-run Providers Test or re-sign in (xAI OAuth)."

@@ -165,7 +165,7 @@ fn handle_inbound(
     let file = load_messengers_for(&profile_id);
     let _ = send_text(token, &chat_id, &reply_text);
     if file.telegram.voice {
-        let _ = send_voice_mp3(token, &chat_id, &reply_text);
+        let _ = send_voice_mp3(token, &chat_id, &reply_text, &profile_id);
     }
 }
 
@@ -233,7 +233,7 @@ pub(crate) fn fanout_timer(profile_id: &str, text: &str) {
     crate::hud_chat_write::append_assistant(profile_id, &agent, text);
     let _ = send_text(&token, &chat_id, text);
     if file.telegram.voice {
-        let _ = send_voice_mp3(&token, &chat_id, text);
+        let _ = send_voice_mp3(&token, &chat_id, text, profile_id);
     }
 }
 
@@ -251,7 +251,7 @@ pub(crate) fn fanout_ask_reply(profile_id: &str, text: &str) {
     };
     let _ = send_text(&token, &chat_id, text);
     if file.telegram.voice {
-        let _ = send_voice_mp3(&token, &chat_id, text);
+        let _ = send_voice_mp3(&token, &chat_id, text, profile_id);
     }
 }
 
@@ -298,10 +298,10 @@ fn send_text(token: &str, chat_id: &str, text: &str) -> Result<(), String> {
     }
 }
 
-fn send_voice_mp3(token: &str, chat_id: &str, text: &str) -> Result<(), String> {
+fn send_voice_mp3(token: &str, chat_id: &str, text: &str, profile_id: &str) -> Result<(), String> {
     #[cfg(feature = "live-http")]
     {
-        let mp3 = synthesize_mp3(text)?;
+        let mp3 = synthesize_mp3(text, &profile_tts_voice(profile_id))?;
         let url = format!("{API_ROOT}/bot{token}/sendAudio");
         let boundary = "----softwakeTelegramBoundary";
         let mut body = Vec::new();
@@ -331,7 +331,7 @@ fn send_voice_mp3(token: &str, chat_id: &str, text: &str) -> Result<(), String> 
     }
     #[cfg(not(feature = "live-http"))]
     {
-        let _ = (token, chat_id, text);
+        let _ = (token, chat_id, text, profile_id);
         Err("live-http disabled".into())
     }
 }
@@ -365,16 +365,29 @@ fn push_file(
     body.extend_from_slice(b"\r\n");
 }
 
-fn synthesize_mp3(text: &str) -> Result<Vec<u8>, String> {
+/// This profile's `tts_voice`. Empty falls back to Settings, then eve.
+#[cfg(feature = "live-http")]
+fn profile_tts_voice(profile_id: &str) -> String {
+    let xdg = std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from);
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let Ok(config) = resolve_config_dir(xdg.as_deref(), home.as_deref()) else {
+        return String::new();
+    };
+    load_profile_meta(&profile_pack_dir(&config, profile_id)).tts_voice
+}
+
+fn synthesize_mp3(text: &str, profile_voice: &str) -> Result<Vec<u8>, String> {
     #[cfg(feature = "live-http")]
     {
-        use softwake_providers::{family_speaks_xai, resolve_tts_voice, tts_synthesize};
+        use softwake_providers::{family_speaks_xai, tts_synthesize};
         let ready = crate::chat::load_disk_chat()?;
         let provider = ready.prepared.provider;
         if !family_speaks_xai(provider) {
             return Err("TTS requires xAI".into());
         }
-        let Some(voice) = resolve_tts_voice(provider, ready.prepared_tts_voice()) else {
+        let Some(voice) =
+            crate::talk::resolve_spoken_voice(provider, profile_voice, ready.prepared_tts_voice())
+        else {
             return Err("no TTS voice".into());
         };
         let transport = softwake_providers::live::LiveTransport::bounded(crate::chat::CHAT_TIMEOUT);
@@ -391,7 +404,7 @@ fn synthesize_mp3(text: &str) -> Result<Vec<u8>, String> {
     }
     #[cfg(not(feature = "live-http"))]
     {
-        let _ = text;
+        let _ = (text, profile_voice);
         Err("live-http disabled".into())
     }
 }

@@ -39,7 +39,7 @@ pub use profile::{
     load_app_config, load_profile_meta, profile_name_in, profile_owner_from_pack_dir,
     profile_pack_dir, rename_profile, resolve_active_pack_dir, resolve_config_dir,
     resolve_main_profile_id, set_active_profile, set_allow_all, set_free_speech_end_silence_ms,
-    set_global_doc_flags, set_kws_thresholds, set_profile_role, set_tts_playback_timeout_ms,
-    set_voice_agent_s2s, set_webhook_enabled, set_webhook_port, write_app_config,
-    write_profile_meta,
+    set_global_doc_flags, set_kws_thresholds, set_profile_role, set_profile_tts_voice,
+    set_tts_playback_timeout_ms, set_voice_agent_s2s, set_webhook_enabled, set_webhook_port,
+    write_app_config, write_profile_meta,
 };
