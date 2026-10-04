@@ -24,6 +24,7 @@
     "allow-hud-set-mic-mute",
     "allow-hud-talk-start",
     "allow-hud-talk-stop",
+    "allow-hud-set-open-room",
     "allow-hud-set-layout",
     "allow-hud-save-size",
     "allow-hud-seed-session",

@@ -532,7 +532,8 @@ impl ServerConnection {
             | ClientMessage::ReloadVoiceAgent { .. }
             | ClientMessage::SeedChat { .. }
             | ClientMessage::DropChatTurns { .. }
-            | ClientMessage::RoomPost { .. } => {
+            | ClientMessage::RoomPost { .. }
+            | ClientMessage::SetOpenRoom { .. } => {
                 let message = "expected a hello message".to_owned();
                 endpoint.write(&ServerMessage::HelloRejected {
                     protocol_version: PROTOCOL_VERSION,
@@ -762,6 +763,25 @@ impl Client {
     ) -> Result<Status, CallError> {
         let id = self.allocate_id();
         self.round_trip(&ClientMessage::DropChatTurns { id, turns }, id)
+    }
+
+    /// Tell the daemon which HUD room composer is open.
+    ///
+    /// `None` or blank returns finished speech to the active profile.
+    /// Does not start or stop the Voice Agent session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] on transport failure.
+    pub fn call_set_open_room(&mut self, room_id: Option<&str>) -> Result<Status, CallError> {
+        let id = self.allocate_id();
+        self.round_trip(
+            &ClientMessage::SetOpenRoom {
+                id,
+                room_id: room_id.map(str::to_owned),
+            },
+            id,
+        )
     }
 
     /// Operator posts into a room; members may choose to reply (ADR-0052).

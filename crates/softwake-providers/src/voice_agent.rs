@@ -41,6 +41,11 @@ pub enum VoiceAgentEvent {
     TranscriptDone(String),
     /// Server VAD heard the user start speaking (barge-in signal).
     SpeechStarted,
+    /// Final user transcript from the same realtime socket.
+    ///
+    /// `conversation.item.input_audio_transcription.completed`. Partial
+    /// `.updated` snapshots stay [`VoiceAgentEvent::Ignored`].
+    InputTranscript(String),
     /// Server VAD decided the user stopped.
     SpeechStopped,
     /// Model response finished.
@@ -216,6 +221,19 @@ pub fn parse_voice_agent_event(payload: &str) -> Result<VoiceAgentEvent, VoiceHt
         }
         "input_audio_buffer.speech_started" => VoiceAgentEvent::SpeechStarted,
         "input_audio_buffer.speech_stopped" => VoiceAgentEvent::SpeechStopped,
+        "conversation.item.input_audio_transcription.completed" => {
+            let text = value
+                .get("transcript")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_owned();
+            if text.is_empty() {
+                VoiceAgentEvent::Ignored
+            } else {
+                VoiceAgentEvent::InputTranscript(text)
+            }
+        }
         "response.done" => VoiceAgentEvent::ResponseDone,
         "session.updated" => VoiceAgentEvent::SessionUpdated,
         "error" => {
@@ -438,6 +456,28 @@ mod tests {
             parse_voice_agent_event(r#"{"type":"input_audio_buffer.speech_started"}"#)
                 .expect("speech"),
             VoiceAgentEvent::SpeechStarted
+        );
+        match parse_voice_agent_event(
+            r#"{"type":"conversation.item.input_audio_transcription.completed","transcript":"hello room"}"#,
+        )
+        .expect("user transcript")
+        {
+            VoiceAgentEvent::InputTranscript(text) => assert_eq!(text, "hello room"),
+            other => panic!("unexpected {other:?}"),
+        }
+        assert_eq!(
+            parse_voice_agent_event(
+                r#"{"type":"conversation.item.input_audio_transcription.updated","transcript":"hel"}"#
+            )
+            .expect("partial"),
+            VoiceAgentEvent::Ignored
+        );
+        assert_eq!(
+            parse_voice_agent_event(
+                r#"{"type":"conversation.item.input_audio_transcription.completed","transcript":"  "}"#
+            )
+            .expect("blank"),
+            VoiceAgentEvent::Ignored
         );
         match parse_voice_agent_event(r#"{"type":"error","error":{"message":"nope"}}"#)
             .expect("err")
