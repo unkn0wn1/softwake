@@ -1,7 +1,6 @@
 //! Agent team helpers: peer DM wake + `goal_run` outer loop (ADR-0052).
 
 use std::env;
-use std::fmt::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -773,10 +772,67 @@ pub(crate) fn commit_operator_room_post(
     Ok((message, Some(job)))
 }
 
+/// One labeled line for a reply already spoken in this fan-out.
+#[must_use]
+fn room_peer_said_line(display: &str, text: &str) -> String {
+    format!(
+        "{display} (another agent in this room) said: {}",
+        text.trim()
+    )
+}
+
+/// Text one room member sees for this fan-out.
+///
+/// `recent_ctx` is the log tail captured before the operator line. `this_turn`
+/// is earlier replies from this fan-out only, already labeled, in run order.
+/// Empty recent context is `(none)`. No earlier replies is `(none yet)`.
+/// The member may answer peers, answer the operator, or stay quiet.
+#[must_use]
+fn room_member_stimulus(
+    room_id: &str,
+    title: &str,
+    display: &str,
+    member_id: &str,
+    recent_ctx: &str,
+    this_turn: &str,
+    operator_text: &str,
+) -> String {
+    let recent = if recent_ctx.is_empty() {
+        "(none)"
+    } else {
+        recent_ctx
+    };
+    let peers = if this_turn.is_empty() {
+        "(none yet)"
+    } else {
+        this_turn
+    };
+    format!(
+        "\
+You are in Softwake room `{room_id}` (title: {title}). You are {display} (profile id `{member_id}`).
+
+Recent room context:
+{recent}
+
+Operator message:
+{operator_text}
+
+Other members this turn:
+{peers}
+
+Softwake wakes every room member, one at a time, with a cool-down between turns. Another member already speaking does not cancel your turn.
+You may reply to them, reply to the operator, or stay quiet (NO_REPLY).
+Decide for yourself:
+- If you should reply, write your room message only (no preamble).
+- If you should stay quiet, reply with exactly: NO_REPLY"
+    )
+}
+
 /// Sequential member oneshots with cool-down + single-flight.
 ///
 /// `oneshot` must lock the runtime only for the duration of one LLM turn so
 /// the UI/IPC path stays free. Replies append to the room log as they finish.
+/// Each later member hears those replies. `NO_REPLY` skips are left out.
 ///
 /// When `job.speech_gen` is stale, the loop stops. Later members are not
 /// appended and are not spoken. Lines already appended stay in the log.
@@ -797,7 +853,8 @@ where
     for raw in &job.unknown {
         skipped.push(format!("{raw} (unknown profile)"));
     }
-    let mut thread_notes = String::new();
+    // Replies already spoken in this fan-out, in member-list order.
+    let mut this_turn = String::new();
 
     for (index, member) in job.members.iter().enumerate() {
         if !room_speech_allows(job.speech_gen) {
@@ -819,15 +876,14 @@ where
         } else {
             meta.name.clone()
         };
-        let prior = if thread_notes.is_empty() {
-            job.recent_ctx.clone()
-        } else if job.recent_ctx.is_empty() {
-            thread_notes.clone()
-        } else {
-            format!("{}\n{thread_notes}", job.recent_ctx)
-        };
-        let stimulus = format!(
-            "You are in Softwake room `{room_id}` (title: {title}). You are {display} (profile id `{member_id}`).\n\nRecent room context:\n{prior}\n\nOperator message:\n{text}\n\nSoftwake wakes every room member, one at a time, with a cool-down between turns. Another member already speaking does not cancel your turn.\nDecide for yourself:\n- If you should reply, write your room message only (no preamble).\n- If you should stay quiet, reply with exactly: NO_REPLY"
+        let stimulus = room_member_stimulus(
+            room_id,
+            title,
+            &display,
+            member_id,
+            &job.recent_ctx,
+            &this_turn,
+            text,
         );
         if !room_speech_allows(job.speech_gen) {
             break;
@@ -883,10 +939,10 @@ where
             continue;
         }
         let _ = mark_room_turn(&job.rooms_dir, room_id, member_id);
-        if !thread_notes.is_empty() {
-            thread_notes.push('\n');
+        if !this_turn.is_empty() {
+            this_turn.push('\n');
         }
-        let _ = write!(thread_notes, "[say] {display}: {trimmed}");
+        this_turn.push_str(&room_peer_said_line(&display, trimmed));
         replied.push(format!("{display} ({member_id})"));
         // Non-S2S path: one clip per member, in this member's voice, before the next.
         #[cfg(not(test))]
@@ -1017,5 +1073,79 @@ mod tests {
         assert!(queue.stage_unposted(&unposted, report.generation));
         assert!(queue.unposted_contains(&unposted));
         assert_eq!(room_log, room_log_before);
+    }
+
+    #[test]
+    fn first_member_stimulus_has_context_and_no_peers_yet() {
+        let recent = "[say] Kai: yesterday we slipped the cut";
+        let stimulus = room_member_stimulus(
+            "standup",
+            "Standup",
+            "Spencer",
+            "spencer",
+            recent,
+            "",
+            "are we shipping today",
+        );
+        assert!(stimulus.contains("Operator message:\nare we shipping today"));
+        assert!(stimulus.contains("Recent room context:\n[say] Kai: yesterday we slipped the cut"));
+        assert!(stimulus.contains("Other members this turn:\n(none yet)"));
+        assert!(
+            stimulus.contains(
+                "You may reply to them, reply to the operator, or stay quiet (NO_REPLY)."
+            )
+        );
+        assert!(!stimulus.contains("another agent in this room"));
+        assert!(!stimulus.to_ascii_lowercase().contains("must reply"));
+
+        let empty_recent = room_member_stimulus(
+            "standup",
+            "Standup",
+            "Spencer",
+            "spencer",
+            "",
+            "",
+            "are we shipping today",
+        );
+        assert!(empty_recent.contains("Recent room context:\n(none)"));
+        assert!(empty_recent.contains("(none yet)"));
+    }
+
+    #[test]
+    fn later_member_stimulus_hears_earlier_peer() {
+        let recent = "[say] Kai: yesterday we slipped the cut";
+        let peer = room_peer_said_line("Sara Vale", "the build is green");
+        assert_eq!(
+            peer,
+            "Sara Vale (another agent in this room) said: the build is green"
+        );
+        let stimulus = room_member_stimulus(
+            "standup",
+            "Standup",
+            "Spencer",
+            "spencer",
+            recent,
+            &peer,
+            "are we shipping today",
+        );
+        assert!(stimulus.contains("Operator message:\nare we shipping today"));
+        assert!(
+            stimulus.contains("Sara Vale (another agent in this room) said: the build is green")
+        );
+        assert!(stimulus.contains("Recent room context:\n[say] Kai: yesterday we slipped the cut"));
+        assert!(
+            stimulus.contains(
+                "You may reply to them, reply to the operator, or stay quiet (NO_REPLY)."
+            )
+        );
+        assert!(
+            stimulus.contains("- If you should reply, write your room message only (no preamble).")
+        );
+        assert!(stimulus.contains("- If you should stay quiet, reply with exactly: NO_REPLY"));
+        let lower = stimulus.to_ascii_lowercase();
+        assert!(!lower.contains("must reply"));
+        assert!(!lower.contains("must respond"));
+        assert!(!lower.contains("have to reply"));
+        assert!(!stimulus.contains("[say] Sara Vale:"));
     }
 }
