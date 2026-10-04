@@ -276,10 +276,19 @@ fn wait_room_line_until_idle(speech_gen: u64, timeout: std::time::Duration) -> b
     }
 }
 
+#[cfg(not(test))]
+fn room_member_playback_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    let lock = LOCK.get_or_init(|| std::sync::Mutex::new(()));
+    lock.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Speak one room-member line in that member's voice, after the log write.
 ///
-/// Waits for the previous clip, plays with `interrupt` false, then waits again
-/// so the next member does not overlap. Does not open a Voice Agent session.
+/// The fan-out has already enqueued this clip. Wait until it is the oldest
+/// waiting line, then play it with `interrupt` false. One playback lock keeps
+/// a single TTS player. This does not open a Voice Agent session.
 ///
 /// `speech_gen` is the stamp taken when the operator line was committed. When
 /// barge-in or Voice Agent speech-started has cleared the room speech queue,
@@ -290,34 +299,51 @@ pub(crate) fn speak_room_member_line(profile_voice: &str, text: &str, speech_gen
     if !crate::team::room_speech_allows(speech_gen) {
         return;
     }
-    let Ok(ready) = crate::chat::load_disk_chat() else {
-        return;
-    };
     let clip = crate::team::RoomSpeechClip {
         text: text.to_owned(),
         voice: profile_voice.to_owned(),
     };
-    if !crate::team::enqueue_waiting_room_audio(clip.clone(), speech_gen) {
-        return;
-    }
     let idle = std::time::Duration::from_secs(120);
-    if !wait_room_line_until_idle(speech_gen, idle) {
+    let start = std::time::Instant::now();
+    loop {
+        if !crate::team::room_speech_allows(speech_gen) {
+            return;
+        }
+        if !crate::team::room_speech_waiting_has(&clip) {
+            return;
+        }
+        if start.elapsed() >= idle {
+            return;
+        }
+        if !crate::team::room_speech_front_is(&clip) {
+            std::thread::sleep(ROOM_LINE_IDLE_POLL);
+            continue;
+        }
+        let _playback = room_member_playback_lock();
+        if !crate::team::room_speech_allows(speech_gen) || !crate::team::room_speech_front_is(&clip)
+        {
+            continue;
+        }
+        if !wait_room_line_until_idle(speech_gen, idle) {
+            return;
+        }
+        if !crate::team::claim_waiting_room_audio(&clip, speech_gen) {
+            return;
+        }
+        if !crate::team::room_speech_allows(speech_gen) {
+            return;
+        }
+        let Ok(ready) = crate::chat::load_disk_chat() else {
+            return;
+        };
+        let _ = speak_reply_with_interrupt(&ready, text, profile_voice, false);
+        if !crate::team::room_speech_allows(speech_gen) {
+            softwake_voice::interrupt_playback();
+            return;
+        }
+        let _ = wait_room_line_until_idle(speech_gen, idle);
         return;
     }
-    if !crate::team::claim_waiting_room_audio(&clip, speech_gen) {
-        return;
-    }
-    // Re-check after the claim. A clear that landed in this gap must not start
-    // the clip. If playback still wins the race, cut it immediately.
-    if !crate::team::room_speech_allows(speech_gen) {
-        return;
-    }
-    let _ = speak_reply_with_interrupt(&ready, text, profile_voice, false);
-    if !crate::team::room_speech_allows(speech_gen) {
-        softwake_voice::interrupt_playback();
-        return;
-    }
-    let _ = wait_room_line_until_idle(speech_gen, idle);
 }
 
 pub(crate) fn stt_model_for(provider: ProviderId, selected: &str) -> Result<String, String> {

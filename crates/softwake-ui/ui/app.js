@@ -2952,6 +2952,29 @@ function renderRoomsChatLog(snap) {
       (profileId === "operator" ? " operator" : "");
     row.style.background = colors.bg;
     row.style.borderColor = colors.border;
+    const dmTo = line.to_name || line.to_profile_id || "";
+    if (kind === "dm" && dmTo) {
+      const from = line.name || line.profile_id || "Someone";
+      const details = document.createElement("details");
+      details.className = "room-dm";
+      const summary = document.createElement("summary");
+      summary.style.color = colors.name;
+      summary.textContent = from + " sent a message to " + dmTo;
+      details.appendChild(summary);
+      const body = document.createElement("div");
+      body.className = "text";
+      body.textContent = line.text || "";
+      details.appendChild(body);
+      if (line.reply) {
+        const reply = document.createElement("div");
+        reply.className = "text room-dm-reply";
+        reply.textContent = "Reply: " + line.reply;
+        details.appendChild(reply);
+      }
+      row.appendChild(details);
+      logEl.appendChild(row);
+      continue;
+    }
     const who = document.createElement("div");
     who.className = "who";
     who.style.color = colors.name;

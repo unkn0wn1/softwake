@@ -25,6 +25,8 @@
 
 ### Added
 
+- **Room private notes:** a member can send one other member a note (`PRIVATE Name: message`) instead of speaking in the room. The room shows a collapsed bubble, "Sara sent a message to Sally". Opening it shows the note and the reply. That note is in both members' own chats and is not spoken. A normal room line is still spoken on the one player. Parallel fan-out and interrupt clearing stay.
+
 - **Per-profile TTS voice:** `profile.json` `tts_voice` (empty uses Settings `selected_tts_voice`, then eve). Ask, early TTS, state announcements, and room member replies use that profile's voice. Room replies play one after another. S2S stays one session and one Settings voice.
 
 - **ADR-0052 agent team / local power:** per-profile agent homes (`$XDG_DATA_HOME/softwake/homes/<id>/`), profile `allow_all` + `role`, confirm-gated `software_install`, rooms with light turn cool-down, peer DM `agent_message`, profile-scoped schedule `agent_task`, and first-class `goal_run` goal loop (plan/execute/verify with caps, human gate, progress log; softwake or local `grok` CLI backend). Settings → Profiles (Allow all / Role) and Settings → Rooms. PROTOCOL stays 1.

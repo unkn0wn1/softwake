@@ -739,10 +739,42 @@ fn spawn_room_fanout(shared: &Arc<Shared>, job: crate::team::RoomFanoutJob) {
         .name("softwake-room-fanout".to_owned())
         .spawn(move || {
             crate::team::run_room_fanout(&job, |profile_id, instructions, allow_all, stimulus| {
-                let mut runtime = lock(&shared.runtime);
-                runtime.oneshot_as_profile(profile_id, instructions, allow_all, stimulus)
+                room_member_oneshot(&shared, profile_id, instructions, allow_all, stimulus)
             });
         });
+}
+
+/// One member LLM call. HTTP runs outside the runtime lock so other members
+/// can be in flight. Tool invokes take the lock and restore the acting profile.
+fn room_member_oneshot(
+    shared: &Arc<Shared>,
+    profile_id: &str,
+    instructions: &str,
+    allow_all: bool,
+    stimulus: &str,
+) -> Result<String, String> {
+    let request = {
+        let runtime = lock(&shared.runtime);
+        runtime.prepare_profile_oneshot(instructions, stimulus)?
+    };
+    let profile_id = profile_id.to_owned();
+    let shared_tools = Arc::clone(shared);
+    let loop_ok = crate::chat::finish_prepared_chat_tools(
+        &request.prepared,
+        &request.bearer,
+        &request.system,
+        &request.turns,
+        &request.tools,
+        move |name, args| {
+            let mut runtime = lock(&shared_tools.runtime);
+            runtime.invoke_chat_as_profile(&profile_id, allow_all, name, args)
+        },
+    );
+    match loop_ok {
+        Ok(crate::tool_loop::ToolLoopOk::Message(reply)) => Ok(reply),
+        Ok(crate::tool_loop::ToolLoopOk::Pending { message, .. }) => Ok(message),
+        Err(error) => Err(error),
+    }
 }
 
 fn spawn_telegram_poll(shared: Arc<Shared>) {

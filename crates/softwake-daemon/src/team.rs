@@ -1,7 +1,6 @@
 //! Agent team helpers: peer DM wake + `goal_run` outer loop (ADR-0052).
 
 use std::env;
-use std::fmt::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -14,8 +13,8 @@ use softwake_tools::{
     AGENT_MESSAGE_TOOL, AgentMessageArgs, GOAL_RUN_TOOL, GoalBackend, GoalProgressEvent,
     GoalRunArgs, GoalRunResult, GoalStopReason, ROOM_COOLDOWN_MS, RoomLogKind, RoomLogLine,
     append_room_log, format_goal_result, mark_room_turn, resolve_rooms_dir,
-    resolve_rooms_state_dir, room_cooldown_elapsed, select_goal_backend, softwake_plan_prompt,
-    verify_acceptance,
+    resolve_rooms_state_dir, room_cooldown_elapsed, room_log_context_line, select_goal_backend,
+    softwake_plan_prompt, verify_acceptance,
 };
 
 use crate::runtime::Runtime;
@@ -121,10 +120,6 @@ fn wait_room_cooldown(path: &std::path::Path) {
     }
 }
 
-fn pause_between_members() {
-    std::thread::sleep(std::time::Duration::from_millis(ROOM_COOLDOWN_MS));
-}
-
 /// Load rendered instructions for a profile pack (global flags applied).
 pub(crate) fn load_profile_instructions(profile_id: &str) -> Result<(ProfileMeta, String), String> {
     let xdg = env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
@@ -200,6 +195,9 @@ fn log_room(
             text: text.to_owned(),
             iteration,
             phase: phase.map(str::to_owned),
+            to_profile_id: None,
+            to_name: None,
+            reply: None,
         },
     );
     let _ = mark_room_turn(&rooms_dir, room_id, profile_id);
@@ -209,6 +207,7 @@ fn log_room(
 pub(crate) fn run_agent_message(
     runtime: &mut Runtime,
     args: &AgentMessageArgs,
+    sender_id: Option<&str>,
 ) -> Result<String, String> {
     let target = resolve_profile_meta(&args.to)?;
     let (meta, instructions) = load_profile_instructions(&target.id)?;
@@ -232,27 +231,68 @@ pub(crate) fn run_agent_message(
             }
         }
     }
+    let sender = sender_id.and_then(|id| resolve_profile_meta(id).ok());
+    if sender.as_ref().is_some_and(|from| from.id == target.id) {
+        return Err("agent_message cannot target the sending profile".into());
+    }
     let reply =
         runtime.oneshot_as_profile(&target.id, &instructions, meta.allow_all, &args.text)?;
-    let name = if meta.name.trim().is_empty() {
-        softwake_soul::DEFAULT_AGENT_NAME
+    let target_name = if meta.name.trim().is_empty() {
+        softwake_soul::DEFAULT_AGENT_NAME.to_owned()
     } else {
-        meta.name.as_str()
+        meta.name.clone()
     };
-    log_room(
-        args.room_id.as_deref(),
-        &target.id,
-        name,
-        RoomLogKind::Dm,
-        &format!("DM in: {}\nDM out: {reply}", args.text),
-        None,
-        None,
+    let sender_name = sender.as_ref().map_or_else(
+        || "Operator".to_owned(),
+        |from| {
+            if from.name.trim().is_empty() {
+                softwake_soul::DEFAULT_AGENT_NAME.to_owned()
+            } else {
+                from.name.clone()
+            }
+        },
     );
-    // Best-effort HUD for target
-    let () = crate::hud_chat_write::append_exchange(&target.id, "peer", &args.text, name, &reply);
+    let sender_profile = sender
+        .as_ref()
+        .map_or("operator", |from| from.id.as_str());
+    let stored_reply = if is_no_reply(&reply) {
+        None
+    } else {
+        Some(reply.trim().to_owned())
+    };
+    if let Some(room_id) = args.room_id.as_deref() {
+        if let Ok((rooms_dir, state_dir)) = rooms_dirs() {
+            let _ = append_room_log(
+                &state_dir,
+                room_id,
+                &RoomLogLine {
+                    ts_ms: softwake_tools::now_ms(),
+                    profile_id: sender_profile.to_owned(),
+                    name: sender_name.clone(),
+                    kind: RoomLogKind::Dm,
+                    text: args.text.clone(),
+                    iteration: None,
+                    phase: None,
+                    to_profile_id: Some(target.id.clone()),
+                    to_name: Some(target_name.clone()),
+                    reply: stored_reply.clone(),
+                },
+            );
+            let _ = mark_room_turn(&rooms_dir, room_id, sender_profile);
+        }
+    }
+    crate::hud_chat_write::append_dm_histories(
+        sender.as_ref().map(|from| from.id.as_str()),
+        &sender_name,
+        &target.id,
+        &target_name,
+        &args.text,
+        stored_reply.as_deref(),
+    );
+    let shown = stored_reply.as_deref().unwrap_or("(no reply)");
     Ok(format!(
-        "{AGENT_MESSAGE_TOOL}: {} ({}) replied:\n{reply}",
-        name, target.id
+        "{AGENT_MESSAGE_TOOL}: {sender_name} sent a message to {target_name} ({}):\n{shown}",
+        target.id
     ))
 }
 
@@ -639,13 +679,6 @@ fn claim_unposted_room_reply(clip: &RoomSpeechClip, captured: u64) -> bool {
 ///
 /// Returns false when `captured` is already stale, and does not push.
 #[must_use]
-#[cfg_attr(
-    test,
-    allow(
-        dead_code,
-        reason = "called from speak_room_member_line, which tests do not compile"
-    )
-)]
 pub(crate) fn enqueue_waiting_room_audio(clip: RoomSpeechClip, captured: u64) -> bool {
     let mut queue = room_speech_queue();
     if !queue.allows(captured) {
@@ -670,6 +703,30 @@ pub(crate) fn claim_waiting_room_audio(clip: &RoomSpeechClip, captured: u64) -> 
         return false;
     }
     queue.take_waiting(clip)
+}
+
+/// True when `clip` is the oldest waiting line.
+///
+/// Playback uses this so a later reply cannot jump the queue.
+#[must_use]
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "order check used by speak_room_member_line, which tests do not compile"
+    )
+)]
+pub(crate) fn room_speech_front_is(clip: &RoomSpeechClip) -> bool {
+    room_speech_queue().waiting_audio.first() == Some(clip)
+}
+
+/// True when `clip` is still waiting to play. False after clear or claim.
+#[must_use]
+pub(crate) fn room_speech_waiting_has(clip: &RoomSpeechClip) -> bool {
+    room_speech_queue()
+        .waiting_audio
+        .iter()
+        .any(|item| item == clip)
 }
 
 /// Prepared member fan-out after the operator line is on disk.
@@ -713,14 +770,7 @@ pub(crate) fn commit_operator_room_post(
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
-        .map(|line| {
-            let who = if line.name.is_empty() {
-                line.profile_id.as_str()
-            } else {
-                line.name.as_str()
-            };
-            format!("[{}] {who}: {}", line.kind.as_str(), line.text)
-        })
+        .map(room_log_context_line)
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -735,6 +785,9 @@ pub(crate) fn commit_operator_room_post(
             text: text.to_owned(),
             iteration: None,
             phase: None,
+            to_profile_id: None,
+            to_name: None,
+            reply: None,
         },
     )?;
     let _ = mark_room_turn(&rooms_dir, room_id, "operator");
@@ -773,44 +826,99 @@ pub(crate) fn commit_operator_room_post(
     Ok((message, Some(job)))
 }
 
-/// Sequential member oneshots with cool-down + single-flight.
+/// One labeled line for a reply already spoken in this fan-out.
+#[must_use]
+fn room_peer_said_line(display: &str, text: &str) -> String {
+    format!(
+        "{display} (another agent in this room) said: {}",
+        text.trim()
+    )
+}
+
+/// Text one room member sees for this fan-out.
 ///
-/// `oneshot` must lock the runtime only for the duration of one LLM turn so
-/// the UI/IPC path stays free. Replies append to the room log as they finish.
+/// `recent_ctx` is the log tail captured before the operator line. `this_turn`
+/// is replies from this fan-out that were already in the room log when this
+/// prompt was built, labeled, in the order they were logged. It is a snapshot.
+/// A peer who has not spoken yet is left out. Empty recent context is `(none)`.
+/// No logged replies yet is `(none yet)`.
+/// The member may answer peers, address another member by name in the room
+/// message, answer the operator, or stay quiet.
+#[must_use]
+fn room_member_stimulus(
+    room_id: &str,
+    title: &str,
+    display: &str,
+    member_id: &str,
+    recent_ctx: &str,
+    this_turn: &str,
+    operator_text: &str,
+) -> String {
+    let recent = if recent_ctx.is_empty() {
+        "(none)"
+    } else {
+        recent_ctx
+    };
+    let peers = if this_turn.is_empty() {
+        "(none yet)"
+    } else {
+        this_turn
+    };
+    format!(
+        "\
+You are in Softwake room `{room_id}` (title: {title}). You are {display} (profile id `{member_id}`).
+
+Recent room context:
+{recent}
+
+Operator message:
+{operator_text}
+
+Other members this turn:
+{peers}
+
+Other members may be answering at the same time. You only see peers who have already spoken. If none have, answer the operator. Do not wait for them. Another member already speaking does not cancel your turn.
+You may reply to a peer, address another member by name in this room message (for example, Sarah: what do you think?), reply to the operator, send a private note to one other member, or stay quiet (NO_REPLY).
+A room message is spoken in the room. It is not a private note.
+Decide for yourself:
+- If you should reply, write your room message only (no preamble).
+- If you should stay quiet, reply with exactly: NO_REPLY
+- To send a private note to exactly one other member instead of speaking, reply with exactly: PRIVATE <name>: <message>
+A private note is not spoken. The room only shows that you sent it. The note and any reply are written to both chats."
+    )
+}
+
+/// Concurrent member oneshots. Playback stays one clip at a time.
 ///
-/// When `job.speech_gen` is stale, the loop stops. Later members are not
-/// appended and are not spoken. Lines already appended stay in the log.
-#[allow(
-    clippy::too_many_lines,
-    reason = "room fan-out + cool-down stay in one ADR-0052 flow"
-)]
-pub(crate) fn run_room_fanout<F>(job: &RoomFanoutJob, mut oneshot: F)
+/// Each member runs on its own thread. The 1500ms room cool-down may run once
+/// before any of them start. It does not sit between LLM calls. Prompt build
+/// snapshots peers already logged and does not wait for the others. When a
+/// reply returns, it is appended and enqueued immediately. `NO_REPLY` skips
+/// are left out. One TTS path plays the queue. This does not open a Voice
+/// Agent session per member.
+///
+/// When `job.speech_gen` is stale, a reply that is not logged yet is dropped.
+/// Lines already appended stay in the log.
+pub(crate) fn run_room_fanout<F>(job: &RoomFanoutJob, oneshot: F)
 where
-    F: FnMut(&str, &str, bool, &str) -> Result<String, String>,
+    F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
 {
     let _fanout_flight = room_fanout_single_flight();
-    let room_id = job.room_id.as_str();
-    let text = job.operator_text.as_str();
-    let title = job.title.as_str();
-    let mut replied: Vec<String> = Vec::new();
-    let mut skipped: Vec<String> = Vec::new();
-    for raw in &job.unknown {
-        skipped.push(format!("{raw} (unknown profile)"));
+    if !job.members.is_empty() {
+        wait_room_cooldown(&job.room_path);
     }
-    let mut thread_notes = String::new();
-
-    for (index, member) in job.members.iter().enumerate() {
+    let mut loaded = Vec::with_capacity(job.members.len());
+    let mut skipped_early = Vec::new();
+    for raw in &job.unknown {
+        skipped_early.push(format!("{raw} (unknown profile)"));
+    }
+    for member in &job.members {
         if !room_speech_allows(job.speech_gen) {
             break;
         }
-        if index > 0 {
-            pause_between_members();
-        }
-        wait_room_cooldown(&job.room_path);
-
         let member_id = member.id.as_str();
         let Ok((meta, instructions)) = load_profile_instructions(member_id) else {
-            skipped.push(format!("{member_id} (unknown profile)"));
+            skipped_early.push(format!("{member_id} (unknown profile)"));
             continue;
         };
         let _ = softwake_soul::ensure_profile_home(member_id);
@@ -819,82 +927,64 @@ where
         } else {
             meta.name.clone()
         };
-        let prior = if thread_notes.is_empty() {
-            job.recent_ctx.clone()
-        } else if job.recent_ctx.is_empty() {
-            thread_notes.clone()
-        } else {
-            format!("{}\n{thread_notes}", job.recent_ctx)
-        };
-        let stimulus = format!(
-            "You are in Softwake room `{room_id}` (title: {title}). You are {display} (profile id `{member_id}`).\n\nRecent room context:\n{prior}\n\nOperator message:\n{text}\n\nSoftwake wakes every room member, one at a time, with a cool-down between turns. Another member already speaking does not cancel your turn.\nDecide for yourself:\n- If you should reply, write your room message only (no preamble).\n- If you should stay quiet, reply with exactly: NO_REPLY"
-        );
-        if !room_speech_allows(job.speech_gen) {
-            break;
-        }
-        let reply = match oneshot(member_id, &instructions, meta.allow_all, &stimulus) {
-            Ok(r) => r,
-            Err(error) => {
-                if !room_speech_allows(job.speech_gen) {
-                    break;
-                }
-                skipped.push(format!("{member_id} (error: {error})"));
-                continue;
-            }
-        };
-        // After the oneshot, before any append. A stale stamp must not post.
-        if !room_speech_allows(job.speech_gen) {
-            break;
-        }
-        if is_no_reply(&reply) {
-            skipped.push(format!("{member_id} (NO_REPLY)"));
-            continue;
-        }
-        let trimmed = reply.trim();
-        let clip = RoomSpeechClip {
-            text: trimmed.to_owned(),
+        loaded.push(LoadedRoomMember {
+            id: member_id.to_owned(),
+            display,
+            instructions,
+            allow_all: meta.allow_all,
             voice: meta.tts_voice.clone(),
-        };
-        // Stage then take so a clear that landed after the oneshot drops this
-        // reply. If it is gone, do not append and do not speak.
-        if !stage_unposted_room_reply(&clip, job.speech_gen) {
-            break;
-        }
-        if !claim_unposted_room_reply(&clip, job.speech_gen) {
-            break;
-        }
-        if !room_speech_allows(job.speech_gen) {
-            break;
-        }
-        if let Err(error) = append_room_log(
-            &job.state_dir,
-            room_id,
-            &RoomLogLine {
-                ts_ms: softwake_tools::now_ms(),
-                profile_id: member_id.to_owned(),
-                name: display.clone(),
-                kind: RoomLogKind::Say,
-                text: trimmed.to_owned(),
-                iteration: None,
-                phase: None,
-            },
-        ) {
-            skipped.push(format!("{member_id} (log error: {error})"));
-            continue;
-        }
-        let _ = mark_room_turn(&job.rooms_dir, room_id, member_id);
-        if !thread_notes.is_empty() {
-            thread_notes.push('\n');
-        }
-        let _ = write!(thread_notes, "[say] {display}: {trimmed}");
-        replied.push(format!("{display} ({member_id})"));
-        // Non-S2S path: one clip per member, in this member's voice, before the next.
-        #[cfg(not(test))]
-        {
-            crate::talk::speak_room_member_line(&meta.tts_voice, trimmed, job.speech_gen);
-        }
+        });
     }
+    run_loaded_room_fanout(job, &loaded, "", &skipped_early, &oneshot);
+}
 
+/// Profile pack already read. Member threads only run the oneshot and the log.
+struct LoadedRoomMember {
+    id: String,
+    display: String,
+    instructions: String,
+    allow_all: bool,
+    voice: String,
+}
+
+fn push_line(bucket: &Mutex<Vec<String>>, line: String) {
+    bucket
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(line);
+}
+
+/// `initial_peers` is room history already spoken before these prompts are built.
+/// Empty means nobody in this fan-out has been logged yet.
+fn run_loaded_room_fanout<F>(
+    job: &RoomFanoutJob,
+    members: &[LoadedRoomMember],
+    initial_peers: &str,
+    skipped_early: &[String],
+    oneshot: &F,
+) where
+    F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
+{
+    let peers = Mutex::new(initial_peers.to_owned());
+    let replied = Mutex::new(Vec::new());
+    let skipped = Mutex::new(skipped_early.to_vec());
+    std::thread::scope(|scope| {
+        for member in members {
+            let peers = &peers;
+            let replied = &replied;
+            let skipped = &skipped;
+            scope.spawn(move || {
+                run_one_room_member(job, member, members, peers, replied, skipped, oneshot);
+            });
+        }
+    });
+    let replied = replied
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let skipped = skipped
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let room_id = job.room_id.as_str();
     let replied_s = if replied.is_empty() {
         "(none)".to_owned()
     } else {
@@ -909,6 +999,330 @@ where
         "softwaked: room `{room_id}` fan-out done; woke {}; replied: {replied_s}; quiet: {skipped_s}",
         job.members.len()
     );
+}
+
+fn run_one_room_member<F>(
+    job: &RoomFanoutJob,
+    member: &LoadedRoomMember,
+    roster: &[LoadedRoomMember],
+    peers: &Mutex<String>,
+    replied: &Mutex<Vec<String>>,
+    skipped: &Mutex<Vec<String>>,
+    oneshot: &F,
+) where
+    F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
+{
+    if !room_speech_allows(job.speech_gen) {
+        return;
+    }
+    let this_turn = peers
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let stimulus = room_member_stimulus(
+        job.room_id.as_str(),
+        job.title.as_str(),
+        &member.display,
+        member.id.as_str(),
+        &job.recent_ctx,
+        &this_turn,
+        job.operator_text.as_str(),
+    );
+    if !room_speech_allows(job.speech_gen) {
+        return;
+    }
+    let reply = match oneshot(
+        member.id.as_str(),
+        &member.instructions,
+        member.allow_all,
+        &stimulus,
+    ) {
+        Ok(reply) => reply,
+        Err(error) => {
+            if room_speech_allows(job.speech_gen) {
+                push_line(skipped, format!("{} (error: {error})", member.id));
+            }
+            return;
+        }
+    };
+    if !room_speech_allows(job.speech_gen) {
+        return;
+    }
+    if is_no_reply(&reply) {
+        push_line(skipped, format!("{} (NO_REPLY)", member.id));
+        return;
+    }
+    if looks_like_private_note(&reply) {
+        publish_private_member_note(
+            job, member, roster, &reply, peers, replied, skipped, oneshot,
+        );
+        return;
+    }
+    publish_logged_member_reply(job, member, reply.trim(), peers, replied, skipped);
+}
+
+/// `PRIVATE <name>: <message>` is a note to one member, not a room line.
+fn looks_like_private_note(reply: &str) -> bool {
+    private_note_body(reply).is_some()
+}
+
+/// Recipient token and note body. `None` when this is not a private note.
+fn parse_private_note(reply: &str) -> Option<(String, String)> {
+    let rest = private_note_body(reply)?;
+    let (to, text) = rest.split_once(':')?;
+    let to = to.trim();
+    let text = text.trim();
+    if to.is_empty() || text.is_empty() || to.contains('\n') || to.contains(',') {
+        return None;
+    }
+    Some((to.to_owned(), text.to_owned()))
+}
+
+fn private_note_body(reply: &str) -> Option<&str> {
+    let trimmed = reply.trim();
+    let prefix = "PRIVATE";
+    let rest = trimmed.get(prefix.len()..)?;
+    if !trimmed[..prefix.len()].eq_ignore_ascii_case(prefix) {
+        return None;
+    }
+    if !rest.starts_with(|c: char| c.is_ascii_whitespace()) {
+        return None;
+    }
+    Some(rest.trim_start())
+}
+
+fn find_loaded_member<'a>(
+    roster: &'a [LoadedRoomMember],
+    needle: &str,
+) -> Option<&'a LoadedRoomMember> {
+    let needle = needle.trim();
+    if needle.is_empty() {
+        return None;
+    }
+    if let Some(member) = roster.iter().find(|member| member.id == needle) {
+        return Some(member);
+    }
+    if let Some(member) = roster
+        .iter()
+        .find(|member| member.id.eq_ignore_ascii_case(needle))
+    {
+        return Some(member);
+    }
+    let lower = needle.to_ascii_lowercase();
+    roster
+        .iter()
+        .find(|member| member.display.trim().to_ascii_lowercase() == lower)
+}
+
+fn private_reply_stimulus(
+    room_id: &str,
+    sender_display: &str,
+    recipient_display: &str,
+    recipient_id: &str,
+    text: &str,
+) -> String {
+    format!(
+        "\
+You are {recipient_display} (profile id `{recipient_id}`) in Softwake room `{room_id}`.
+{sender_display} sent you a private message. It is not spoken in the room.
+
+Private message:
+{text}
+
+Reply to {sender_display} only. Write the reply text alone, or exactly NO_REPLY if you have nothing to say.
+Do not write a room message."
+    )
+}
+
+/// Collapsed peer line. The note body stays out of the room prompt.
+#[must_use]
+fn room_private_peer_line(sender_display: &str, target_display: &str) -> String {
+    format!("{sender_display} (another agent in this room) sent a message to {target_display}")
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "room private-note publish stays next to the spoken path"
+)]
+fn publish_private_member_note<F>(
+    job: &RoomFanoutJob,
+    member: &LoadedRoomMember,
+    roster: &[LoadedRoomMember],
+    raw_reply: &str,
+    peers: &Mutex<String>,
+    replied: &Mutex<Vec<String>>,
+    skipped: &Mutex<Vec<String>>,
+    oneshot: &F,
+) where
+    F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
+{
+    let Some((to, text)) = parse_private_note(raw_reply) else {
+        push_line(skipped, format!("{} (private note malformed)", member.id));
+        return;
+    };
+    if !room_speech_allows(job.speech_gen) {
+        return;
+    }
+    let Some(target) = find_loaded_member(roster, &to) else {
+        push_line(
+            skipped,
+            format!("{} (private note to unknown `{to}`)", member.id),
+        );
+        return;
+    };
+    if target.id == member.id {
+        push_line(skipped, format!("{} (private note to self)", member.id));
+        return;
+    }
+    let stimulus = private_reply_stimulus(
+        job.room_id.as_str(),
+        &member.display,
+        &target.display,
+        target.id.as_str(),
+        &text,
+    );
+    if !room_speech_allows(job.speech_gen) {
+        return;
+    }
+    let reply_text = match oneshot(
+        target.id.as_str(),
+        &target.instructions,
+        target.allow_all,
+        &stimulus,
+    ) {
+        Ok(reply) => reply,
+        Err(error) => {
+            if room_speech_allows(job.speech_gen) {
+                push_line(
+                    skipped,
+                    format!("{} (private reply error: {error})", member.id),
+                );
+            }
+            return;
+        }
+    };
+    if !room_speech_allows(job.speech_gen) {
+        return;
+    }
+    let stored_reply = if is_no_reply(&reply_text) {
+        None
+    } else {
+        Some(reply_text.trim().to_owned())
+    };
+    {
+        let mut peers_guard = peers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !room_speech_allows(job.speech_gen) {
+            return;
+        }
+        if let Err(error) = append_room_log(
+            &job.state_dir,
+            job.room_id.as_str(),
+            &RoomLogLine {
+                ts_ms: softwake_tools::now_ms(),
+                profile_id: member.id.clone(),
+                name: member.display.clone(),
+                kind: RoomLogKind::Dm,
+                text: text.clone(),
+                iteration: None,
+                phase: None,
+                to_profile_id: Some(target.id.clone()),
+                to_name: Some(target.display.clone()),
+                reply: stored_reply.clone(),
+            },
+        ) {
+            drop(peers_guard);
+            push_line(skipped, format!("{} (log error: {error})", member.id));
+            return;
+        }
+        let _ = mark_room_turn(&job.rooms_dir, job.room_id.as_str(), member.id.as_str());
+        if !peers_guard.is_empty() {
+            peers_guard.push('\n');
+        }
+        peers_guard.push_str(&room_private_peer_line(&member.display, &target.display));
+        push_line(
+            replied,
+            format!(
+                "{} ({}) private to {}",
+                member.display, member.id, target.display
+            ),
+        );
+    }
+    #[cfg(not(test))]
+    crate::hud_chat_write::append_dm_histories(
+        Some(member.id.as_str()),
+        &member.display,
+        &target.id,
+        &target.display,
+        &text,
+        stored_reply.as_deref(),
+    );
+}
+
+fn publish_logged_member_reply(
+    job: &RoomFanoutJob,
+    member: &LoadedRoomMember,
+    trimmed: &str,
+    peers: &Mutex<String>,
+    replied: &Mutex<Vec<String>>,
+    skipped: &Mutex<Vec<String>>,
+) {
+    let clip = RoomSpeechClip {
+        text: trimmed.to_owned(),
+        voice: member.voice.clone(),
+    };
+    if !stage_unposted_room_reply(&clip, job.speech_gen) {
+        return;
+    }
+    if !claim_unposted_room_reply(&clip, job.speech_gen) {
+        return;
+    }
+    if !room_speech_allows(job.speech_gen) {
+        return;
+    }
+    {
+        let mut peers_guard = peers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !room_speech_allows(job.speech_gen) {
+            return;
+        }
+        if let Err(error) = append_room_log(
+            &job.state_dir,
+            job.room_id.as_str(),
+            &RoomLogLine {
+                ts_ms: softwake_tools::now_ms(),
+                profile_id: member.id.clone(),
+                name: member.display.clone(),
+                kind: RoomLogKind::Say,
+                text: trimmed.to_owned(),
+                iteration: None,
+                phase: None,
+                to_profile_id: None,
+                to_name: None,
+                reply: None,
+            },
+        ) {
+            drop(peers_guard);
+            push_line(skipped, format!("{} (log error: {error})", member.id));
+            return;
+        }
+        let _ = mark_room_turn(&job.rooms_dir, job.room_id.as_str(), member.id.as_str());
+        if !peers_guard.is_empty() {
+            peers_guard.push('\n');
+        }
+        peers_guard.push_str(&room_peer_said_line(&member.display, trimmed));
+        push_line(replied, format!("{} ({})", member.display, member.id));
+    }
+    let queued = enqueue_waiting_room_audio(clip, job.speech_gen);
+    #[cfg(not(test))]
+    if queued {
+        crate::talk::speak_room_member_line(&member.voice, trimmed, job.speech_gen);
+    }
+    #[cfg(test)]
+    let _ = queued;
 }
 
 #[cfg(test)]
@@ -1017,5 +1431,382 @@ mod tests {
         assert!(queue.stage_unposted(&unposted, report.generation));
         assert!(queue.unposted_contains(&unposted));
         assert_eq!(room_log, room_log_before);
+    }
+
+    #[test]
+    fn first_member_stimulus_has_context_and_no_peers_yet() {
+        let recent = "[say] Kai: yesterday we slipped the cut";
+        let stimulus = room_member_stimulus(
+            "standup",
+            "Standup",
+            "Spencer",
+            "spencer",
+            recent,
+            "",
+            "are we shipping today",
+        );
+        assert!(stimulus.contains("Operator message:\nare we shipping today"));
+        assert!(stimulus.contains("Recent room context:\n[say] Kai: yesterday we slipped the cut"));
+        assert!(stimulus.contains("Other members this turn:\n(none yet)"));
+        assert!(
+            stimulus.contains(
+                "You may reply to a peer, address another member by name in this room message (for example, Sarah: what do you think?), reply to the operator, send a private note to one other member, or stay quiet (NO_REPLY)."
+            )
+        );
+        assert!(!stimulus.contains("another agent in this room"));
+        assert!(!stimulus.to_ascii_lowercase().contains("must reply"));
+
+        let empty_recent = room_member_stimulus(
+            "standup",
+            "Standup",
+            "Spencer",
+            "spencer",
+            "",
+            "",
+            "are we shipping today",
+        );
+        assert!(empty_recent.contains("Recent room context:\n(none)"));
+        assert!(empty_recent.contains("(none yet)"));
+    }
+
+    #[test]
+    fn later_member_stimulus_hears_earlier_peer() {
+        let recent = "[say] Kai: yesterday we slipped the cut";
+        let peer = room_peer_said_line("Sara Vale", "the build is green");
+        assert_eq!(
+            peer,
+            "Sara Vale (another agent in this room) said: the build is green"
+        );
+        let stimulus = room_member_stimulus(
+            "standup",
+            "Standup",
+            "Spencer",
+            "spencer",
+            recent,
+            &peer,
+            "are we shipping today",
+        );
+        assert!(stimulus.contains("Operator message:\nare we shipping today"));
+        assert!(
+            stimulus.contains("Sara Vale (another agent in this room) said: the build is green")
+        );
+        assert!(stimulus.contains("Recent room context:\n[say] Kai: yesterday we slipped the cut"));
+        assert!(
+            stimulus.contains(
+                "You may reply to a peer, address another member by name in this room message (for example, Sarah: what do you think?), reply to the operator, send a private note to one other member, or stay quiet (NO_REPLY)."
+            )
+        );
+        assert!(
+            stimulus.contains("- If you should reply, write your room message only (no preamble).")
+        );
+        assert!(stimulus.contains("- If you should stay quiet, reply with exactly: NO_REPLY"));
+        assert!(stimulus.contains("PRIVATE <name>: <message>"));
+        assert!(stimulus.contains("A private note is not spoken."));
+        let lower = stimulus.to_ascii_lowercase();
+        assert!(!lower.contains("must reply"));
+        assert!(!lower.contains("must respond"));
+        assert!(!lower.contains("have to reply"));
+        assert!(!stimulus.contains("[say] Sara Vale:"));
+    }
+    fn parallel_temp(label: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "softwake-room-parallel-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    fn parallel_job(dir: &std::path::Path, speech_gen: u64) -> RoomFanoutJob {
+        RoomFanoutJob {
+            room_id: "parallel".into(),
+            operator_text: "are we shipping today".into(),
+            title: "Standup".into(),
+            members: Vec::new(),
+            unknown: Vec::new(),
+            recent_ctx: String::new(),
+            rooms_dir: dir.to_path_buf(),
+            state_dir: dir.to_path_buf(),
+            room_path: dir.join("parallel.json"),
+            speech_gen,
+        }
+    }
+
+    fn loaded_member(id: &str, display: &str, voice: &str) -> LoadedRoomMember {
+        LoadedRoomMember {
+            id: id.to_owned(),
+            display: display.to_owned(),
+            instructions: "test".to_owned(),
+            allow_all: false,
+            voice: voice.to_owned(),
+        }
+    }
+
+    /// The process speech queue is global. Keep these tests from interleaving.
+    fn hold_speech_queue_tests() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    struct DrainWaiting {
+        texts: Vec<String>,
+    }
+
+    impl Drop for DrainWaiting {
+        fn drop(&mut self) {
+            let mut queue = room_speech_queue();
+            queue
+                .waiting_audio
+                .retain(|clip| !self.texts.iter().any(|text| text == &clip.text));
+        }
+    }
+
+    #[test]
+    fn two_members_can_be_in_flight_and_a_finished_reply_enqueues() {
+        let _hold = hold_speech_queue_tests();
+        let dir = parallel_temp("inflight");
+        let sara_text = "the build is green";
+        let spencer_text = "notes from spencer";
+        let _drain = DrainWaiting {
+            texts: vec![sara_text.to_owned(), spencer_text.to_owned()],
+        };
+        let job = parallel_job(&dir, room_speech_generation());
+        let members = vec![
+            loaded_member("sara", "Sara Vale", "ara"),
+            loaded_member("spencer", "Spencer", "rex"),
+        ];
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let inflight = std::sync::atomic::AtomicUsize::new(0);
+        let max_inflight = std::sync::atomic::AtomicUsize::new(0);
+        let saw_enqueued = std::sync::atomic::AtomicBool::new(false);
+        let stimuli = Mutex::new(Vec::<(String, String)>::new());
+        let oneshot = |id: &str, _instructions: &str, _allow_all: bool, stimulus: &str| {
+            stimuli
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((id.to_owned(), stimulus.to_owned()));
+            let now = inflight.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            max_inflight.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+            barrier.wait();
+            let result = if id == "sara" {
+                Ok(sara_text.to_owned())
+            } else {
+                let clip = RoomSpeechClip {
+                    text: sara_text.to_owned(),
+                    voice: "ara".to_owned(),
+                };
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    if room_speech_waiting_has(&clip) {
+                        saw_enqueued.store(true, std::sync::atomic::Ordering::SeqCst);
+                        break;
+                    }
+                    if std::time::Instant::now() > deadline {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Ok(spencer_text.to_owned())
+            };
+            inflight.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            result
+        };
+        run_loaded_room_fanout(&job, &members, "", &[], &oneshot);
+        assert!(
+            max_inflight.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+            "both member oneshots must overlap"
+        );
+        assert!(
+            saw_enqueued.load(std::sync::atomic::Ordering::SeqCst),
+            "a finished reply must enqueue while the other member is still in oneshot"
+        );
+        let stimuli = stimuli
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(stimuli.len(), 2);
+        for (_id, stimulus) in stimuli.iter() {
+            assert!(
+                stimulus.contains("Other members this turn:\n(none yet)"),
+                "{stimulus}"
+            );
+            assert!(
+                !stimulus.contains("another agent in this room"),
+                "{stimulus}"
+            );
+            assert!(stimulus.contains("Do not wait for them."));
+            assert!(stimulus.contains("Sarah: what do you think?"));
+        }
+        let log = std::fs::read_to_string(dir.join("parallel").join("log.jsonl")).expect("log");
+        assert!(log.contains(sara_text));
+        assert!(log.contains(spencer_text));
+    }
+
+    #[test]
+    fn already_logged_peer_is_in_the_prompt_without_waiting_to_start() {
+        let _hold = hold_speech_queue_tests();
+        let dir = parallel_temp("seed");
+        let _drain = DrainWaiting {
+            texts: vec!["alpha line".to_owned(), "beta line".to_owned()],
+        };
+        let job = parallel_job(&dir, room_speech_generation());
+        let members = vec![
+            loaded_member("sara", "Sara Vale", "ara"),
+            loaded_member("spencer", "Spencer", "rex"),
+        ];
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let inflight = std::sync::atomic::AtomicUsize::new(0);
+        let max_inflight = std::sync::atomic::AtomicUsize::new(0);
+        let stimuli = Mutex::new(Vec::<(String, String)>::new());
+        let seed = room_peer_said_line("Kai", "I already spoke");
+        let oneshot = |id: &str, _instructions: &str, _allow_all: bool, stimulus: &str| {
+            stimuli
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((id.to_owned(), stimulus.to_owned()));
+            let now = inflight.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            max_inflight.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+            barrier.wait();
+            inflight.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            if id == "sara" {
+                Ok("alpha line".to_owned())
+            } else {
+                Ok("beta line".to_owned())
+            }
+        };
+        run_loaded_room_fanout(&job, &members, &seed, &[], &oneshot);
+        assert!(
+            max_inflight.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+            "seeded history must not serialize the oneshots"
+        );
+        let stimuli = stimuli
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(stimuli.len(), 2);
+        for (_id, stimulus) in stimuli.iter() {
+            assert!(stimulus.contains("Kai (another agent in this room) said: I already spoke"));
+            assert!(!stimulus.contains("(none yet)"));
+            assert!(stimulus.contains("Sarah: what do you think?"));
+        }
+    }
+
+    #[test]
+    fn private_note_parses_one_recipient_only() {
+        let parsed = parse_private_note("PRIVATE Spencer: ping the notes").unwrap();
+        assert_eq!(parsed.0, "Spencer");
+        assert_eq!(parsed.1, "ping the notes");
+        assert!(parse_private_note("private Sally: hi").is_some());
+        assert!(parse_private_note("PRIVATE Spencer, Sally: hi").is_none());
+        assert!(parse_private_note("hello room").is_none());
+        assert!(!looks_like_private_note("hello room"));
+        let line = room_private_peer_line("Sara", "Sally");
+        assert_eq!(
+            line,
+            "Sara (another agent in this room) sent a message to Sally"
+        );
+        assert!(!line.contains("ping"));
+    }
+
+    #[test]
+    fn private_note_is_logged_not_spoken_and_a_room_say_still_enqueues() {
+        let _hold = hold_speech_queue_tests();
+        let dir = parallel_temp("dm");
+        let say = "shipping today";
+        let note = "ping the notes";
+        let _drain = DrainWaiting {
+            texts: vec![say.to_owned()],
+        };
+        let job = parallel_job(&dir, room_speech_generation());
+        let members = vec![
+            loaded_member("sara", "Sara", "ara"),
+            loaded_member("spencer", "Spencer", "rex"),
+        ];
+        let oneshot = |id: &str, _instructions: &str, _allow_all: bool, stimulus: &str| {
+            if stimulus.contains("sent you a private message") {
+                assert_eq!(id, "spencer");
+                assert!(stimulus.contains(note));
+                assert!(stimulus.contains("not spoken"));
+                return Ok("got it".to_owned());
+            }
+            if id == "sara" {
+                Ok(format!("PRIVATE Spencer: {note}"))
+            } else {
+                Ok(say.to_owned())
+            }
+        };
+        run_loaded_room_fanout(&job, &members, "", &[], &oneshot);
+        let raw = std::fs::read_to_string(dir.join("parallel").join("log.jsonl")).expect("log");
+        let lines: Vec<softwake_tools::RoomLogLine> = raw
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("row"))
+            .collect();
+        let dm = lines
+            .iter()
+            .find(|line| line.kind == RoomLogKind::Dm)
+            .expect("dm");
+        assert_eq!(dm.name, "Sara");
+        assert_eq!(dm.profile_id, "sara");
+        assert_eq!(dm.text, note);
+        assert_eq!(dm.to_name.as_deref(), Some("Spencer"));
+        assert_eq!(dm.to_profile_id.as_deref(), Some("spencer"));
+        assert_eq!(dm.reply.as_deref(), Some("got it"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.kind == RoomLogKind::Say && line.text == say)
+        );
+        assert!(!raw.contains("PRIVATE Spencer"));
+        let clip = RoomSpeechClip {
+            text: note.to_owned(),
+            voice: "ara".to_owned(),
+        };
+        assert!(!room_speech_waiting_has(&clip));
+        assert!(room_speech_waiting_has(&RoomSpeechClip {
+            text: say.to_owned(),
+            voice: "rex".to_owned(),
+        }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn interrupt_drops_a_private_note_that_is_not_logged_yet() {
+        let _hold = hold_speech_queue_tests();
+        let dir = parallel_temp("dm-clear");
+        let job = parallel_job(&dir, room_speech_generation());
+        let members = vec![
+            loaded_member("sara", "Sara", "ara"),
+            loaded_member("spencer", "Spencer", "rex"),
+        ];
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let oneshot = |id: &str, _instructions: &str, _allow_all: bool, stimulus: &str| {
+            assert!(
+                !stimulus.contains("sent you a private message"),
+                "interrupt must drop the note before a reply oneshot"
+            );
+            barrier.wait();
+            if id == "sara" {
+                clear_room_speech_queue();
+                Ok("PRIVATE Spencer: ping the notes".to_owned())
+            } else {
+                Ok("NO_REPLY".to_owned())
+            }
+        };
+        run_loaded_room_fanout(&job, &members, "", &[], &oneshot);
+        let path = dir.join("parallel").join("log.jsonl");
+        if path.is_file() {
+            let raw = std::fs::read_to_string(&path).expect("log");
+            assert!(!raw.contains("ping the notes"), "{raw}");
+            assert!(!raw.contains("PRIVATE"), "{raw}");
+        }
+        assert!(!room_speech_waiting_has(&RoomSpeechClip {
+            text: "ping the notes".to_owned(),
+            voice: "ara".to_owned(),
+        }));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
