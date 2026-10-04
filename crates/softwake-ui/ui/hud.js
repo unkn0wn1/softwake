@@ -1272,6 +1272,34 @@ function roomParticipantStyle(profileId) {
   };
 }
 
+function roomDmSummary(line) {
+  const from = (line && (line.name || line.profile_id)) || "Someone";
+  const to = (line && (line.to_name || line.to_profile_id)) || "";
+  if (!to) return "";
+  return from + " sent a message to " + to;
+}
+
+function appendRoomDmDetails(row, line, summaryText, nameColor) {
+  const details = document.createElement("details");
+  details.className = "room-dm";
+  const summary = document.createElement("summary");
+  summary.textContent = summaryText;
+  if (nameColor) summary.style.color = nameColor;
+  details.appendChild(summary);
+  const body = document.createElement("div");
+  body.className = "text";
+  body.textContent = (line && line.text) || "";
+  details.appendChild(body);
+  const replyText = line && line.reply ? String(line.reply) : "";
+  if (replyText) {
+    const reply = document.createElement("div");
+    reply.className = "text room-dm-reply";
+    reply.textContent = "Reply: " + replyText;
+    details.appendChild(reply);
+  }
+  row.appendChild(details);
+}
+
 function appendRoomBubble(container, line) {
   const kind = (line && line.kind) || "say";
   const profileId = (line && line.profile_id) || "";
@@ -1283,6 +1311,12 @@ function appendRoomBubble(container, line) {
     (profileId === "operator" ? " operator" : "");
   row.style.background = colors.bg;
   row.style.borderColor = colors.border;
+  const dmSummary = kind === "dm" ? roomDmSummary(line) : "";
+  if (dmSummary) {
+    appendRoomDmDetails(row, line, dmSummary, colors.name);
+    container.appendChild(row);
+    return row;
+  }
   const who = document.createElement("div");
   who.className = "who";
   who.style.color = colors.name;

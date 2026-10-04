@@ -92,8 +92,8 @@ pub use rooms::{
     MAX_LOG_TAIL, MAX_ROOM_CHAT_LINES, MAX_ROOM_MEMBERS, MAX_ROOMS, ROOM_COOLDOWN_MS, RoomFile,
     RoomLogKind, RoomLogLine, append_room_log, create_room, delete_room, ensure_rooms_dir,
     list_rooms, load_room, log_goal_progress, mark_room_turn, resolve_rooms_dir,
-    resolve_rooms_state_dir, room_cooldown_elapsed, room_file_path, save_room, tail_room_log,
-    update_room, upsert_room,
+    resolve_rooms_state_dir, room_cooldown_elapsed, room_file_path, room_log_context_line,
+    save_room, tail_room_log, update_room, upsert_room,
 };
 pub use shell::{
     DEFAULT_OUTPUT_CAP, DEFAULT_SHELL_TIMEOUT, ShellError, ShellOutput, format_shell_output,

@@ -1264,7 +1264,8 @@ impl Runtime {
     fn apply_team_effect(&mut self, effect: crate::dispatch::TeamEffect) -> Result<String, String> {
         match effect {
             crate::dispatch::TeamEffect::AgentMessage(args) => {
-                crate::team::run_agent_message(self, &args)
+                let sender = self.hands.acting_profile_id().map(str::to_owned);
+                crate::team::run_agent_message(self, &args, sender.as_deref())
             }
             crate::dispatch::TeamEffect::GoalRun(args) => crate::team::run_goal(self, &args),
         }

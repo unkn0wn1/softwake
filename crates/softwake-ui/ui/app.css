@@ -680,6 +680,13 @@ button.btn-primary.btn-compact {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.rooms-chat-line details.room-dm summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+.rooms-chat-line .room-dm-reply {
+  margin-top: 0.35rem;
+}
 .rooms-admin {
   margin-top: 0.5rem;
 }

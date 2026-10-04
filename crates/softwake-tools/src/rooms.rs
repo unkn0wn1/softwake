@@ -105,6 +105,36 @@ pub struct RoomLogLine {
     /// Optional goal phase (`plan` / `execute` / `verify` / …).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
+    /// Recipient profile id when `kind` is [`RoomLogKind::Dm`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_profile_id: Option<String>,
+    /// Recipient display name when `kind` is [`RoomLogKind::Dm`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_name: Option<String>,
+    /// Recipient reply when `kind` is [`RoomLogKind::Dm`]. `text` is the note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<String>,
+}
+
+/// One recent-context line. A private note contributes only the collapsed sentence.
+#[must_use]
+pub fn room_log_context_line(line: &RoomLogLine) -> String {
+    let who = if line.name.is_empty() {
+        line.profile_id.as_str()
+    } else {
+        line.name.as_str()
+    };
+    if line.kind == RoomLogKind::Dm {
+        let to = line
+            .to_name
+            .as_deref()
+            .filter(|name| !name.is_empty())
+            .or(line.to_profile_id.as_deref())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("someone");
+        return format!("[{}] {who} sent a message to {to}", line.kind.as_str());
+    }
+    format!("[{}] {who}: {}", line.kind.as_str(), line.text)
 }
 
 /// Softwake rooms config directory.
@@ -447,6 +477,9 @@ pub fn log_goal_progress(
             text: text.to_owned(),
             iteration: Some(iteration),
             phase: Some(phase.to_owned()),
+            to_profile_id: None,
+            to_name: None,
+            reply: None,
         },
     )
 }
@@ -499,6 +532,9 @@ mod tests {
                 text: "hello".into(),
                 iteration: None,
                 phase: None,
+                to_profile_id: None,
+                to_name: None,
+                reply: None,
             },
         )
         .unwrap();
@@ -537,5 +573,25 @@ mod tests {
         assert_eq!(b.members.len(), 2);
         assert_eq!(list_rooms(&rooms).unwrap().len(), 1);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn dm_context_line_hides_the_note() {
+        let line = RoomLogLine {
+            ts_ms: 1,
+            profile_id: "sara".into(),
+            name: "Sara".into(),
+            kind: RoomLogKind::Dm,
+            text: "secret ping".into(),
+            iteration: None,
+            phase: None,
+            to_profile_id: Some("sally".into()),
+            to_name: Some("Sally".into()),
+            reply: Some("ok".into()),
+        };
+        let ctx = room_log_context_line(&line);
+        assert_eq!(ctx, "[dm] Sara sent a message to Sally");
+        assert!(!ctx.contains("secret"));
+        assert!(!ctx.contains("ok"));
     }
 }
