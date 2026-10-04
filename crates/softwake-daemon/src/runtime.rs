@@ -13,7 +13,7 @@
 //! `ask` completes one provider turn on the open session while awake
 //! ([ADR 0013](../../docs/ADR-0013-session-provider.md)).
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use softwake_audio::rms_level;
 use softwake_ipc::VoiceState as WireState;
@@ -37,6 +37,52 @@ use crate::soul::LoadedSoul;
 pub(crate) struct Outcome {
     pub(crate) body: ResponseBody,
     pub(crate) events: Vec<WireEvent>,
+}
+
+/// Quiet after the last Voice Agent user transcript before one room post.
+const S2S_ROOM_COALESCE_MS: u64 = 800;
+
+/// Merge successive Voice Agent user transcripts into one room utterance.
+///
+/// Prefers prefix extension and shared trailing/leading words so overlapping
+/// ASR fragments become a single sentence. Disjoint fragments join with a space.
+fn coalesce_s2s_room_transcript(prior: &str, next: &str) -> String {
+    let prior = prior.trim();
+    let next = next.trim();
+    if next.is_empty() {
+        return prior.to_owned();
+    }
+    if prior.is_empty() {
+        return next.to_owned();
+    }
+    let prior_l = prior.to_ascii_lowercase();
+    let next_l = next.to_ascii_lowercase();
+    if next_l.starts_with(&prior_l) {
+        return next.to_owned();
+    }
+    if prior_l.starts_with(&next_l) {
+        return prior.to_owned();
+    }
+    let prior_words: Vec<&str> = prior.split_whitespace().collect();
+    let next_words: Vec<&str> = next.split_whitespace().collect();
+    let max = prior_words.len().min(next_words.len());
+    let mut shared = 0usize;
+    for n in (1..=max).rev() {
+        let same = prior_words[prior_words.len() - n..]
+            .iter()
+            .zip(next_words[..n].iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b));
+        if same {
+            shared = n;
+            break;
+        }
+    }
+    if shared > 0 {
+        let mut words = prior_words;
+        words.extend_from_slice(&next_words[shared..]);
+        return words.join(" ");
+    }
+    format!("{prior} {next}")
 }
 
 #[allow(
@@ -125,6 +171,24 @@ pub(crate) struct Runtime {
     soul_path_locked: bool,
     /// Live xAI Voice Agent S2S bridge (None when mode off or not connected).
     voice_agent: Option<crate::voice_agent::VoiceAgentBridge>,
+    /// HUD room composer. `None` means finished speech asks the active profile.
+    open_room_id: Option<String>,
+    /// Operator room posts waiting for [`crate::serve`] to spawn fan-out.
+    pending_room_fanout: Vec<crate::team::RoomFanoutJob>,
+    /// Generation of the room clip that is open. Equals [`Self::room_utt_posted`] when idle.
+    room_utt_gen: u64,
+    /// Generation already written with [`crate::team::commit_operator_room_post`].
+    room_utt_posted: u64,
+    /// Drop one Voice Agent user transcript that echoes a press-to-talk room post.
+    drop_s2s_user_transcript: bool,
+    /// `talk_stop` is in flight for an open room. A successful post arms the echo drop.
+    ptt_room_release: bool,
+    /// The queued free-speech clip already joined the open room generation.
+    auto_pcm_joined_room_clip: bool,
+    /// Coalesced S2S user text waiting for quiet before one room post.
+    s2s_room_pending: Option<String>,
+    /// When the last S2S fragment was merged into [`Self::s2s_room_pending`].
+    s2s_room_last_frag: Option<Instant>,
 }
 
 impl Runtime {
@@ -221,6 +285,15 @@ impl Runtime {
             ask_from_free_speech: false,
             soul_path_locked: crate::slash::soul_path_env_locked(),
             voice_agent: None,
+            open_room_id: None,
+            pending_room_fanout: Vec::new(),
+            room_utt_gen: 0,
+            room_utt_posted: 0,
+            drop_s2s_user_transcript: false,
+            ptt_room_release: false,
+            auto_pcm_joined_room_clip: false,
+            s2s_room_pending: None,
+            s2s_room_last_frag: None,
         };
         #[cfg(test)]
         {
@@ -229,7 +302,8 @@ impl Runtime {
                 .hands
                 .set_tools_settings_for_test(Some(softwake_tools::ToolsSettings::default()));
         }
-        // Serve starts in sleep, so the probe is on even at verbosity 0.
+        // Constructor stays asleep, so the probe is on even at verbosity 0.
+        // Production serve boots awake afterward when the pack is valid.
         runtime.sync_near_miss_probe();
         runtime.sync_acting_profile(None);
         Ok(runtime)
@@ -339,6 +413,37 @@ impl Runtime {
         self.apply_voice(Event::WakePhrase, |error| {
             IpcError::protocol(error.to_string())
         })
+    }
+
+    /// Production serve: enter awake once when the loaded pack is valid.
+    ///
+    /// Invalid packs stay Sleep and do not announce. Already awake does not
+    /// announce again. [`Self::new`] and [`Self::with_capture`] do not call this.
+    pub(crate) fn boot_awake_if_pack_valid(&mut self) -> bool {
+        if self.soul.refusal().is_some() {
+            eprintln!("softwaked: boot state=sleep (pack missing or invalid)");
+            return false;
+        }
+        if wire_state(self.machine.state()) == WireState::Awake {
+            eprintln!("softwaked: boot state=awake");
+            return true;
+        }
+        let outcome = self.wake_phrase();
+        let awake =
+            outcome.body.status().is_some() && wire_state(self.machine.state()) == WireState::Awake;
+        if awake {
+            eprintln!("softwaked: boot state=awake");
+        } else {
+            eprintln!("softwaked: boot state=sleep (pack missing or invalid)");
+        }
+        awake
+    }
+
+    /// Move the phrase clock without also counting wall time on the next tick.
+    #[cfg(test)]
+    pub(crate) fn advance_clock_for_test(&mut self, by: std::time::Duration) {
+        self.machine.advance(by);
+        self.last_tick = Instant::now();
     }
 
     /// Move the phrase clock forward by the wall time since the previous tick.
@@ -679,7 +784,8 @@ impl Runtime {
             return self.quiet_confirm_hold();
         }
         let line = crate::mode_confirm::prompt_line(kind);
-        self.speak_fixed_line(line);
+        let voice = self.soul.playback_tts_voice();
+        self.speak_fixed_line(line, &voice);
         let owned = line.to_owned();
         self.retain_status_text(Some(owned.clone()), Some("confirm".to_owned()));
         Self::quiet(self.snapshot(Some(owned), Some("confirm".to_owned())))
@@ -697,7 +803,8 @@ impl Runtime {
     fn cancel_mode(&mut self, kind: crate::mode_confirm::ConfirmKind) -> Outcome {
         self.mode_confirm.clear();
         let line = crate::mode_confirm::cancel_line(kind);
-        self.speak_fixed_line(line);
+        let voice = self.soul.playback_tts_voice();
+        self.speak_fixed_line(line, &voice);
         let owned = line.to_owned();
         self.retain_status_text(Some(owned.clone()), Some("confirm cancelled".to_owned()));
         Self::quiet(self.snapshot(Some(owned), Some("confirm cancelled".to_owned())))
@@ -722,7 +829,8 @@ impl Runtime {
         self.hands.push_notification(notify_line.clone());
         // Desktop TTS at most once; Telegram fan-out is independent (ADR-0029).
         if crate::telegram::desktop_wants_timer_voice(profile_id) {
-            self.speak_fixed_line(&speak_line);
+            let voice = Self::profile_tts_voice(profile_id);
+            self.speak_fixed_line(&speak_line, &voice);
         }
         crate::telegram::fanout_timer(profile_id, &speak_line);
         self.retain_status_text(Some(speak_line), Some(notify_line));
@@ -750,22 +858,42 @@ impl Runtime {
         // Full summary to Telegram/HUD; truncated speak for desktop TTS.
         self.hands.push_notification(notify.clone());
         if crate::telegram::desktop_wants_timer_voice(profile_id) {
-            self.speak_fixed_line(&speak);
+            let voice = Self::profile_tts_voice(profile_id);
+            self.speak_fixed_line(&speak, &voice);
         }
         crate::telegram::fanout_timer(profile_id, &summary);
         self.retain_status_text(Some(summary), Some(notify));
     }
 
-    fn speak_fixed_line(&mut self, line: &str) {
+    /// `profile.json` `tts_voice` for a schedule row. Empty when the profile is unknown.
+    ///
+    /// Tests skip the disk read so a unit test does not migrate the operator config.
+    fn profile_tts_voice(profile_id: &str) -> String {
+        #[cfg(test)]
+        {
+            let _ = profile_id;
+            String::new()
+        }
+        #[cfg(not(test))]
+        {
+            crate::team::resolve_profile_meta(profile_id)
+                .map(|meta| meta.tts_voice)
+                .unwrap_or_default()
+        }
+    }
+
+    fn speak_fixed_line(&mut self, line: &str, profile_voice: &str) {
         #[cfg(test)]
         {
             self.announced_prompts.push(line.to_owned());
+            let _ = profile_voice;
         }
         #[cfg(not(test))]
         {
             crate::announce::spawn_fixed_line(
                 line.to_owned(),
                 self.soul.profile_log_token(),
+                profile_voice.to_owned(),
                 self.verbosity,
             );
         }
@@ -931,8 +1059,8 @@ impl Runtime {
             Ok(line) => line,
             Err(err) => return self.quiet_slash(err),
         };
-        // Profile switch resets TTS to Default and must not keep the old S2S voice.
-        let _ = crate::slash::clear_tts_voice_default();
+        // Keep Settings selected_tts_voice. This profile speaks with its own
+        // tts_voice. Stop S2S so the next session is not stuck on the old pack.
         self.stop_voice_agent();
         if self.soul_path_locked {
             return self.quiet_slash(format!(
@@ -1419,6 +1547,7 @@ impl Runtime {
         let spoken_chars = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let spoken_for_delta = std::sync::Arc::clone(&spoken_chars);
         let profile_for_tts = self.soul.profile_log_token();
+        let voice_for_tts = self.soul.playback_tts_voice();
         let verbosity_for_tts = self.verbosity;
         let loop_ok = {
             // Update the shared status cache only (no &mut self) so invoke can
@@ -1429,6 +1558,7 @@ impl Runtime {
                     status_cache.as_ref(),
                     &spoken_for_delta,
                     &profile_for_tts,
+                    &voice_for_tts,
                     verbosity_for_tts,
                 );
             };
@@ -1459,6 +1589,7 @@ impl Runtime {
         status_cache: Option<&std::sync::Arc<std::sync::Mutex<Option<Status>>>>,
         spoken: &std::sync::atomic::AtomicUsize,
         profile: &str,
+        profile_voice: &str,
         verbosity: u8,
     ) {
         if let Some(cache) = status_cache {
@@ -1485,11 +1616,16 @@ impl Runtime {
             spoken.store(next, std::sync::atomic::Ordering::SeqCst);
             #[cfg(not(test))]
             {
-                crate::announce::spawn_fixed_line(line, profile.to_owned(), verbosity);
+                crate::announce::spawn_fixed_line(
+                    line,
+                    profile.to_owned(),
+                    profile_voice.to_owned(),
+                    verbosity,
+                );
             }
             #[cfg(test)]
             {
-                let _ = (line, profile, verbosity);
+                let _ = (line, profile, profile_voice, verbosity);
             }
         }
     }
@@ -1587,9 +1723,11 @@ impl Runtime {
                 self.last_speech_note = None;
                 #[cfg(not(test))]
                 {
+                    let voice = self.soul.playback_tts_voice();
                     crate::announce::spawn_fixed_line(
                         rest,
                         self.soul.profile_log_token(),
+                        voice,
                         self.verbosity,
                     );
                 }
@@ -1674,9 +1812,195 @@ impl Runtime {
                     return;
                 }
             };
-            if let Err(message) = crate::talk::speak_reply(&ready, reply) {
+            let voice = self.soul.playback_tts_voice();
+            if let Err(message) = crate::talk::speak_reply(&ready, reply, &voice) {
                 self.last_speech_note = Some(message);
             }
+        }
+    }
+
+    /// HUD room composer. Blank clears it. Does not start or stop Voice Agent.
+    pub(crate) fn set_open_room(&mut self, room_id: Option<String>) -> Outcome {
+        let next = room_id.and_then(|raw| {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_owned())
+            }
+        });
+        if self.open_room_id.as_deref() != next.as_deref() {
+            // Abandon an in-flight clip so it cannot post into a different composer.
+            self.room_utt_posted = self.room_utt_gen;
+            self.drop_s2s_user_transcript = false;
+            self.auto_pcm_joined_room_clip = false;
+            self.abandon_s2s_room_coalesce();
+        }
+        self.open_room_id = next;
+        if let Some(bridge) = self.voice_agent.as_ref() {
+            bridge.set_room_route(self.open_room_id.is_some());
+        }
+        let note = match &self.open_room_id {
+            Some(id) => format!("room `{id}` composer open"),
+            None => "profile composer open".to_owned(),
+        };
+        Self::quiet(self.snapshot(Some(note), Some("room composer".to_owned())))
+    }
+
+    /// Open one room-post generation if none is waiting.
+    fn begin_room_utterance(&mut self) {
+        if self.open_room_id.is_none() {
+            return;
+        }
+        if self.room_utt_gen == self.room_utt_posted {
+            self.room_utt_gen = self.room_utt_gen.wrapping_add(1);
+        }
+    }
+
+    fn note_room_talk_armed(&mut self) {
+        if self.open_room_id.is_some() {
+            self.begin_room_utterance();
+        }
+    }
+
+    /// Finished transcript: room post when a composer is open, otherwise `ask`.
+    fn route_finished_utterance(&mut self, text: &str, from_free_speech: bool) -> Outcome {
+        let text = text.trim();
+        if text.is_empty() {
+            self.ptt_room_release = false;
+            return Self::talk_rejected("ask text is blank");
+        }
+        if self.open_room_id.is_some() {
+            if from_free_speech
+                && self.room_utt_gen == self.room_utt_posted
+                && !self.auto_pcm_joined_room_clip
+            {
+                self.begin_room_utterance();
+            }
+            self.auto_pcm_joined_room_clip = false;
+            return self.post_open_room(text);
+        }
+        self.ptt_room_release = false;
+        self.auto_pcm_joined_room_clip = false;
+        self.ask_from_free_speech = from_free_speech;
+        let outcome = self.ask(text);
+        self.ask_from_free_speech = false;
+        outcome
+    }
+
+    /// Same disk path as typed `RoomPost`. Does not call [`Self::ask`].
+    fn post_open_room(&mut self, text: &str) -> Outcome {
+        if self.room_utt_gen == self.room_utt_posted {
+            self.ptt_room_release = false;
+            return Self::quiet(self.snapshot(
+                self.last_status_message.clone(),
+                self.last_status_detail.clone(),
+            ));
+        }
+        let Some(room_id) = self.open_room_id.clone() else {
+            self.ptt_room_release = false;
+            return Self::talk_rejected("room composer is closed");
+        };
+        match crate::team::commit_operator_room_post(&room_id, text) {
+            Ok((message, job)) => {
+                self.room_utt_posted = self.room_utt_gen;
+                if let Some(job) = job {
+                    self.pending_room_fanout.push(job);
+                }
+                self.cancel_voice_agent();
+                if self.ptt_room_release {
+                    self.drop_s2s_user_transcript = true;
+                }
+                self.ptt_room_release = false;
+                self.ack_room_post(message)
+            }
+            Err(message) => {
+                self.ptt_room_release = false;
+                Self::reject_room_post(message)
+            }
+        }
+    }
+
+    fn on_s2s_user_transcript(&mut self, text: &str) {
+        if self.open_room_id.is_none() {
+            return;
+        }
+        if self.talk.is_armed() {
+            return;
+        }
+        if self.drop_s2s_user_transcript {
+            self.drop_s2s_user_transcript = false;
+            return;
+        }
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        // One generation for the coalesced utterance; SpeechStarted may already
+        // have opened it. Do not post yet - wait for quiet.
+        self.begin_room_utterance();
+        let merged = match self.s2s_room_pending.as_deref() {
+            Some(prior) => coalesce_s2s_room_transcript(prior, text),
+            None => text.to_owned(),
+        };
+        self.s2s_room_pending = Some(merged);
+        self.s2s_room_last_frag = Some(Instant::now());
+    }
+
+    /// Drop buffered S2S room text without posting (composer change / close).
+    fn abandon_s2s_room_coalesce(&mut self) {
+        self.s2s_room_pending = None;
+        self.s2s_room_last_frag = None;
+    }
+
+    /// Post the buffered S2S room utterance if the quiet window has elapsed.
+    fn flush_s2s_room_coalesce_if_due(&mut self) {
+        let Some(last) = self.s2s_room_last_frag else {
+            return;
+        };
+        if last.elapsed() < Duration::from_millis(S2S_ROOM_COALESCE_MS) {
+            return;
+        }
+        self.flush_s2s_room_coalesce();
+    }
+
+    /// Commit one coalesced S2S room post (tests call this to skip the quiet wait).
+    fn flush_s2s_room_coalesce(&mut self) {
+        self.s2s_room_last_frag = None;
+        let Some(text) = self.s2s_room_pending.take() else {
+            return;
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        let _ = self.route_finished_utterance(text, false);
+    }
+
+    fn note_auto_utt_started(&mut self) {
+        if self.open_room_id.is_some() {
+            self.begin_room_utterance();
+            self.auto_pcm_joined_room_clip = true;
+        }
+    }
+
+    fn note_auto_pcm(&mut self, pcm: Vec<i16>, awake: bool) {
+        if self.open_room_id.is_some() {
+            if !self.auto_pcm_joined_room_clip {
+                self.begin_room_utterance();
+                self.auto_pcm_joined_room_clip = true;
+            }
+        } else {
+            self.auto_pcm_joined_room_clip = false;
+        }
+        self.pending_auto_pcm = Some(pcm);
+        if awake {
+            let detail = if self.open_room_id.is_some() {
+                "room speech"
+            } else {
+                "free speech"
+            };
+            self.retain_status_text(Some("thinking…".to_owned()), Some(detail.to_owned()));
         }
     }
 
@@ -1694,6 +2018,7 @@ impl Runtime {
         // PTT takes priority over free-speech gating.
         self.auto_utt.reset();
         self.pending_auto_pcm = None;
+        self.auto_pcm_joined_room_clip = false;
         if wire_state(self.machine.state()) == WireState::Sleep {
             let woke = self.wake_phrase();
             if woke.body.status().is_none() {
@@ -1701,6 +2026,7 @@ impl Runtime {
             }
             // Wake already broadcast by the caller when this returns events.
             self.talk.arm();
+            self.note_room_talk_armed();
             self.drain_pcm();
             self.retain_status_text(
                 Some("listening".to_owned()),
@@ -1720,6 +2046,7 @@ impl Runtime {
             ));
         }
         self.talk.arm();
+        self.note_room_talk_armed();
         self.drain_pcm();
         self.set_turn_phase(Some("listening"));
         self.publish_live(
@@ -1753,6 +2080,10 @@ impl Runtime {
             Ok(samples) => samples,
             Err(message) => return Self::talk_rejected(&message),
         };
+        if self.open_room_id.is_some() && self.room_utt_gen == self.room_utt_posted {
+            self.begin_room_utterance();
+        }
+        self.ptt_room_release = self.open_room_id.is_some();
         self.retain_status_text(
             Some("thinking…".to_owned()),
             Some("press to talk".to_owned()),
@@ -1787,9 +2118,7 @@ impl Runtime {
         if let Some(text) = self.take_talk_transcript_override() {
             let _ = samples;
             let events = self.emit_final_transcript(&text);
-            self.ask_from_free_speech = from_free_speech;
-            let mut outcome = self.ask(&text);
-            self.ask_from_free_speech = false;
+            let mut outcome = self.route_finished_utterance(&text, from_free_speech);
             outcome.events.splice(0..0, events);
             return outcome;
         }
@@ -1804,13 +2133,14 @@ impl Runtime {
         match crate::talk::transcribe_pcm(&ready, &model, samples) {
             Ok(text) => {
                 let events = self.emit_final_transcript(&text);
-                self.ask_from_free_speech = from_free_speech;
-                let mut outcome = self.ask(&text);
-                self.ask_from_free_speech = false;
+                let mut outcome = self.route_finished_utterance(&text, from_free_speech);
                 outcome.events.splice(0..0, events);
                 outcome
             }
-            Err(message) => Self::talk_rejected(&message),
+            Err(message) => {
+                self.ptt_room_release = false;
+                Self::talk_rejected(&message)
+            }
         }
     }
 
@@ -2070,6 +2400,8 @@ impl Runtime {
             }
             // `auto_ok` was computed before the loop (often false while TTS muted).
             // After a barge, allow free-speech buffering on this frame.
+            // When S2S owns the mic, free-speech stays off even with a room open.
+            // Room posts then come from the S2S coalesce path (and PTT).
             let listen_ok = (auto_ok || barged)
                 && awake
                 && !s2s
@@ -2078,14 +2410,11 @@ impl Runtime {
                 && self.pending_auto_pcm.is_none()
                 && (barged || !self.in_voice_cooldown());
             if listen_ok {
+                let was_buffering = self.auto_utt.is_buffering();
                 if let Some(pcm) = self.auto_utt.push_frame(samples, level) {
-                    self.pending_auto_pcm = Some(pcm);
-                    if awake {
-                        self.retain_status_text(
-                            Some("thinking…".to_owned()),
-                            Some("free speech".to_owned()),
-                        );
-                    }
+                    self.note_auto_pcm(pcm, awake);
+                } else if !was_buffering && self.auto_utt.is_buffering() {
+                    self.note_auto_utt_started();
                 }
             }
             let observed = self.observe_kws_frame(&frame);
@@ -2103,13 +2432,20 @@ impl Runtime {
                 near_miss = observed.near_miss;
             }
         }
-        let (note, phase, dead) = if let Some(bridge) = self.voice_agent.as_mut() {
-            let (note, phase) = bridge.pump();
-            let dead = !bridge.alive();
-            (note, phase, dead)
-        } else {
-            (None, None, false)
-        };
+        let (note, phase, dead, speech_starts, user_transcripts) =
+            if let Some(bridge) = self.voice_agent.as_mut() {
+                let pumped = bridge.pump();
+                let dead = !bridge.alive();
+                (
+                    pumped.note,
+                    pumped.phase,
+                    dead,
+                    pumped.speech_starts,
+                    pumped.user_transcripts,
+                )
+            } else {
+                (None, None, false, 0, Vec::new())
+            };
         if let Some(note) = note {
             self.retain_status_text(Some(note), Some("voice agent".to_owned()));
         }
@@ -2120,6 +2456,16 @@ impl Runtime {
             };
             self.set_turn_phase(Some(label));
         }
+        for _ in 0..speech_starts {
+            // Keep one generation while S2S fragments are still coalescing.
+            if self.s2s_room_pending.is_none() {
+                self.begin_room_utterance();
+            }
+        }
+        for text in user_transcripts {
+            self.on_s2s_user_transcript(&text);
+        }
+        self.flush_s2s_room_coalesce_if_due();
         if dead {
             self.stop_voice_agent();
         }
@@ -2432,6 +2778,7 @@ impl Runtime {
                 }
                 return;
             }
+            // One Settings voice for the whole S2S session (ADR 0050). Not per member.
             let voice = resolve_tts_voice(ready.prepared.provider, ready.prepared_tts_voice())
                 .unwrap_or("eve")
                 .to_owned();
@@ -2450,6 +2797,7 @@ impl Runtime {
                     if self.verbosity >= 1 {
                         eprintln!("softwaked: voice agent s2s session started");
                     }
+                    bridge.set_room_route(self.open_room_id.is_some());
                     self.voice_agent = Some(bridge);
                     self.retain_status_text(
                         Some("Voice Agent listening…".to_owned()),
@@ -2597,6 +2945,11 @@ impl Runtime {
                     );
                 }
                 self.announce_transition(applied.to);
+                // Start the one S2S session after the awake line is queued.
+                // Enabling S2S does not itself enter or leave awake.
+                if applied.to == VoiceState::Awake {
+                    self.sync_voice_agent_session();
+                }
                 // Mode change (and the mute gap that often follows state voice)
                 // must not leave sherpa OnlineStream silent for the next cycle.
                 self.pcm.rearm();
@@ -2803,7 +3156,8 @@ impl Runtime {
         {
             let system = self.announcement_system();
             let profile = self.soul.profile_log_token();
-            crate::announce::spawn_announcement(system, to, profile, self.verbosity);
+            let voice = self.soul.playback_tts_voice();
+            crate::announce::spawn_announcement(system, to, profile, voice, self.verbosity);
         }
     }
 
@@ -2842,6 +3196,15 @@ impl Runtime {
     /// Take a finished free-speech utterance for STT→ask (serve calls after `GetStatus`).
     pub(crate) fn take_pending_auto_pcm(&mut self) -> Option<Vec<i16>> {
         self.pending_auto_pcm.take()
+    }
+
+    /// Take one room fan-out job stashed by a speech room post.
+    pub(crate) fn take_pending_room_fanout(&mut self) -> Option<crate::team::RoomFanoutJob> {
+        if self.pending_room_fanout.is_empty() {
+            None
+        } else {
+            Some(self.pending_room_fanout.remove(0))
+        }
     }
 
     /// Remember the latest HUD-facing message so polls see free-speech / async replies.
@@ -3139,6 +3502,13 @@ fn wire_state(state: VoiceState) -> WireState {
     }
 }
 
+#[cfg(test)]
+fn process_xdg_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn map_error(command: Command, error: StateError) -> IpcError {
     match error {
         StateError::IllegalTransition { from, reason, .. } => IpcError::IllegalTransition {
@@ -3161,6 +3531,90 @@ mod talk_tests {
     use crate::soul::TestSoulDir;
     use softwake_ipc::{Event, IpcError, ResponseBody, VoiceState};
     use softwake_voice::TALK_MIN_SAMPLES;
+    use std::path::{Path, PathBuf};
+    use std::sync::MutexGuard;
+
+    fn room_xdg_lock() -> MutexGuard<'static, ()> {
+        super::process_xdg_lock()
+    }
+
+    struct RoomScratch {
+        path: PathBuf,
+    }
+
+    impl RoomScratch {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "softwake-room-s2s-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos())
+            ));
+            std::fs::create_dir_all(path.join("config")).expect("config dir");
+            std::fs::create_dir_all(path.join("state")).expect("state dir");
+            Self { path }
+        }
+
+        fn config(&self) -> PathBuf {
+            self.path.join("config")
+        }
+
+        fn state(&self) -> PathBuf {
+            self.path.join("state")
+        }
+    }
+
+    impl Drop for RoomScratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    struct RoomEnv {
+        config: Option<std::ffi::OsString>,
+        state: Option<std::ffi::OsString>,
+    }
+
+    impl RoomEnv {
+        #[allow(
+            unsafe_code,
+            reason = "set_var is unsafe on stable; room_xdg_lock serializes this test"
+        )]
+        fn swap(config: &Path, state: &Path) -> Self {
+            let prev = Self {
+                config: std::env::var_os("XDG_CONFIG_HOME"),
+                state: std::env::var_os("XDG_STATE_HOME"),
+            };
+            // SAFETY: room_xdg_lock is held by the caller for this process-wide env edit.
+            unsafe {
+                std::env::set_var("XDG_CONFIG_HOME", config);
+                std::env::set_var("XDG_STATE_HOME", state);
+            }
+            prev
+        }
+    }
+
+    impl Drop for RoomEnv {
+        fn drop(&mut self) {
+            restore_var("XDG_CONFIG_HOME", self.config.take());
+            restore_var("XDG_STATE_HOME", self.state.take());
+        }
+    }
+
+    #[allow(
+        unsafe_code,
+        reason = "set_var is unsafe on stable; room_xdg_lock is still held while RoomEnv drops"
+    )]
+    fn restore_var(key: &str, value: Option<std::ffi::OsString>) {
+        // SAFETY: room_xdg_lock is still held while RoomEnv drops.
+        unsafe {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
 
     fn awake() -> (Runtime, TestSoulDir) {
         let dir = TestSoulDir::valid();
@@ -3240,6 +3694,164 @@ mod talk_tests {
             Event::FinalTranscript { text } if text == "what time is it"
         )));
         assert!(!reply.talking);
+    }
+
+    #[test]
+    fn talk_stop_posts_to_open_room_and_asks_when_closed() {
+        let _lock = room_xdg_lock();
+        let scratch = RoomScratch::new();
+        let config = scratch.config();
+        let state = scratch.state();
+        let _env = RoomEnv::swap(&config, &state);
+        let rooms = config.join("softwake").join("rooms");
+        softwake_tools::save_room(
+            &rooms,
+            &softwake_tools::RoomFile {
+                version: 1,
+                id: "standup".to_owned(),
+                title: "Standup".to_owned(),
+                members: vec!["not-a-profile".to_owned()],
+                created_ms: 0,
+                updated_ms: 0,
+                last_turn_ms: 0,
+                last_speaker: None,
+            },
+        )
+        .expect("save room");
+
+        let (mut runtime, _dir) = awake();
+        runtime.install_chat_fixture(crate::chat::xai_key_fixture(
+            true,
+            Some("test-key"),
+            "she replies",
+        ));
+        let before = runtime.session.messages().len();
+
+        runtime.set_open_room(Some("missing-room".to_owned()));
+        runtime.begin_room_utterance();
+        let missing = runtime.route_finished_utterance("hi", false);
+        assert!(matches!(
+            missing.body,
+            ResponseBody::Err { error: IpcError::ChatRejected { ref message } }
+                if message.contains("not found")
+        ));
+        assert_eq!(runtime.session.messages().len(), before);
+        assert!(runtime.pending_room_fanout.is_empty());
+
+        runtime.set_open_room(Some("standup".to_owned()));
+        runtime.set_talk_transcript_for_test("what time is it");
+        let started = runtime.talk_start();
+        assert!(started.body.status().expect("armed").talking);
+        runtime.push_talk_samples(&vec![1; TALK_MIN_SAMPLES]);
+        let posted = runtime.talk_stop();
+        let status = posted.body.status().expect("room post");
+        let message = status.message.as_deref().unwrap_or("");
+        assert!(message.contains("operator posted"), "ack was {message}");
+        assert!(message.contains("standup"), "ack was {message}");
+        assert_eq!(runtime.session.messages().len(), before);
+        assert_eq!(runtime.pending_room_fanout.len(), 1);
+        assert_eq!(
+            runtime.pending_room_fanout[0].operator_text,
+            "what time is it"
+        );
+        assert!(posted.events.iter().any(|event| matches!(
+            event,
+            Event::FinalTranscript { text } if text == "what time is it"
+        )));
+
+        let duplicate = runtime.route_finished_utterance("what time is it", false);
+        assert!(duplicate.body.status().is_some());
+        assert_eq!(runtime.pending_room_fanout.len(), 1);
+        assert_eq!(runtime.session.messages().len(), before);
+
+        runtime.set_open_room(None);
+        runtime.set_talk_transcript_for_test("what time is it");
+        let again = runtime.talk_start();
+        assert!(again.body.status().expect("armed").talking);
+        runtime.push_talk_samples(&vec![1; TALK_MIN_SAMPLES]);
+        let asked = runtime.talk_stop();
+        let reply = asked.body.status().expect("asked");
+        assert_eq!(reply.message.as_deref(), Some("she replies"));
+        assert!(runtime.session.messages().len() > before);
+    }
+
+    #[test]
+    fn coalesce_s2s_room_transcript_merges_fragments() {
+        assert_eq!(super::coalesce_s2s_room_transcript("", "hello"), "hello");
+        assert_eq!(super::coalesce_s2s_room_transcript("hello", ""), "hello");
+        assert_eq!(super::coalesce_s2s_room_transcript("hello", "   "), "hello");
+        assert_eq!(
+            super::coalesce_s2s_room_transcript("hello", "hello world"),
+            "hello world"
+        );
+        assert_eq!(
+            super::coalesce_s2s_room_transcript("hello world", "hello"),
+            "hello world"
+        );
+        assert_eq!(
+            super::coalesce_s2s_room_transcript("I said, have you", "Have you been"),
+            "I said, have you been"
+        );
+        assert_eq!(
+            super::coalesce_s2s_room_transcript("alpha", "beta"),
+            "alpha beta"
+        );
+    }
+
+    #[test]
+    fn s2s_room_transcripts_coalesce_into_one_post() {
+        let _lock = room_xdg_lock();
+        let scratch = RoomScratch::new();
+        let config = scratch.config();
+        let state = scratch.state();
+        let _env = RoomEnv::swap(&config, &state);
+        let rooms = config.join("softwake").join("rooms");
+        softwake_tools::save_room(
+            &rooms,
+            &softwake_tools::RoomFile {
+                version: 1,
+                id: "standup".to_owned(),
+                title: "Standup".to_owned(),
+                members: vec!["not-a-profile".to_owned()],
+                created_ms: 0,
+                updated_ms: 0,
+                last_turn_ms: 0,
+                last_speaker: None,
+            },
+        )
+        .expect("save room");
+
+        let (mut runtime, _dir) = awake();
+        runtime.set_open_room(Some("standup".to_owned()));
+        runtime.on_s2s_user_transcript("I said, have you");
+        runtime.on_s2s_user_transcript("Have you been");
+        runtime.on_s2s_user_transcript("ever said that");
+        assert!(
+            runtime.pending_room_fanout.is_empty(),
+            "fragments must wait for quiet flush"
+        );
+        assert_eq!(
+            runtime.s2s_room_pending.as_deref(),
+            Some("I said, have you been ever said that")
+        );
+        runtime.flush_s2s_room_coalesce();
+        assert_eq!(runtime.pending_room_fanout.len(), 1);
+        assert_eq!(
+            runtime.pending_room_fanout[0].operator_text,
+            "I said, have you been ever said that"
+        );
+        assert!(runtime.s2s_room_pending.is_none());
+
+        runtime.on_s2s_user_transcript("Good girl");
+        assert_eq!(runtime.pending_room_fanout.len(), 1);
+        runtime.flush_s2s_room_coalesce();
+        assert_eq!(runtime.pending_room_fanout.len(), 2);
+        assert_eq!(runtime.pending_room_fanout[1].operator_text, "Good girl");
+
+        runtime.on_s2s_user_transcript("partial only");
+        runtime.set_open_room(None);
+        assert!(runtime.s2s_room_pending.is_none());
+        assert_eq!(runtime.pending_room_fanout.len(), 2);
     }
 
     #[test]
@@ -5217,5 +5829,184 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn machine_new_and_runtime_constructors_stay_asleep() {
+        let machine = softwake_state::Machine::new(softwake_state::CooldownConfig::default());
+        assert_eq!(machine.state(), softwake_state::VoiceState::Sleep);
+        let (runtime, _soul) = valid_runtime();
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Sleep);
+        assert!(runtime.announced_prompts().is_empty());
+    }
+
+    #[test]
+    fn boot_awake_announces_once_when_the_pack_is_valid() {
+        let (mut runtime, _soul) = valid_runtime();
+        assert!(runtime.boot_awake_if_pack_valid());
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Awake);
+        assert_eq!(runtime.announced_prompts(), [crate::announce::AWAKE_PROMPT]);
+        assert!(runtime.boot_awake_if_pack_valid());
+        assert_eq!(runtime.announced_prompts(), [crate::announce::AWAKE_PROMPT]);
+    }
+
+    #[test]
+    fn boot_invalid_pack_stays_asleep_without_announcement() {
+        let dir = TestSoulDir::empty();
+        let mut runtime = Runtime::new(dir.soul_dir());
+        assert!(!runtime.boot_awake_if_pack_valid());
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Sleep);
+        assert!(runtime.announced_prompts().is_empty());
+    }
+
+    struct S2sScratch {
+        home: std::path::PathBuf,
+    }
+
+    impl S2sScratch {
+        fn new() -> Self {
+            let home = std::env::temp_dir().join(format!(
+                "sw-s2s-flag-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |elapsed| elapsed.as_nanos())
+            ));
+            std::fs::create_dir_all(home.join("softwake")).expect("config home");
+            Self { home }
+        }
+
+        fn config(&self) -> std::path::PathBuf {
+            self.home.join("softwake")
+        }
+    }
+
+    impl Drop for S2sScratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.home);
+        }
+    }
+
+    struct S2sEnv {
+        config: Option<std::ffi::OsString>,
+        flag: Option<std::ffi::OsString>,
+    }
+
+    impl S2sEnv {
+        #[allow(
+            unsafe_code,
+            reason = "set_var is unsafe on stable; process_xdg_lock serializes this test"
+        )]
+        fn install(config_home: &std::path::Path) -> Self {
+            let prev = Self {
+                config: std::env::var_os("XDG_CONFIG_HOME"),
+                flag: std::env::var_os(crate::voice_agent::VOICE_AGENT_S2S_ENV),
+            };
+            // SAFETY: process_xdg_lock is held for this process-wide env edit.
+            unsafe {
+                std::env::set_var("XDG_CONFIG_HOME", config_home);
+                std::env::remove_var(crate::voice_agent::VOICE_AGENT_S2S_ENV);
+            }
+            prev
+        }
+    }
+
+    impl Drop for S2sEnv {
+        fn drop(&mut self) {
+            restore_env("XDG_CONFIG_HOME", self.config.take());
+            restore_env(crate::voice_agent::VOICE_AGENT_S2S_ENV, self.flag.take());
+        }
+    }
+
+    #[allow(
+        unsafe_code,
+        reason = "set_var is unsafe on stable; process_xdg_lock is still held while S2sEnv drops"
+    )]
+    fn restore_env(key: &str, value: Option<std::ffi::OsString>) {
+        // SAFETY: process_xdg_lock is still held while S2sEnv drops.
+        unsafe {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+
+    fn enable_s2s_file(config: &std::path::Path) -> Vec<u8> {
+        softwake_soul::set_voice_agent_s2s(config, true).expect("write s2s flag");
+        let path = config.join(softwake_soul::APP_CONFIG_FILE_NAME);
+        let bytes = std::fs::read(&path).expect("read flag");
+        let app = softwake_soul::load_app_config(config).expect("parse flag");
+        assert!(app.voice_agent_s2s);
+        assert!(crate::voice_agent::resolve_voice_agent_s2s_enabled());
+        bytes
+    }
+
+    #[test]
+    fn reload_voice_agent_does_not_sleep_or_announce() {
+        let _lock = super::process_xdg_lock();
+        let scratch = S2sScratch::new();
+        let _env = S2sEnv::install(&scratch.home);
+        let before = enable_s2s_file(&scratch.config());
+
+        let (mut awake, _soul) = valid_runtime();
+        assert!(awake.boot_awake_if_pack_valid());
+        let prompts = awake.announced_prompts().to_vec();
+        assert_eq!(prompts, vec![crate::announce::AWAKE_PROMPT.to_owned()]);
+        let outcome = awake.reload_voice_agent();
+        assert!(outcome.events.is_empty(), "{:?}", outcome.events);
+        assert_eq!(awake.machine.state(), softwake_state::VoiceState::Awake);
+        assert_eq!(awake.announced_prompts(), prompts.as_slice());
+        assert_eq!(
+            std::fs::read(scratch.config().join(softwake_soul::APP_CONFIG_FILE_NAME))
+                .expect("file"),
+            before
+        );
+
+        let (mut asleep, _soul) = valid_runtime();
+        assert_eq!(asleep.machine.state(), softwake_state::VoiceState::Sleep);
+        let outcome = asleep.reload_voice_agent();
+        assert!(outcome.events.is_empty(), "{:?}", outcome.events);
+        assert_eq!(asleep.machine.state(), softwake_state::VoiceState::Sleep);
+        assert!(asleep.announced_prompts().is_empty());
+        assert_eq!(
+            std::fs::read(scratch.config().join(softwake_soul::APP_CONFIG_FILE_NAME))
+                .expect("file"),
+            before
+        );
+    }
+
+    #[test]
+    fn wake_phrase_keeps_the_voice_agent_s2s_file_flag() {
+        let _lock = super::process_xdg_lock();
+        let scratch = S2sScratch::new();
+        let _env = S2sEnv::install(&scratch.home);
+        let before = enable_s2s_file(&scratch.config());
+        let path = scratch.config().join(softwake_soul::APP_CONFIG_FILE_NAME);
+
+        let (mut runtime, _soul) = valid_runtime();
+        let outcome = runtime.wake_phrase();
+        assert!(outcome.body.status().is_some(), "{outcome:?}");
+        assert_eq!(runtime.machine.state(), softwake_state::VoiceState::Awake);
+        assert_eq!(std::fs::read(&path).expect("file"), before);
+
+        let (mut scripted, _soul) = valid_runtime();
+        let _mute = hold_input_clear();
+        scripted.install_scripted_pcm([PhraseHit::Wake]);
+        push_and_drain(&mut scripted);
+        assert_eq!(scripted.machine.state(), softwake_state::VoiceState::Awake);
+        assert_eq!(std::fs::read(&path).expect("file"), before);
+
+        let (mut illegal, _soul) = valid_runtime();
+        let outcome = illegal.transition(Command::WakeFromUi);
+        assert!(outcome.body.status().is_none(), "{outcome:?}");
+        assert_eq!(illegal.machine.state(), softwake_state::VoiceState::Sleep);
+        assert_eq!(std::fs::read(&path).expect("file"), before);
+
+        let (mut webhook, _soul) = valid_runtime();
+        let result = webhook.webhook_wake(None);
+        assert_eq!(result.status, 200, "{:?}", result.body);
+        assert_eq!(webhook.machine.state(), softwake_state::VoiceState::Awake);
+        assert_eq!(std::fs::read(&path).expect("file"), before);
     }
 }

@@ -210,6 +210,11 @@ description = "Release press-to-talk, transcribe, ask, and speak the reply."
 commands.allow = ["hud_talk_stop"]
 
 [[permission]]
+identifier = "allow-hud-set-open-room"
+description = "Tell the daemon which HUD room composer is open so speech posts there."
+commands.allow = ["hud_set_open_room"]
+
+[[permission]]
 identifier = "allow-hud-set-layout"
 description = "Resize and re-anchor the HUD capsule when expanding or collapsing."
 commands.allow = ["hud_set_layout"]
@@ -494,6 +499,11 @@ commands.allow = ["profile_set_allow_all"]
 identifier = "allow-profile-set-role"
 description = "Save profile role general|coding (ADR-0052)."
 commands.allow = ["profile_set_role"]
+
+[[permission]]
+identifier = "allow-profile-set-tts-voice"
+description = "Save this profile's non-S2S TTS voice. Does not change Settings."
+commands.allow = ["profile_set_tts_voice"]
 
 [[permission]]
 identifier = "allow-rooms-snapshot"

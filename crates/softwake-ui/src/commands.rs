@@ -363,12 +363,34 @@ const HUD_ASK_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// before this round trip returns.
 const HUD_TALK_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(390);
 
+/// Tell the daemon which HUD room composer is open.
+///
+/// `None` or blank returns finished speech to the active profile. Does not
+/// restart the Voice Agent session.
+///
+/// # Errors
+///
+/// Returns the daemon or socket error as text.
+#[tauri::command]
+pub async fn hud_set_open_room(room_id: Option<String>) -> Result<Status, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut client = connect()?;
+        client
+            .call_set_open_room(room_id.as_deref())
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("set open room task failed: {error}"))?
+}
+
 /// Release press-to-talk, transcribe, ask, and speak when Eve is configured.
 ///
-/// The socket read timeout is raised for this call because STT and ask share
-/// one round trip and each may take the full daemon chat budget. Work runs on
-/// a blocking pool so the HUD can paint a released mic button and a thinking
-/// line while the round trip is in flight.
+/// When a room composer is open the daemon posts the transcript to that room
+/// instead of asking the active profile. The socket read timeout is raised
+/// for this call because STT and ask share one round trip and each may take
+/// the full daemon chat budget. Work runs on a blocking pool so the HUD can
+/// paint a released mic button and a thinking line while the round trip is
+/// in flight.
 ///
 /// # Errors
 ///

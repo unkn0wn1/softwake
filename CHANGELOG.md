@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- **Room S2S utterance coalesce:** with Voice Agent S2S and a room open, free-speech energy VAD stays off (S2S alone owns the mic). Rapid Voice Agent user transcript fragments merge into one operator room post after a short quiet window instead of waking every member on each partial.
+
+- **Boot awake:** a valid pack comes up Awake and speaks the awake line once. An invalid pack stays Sleep with no announcement. `Machine::new` and test runtimes stay asleep.
+- **Voice Agent S2S:** enabling it does not sleep or re-announce. Wake, status refresh, and session sync do not clear `voice_agent_s2s` or uncheck the Providers box. A bad `softwake.json` read shows an error instead of painting the box off.
+- **Profile switch** no longer clears Settings `selected_tts_voice`.
+
 - **Room chat freeze:** `RoomPost` writes the operator line and returns immediately; member oneshots / cool-down / `NO_REPLY` fan-out run on a background thread and append bubbles as they finish. Composer clears on Enter/Send. Room log uses speech bubbles with a stable color per participant (operator + each profile) and the name on the bubble.
 
 - **HUD room chat:** clicking a room replaces the single chat pane (history, one composer, one Send), the same way switching profiles refreshes that pane. The profile log and Send no longer stay visible underneath, so a second composer does not stack in the top half.
@@ -16,6 +22,8 @@
 - **HUD left rail:** **Profiles** stays at the top. **Rooms** sits halfway down the same rail and opens room history, compose, and member replies. Settings → Rooms remains for create/members admin.
 
 ### Added
+
+- **Per-profile TTS voice:** `profile.json` `tts_voice` (empty uses Settings `selected_tts_voice`, then eve). Ask, early TTS, state announcements, and room member replies use that profile's voice. Room replies play one after another. S2S stays one session and one Settings voice.
 
 - **ADR-0052 agent team / local power:** per-profile agent homes (`$XDG_DATA_HOME/softwake/homes/<id>/`), profile `allow_all` + `role`, confirm-gated `software_install`, rooms with light turn cool-down, peer DM `agent_message`, profile-scoped schedule `agent_task`, and first-class `goal_run` goal loop (plan/execute/verify with caps, human gate, progress log; softwake or local `grok` CLI backend). Settings → Profiles (Allow all / Role) and Settings → Rooms. PROTOCOL stays 1.
 

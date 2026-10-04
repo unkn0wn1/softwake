@@ -762,6 +762,17 @@ pub enum ClientMessage {
         /// Operator message (may include reply policy instructions).
         text: String,
     },
+    /// HUD says which room composer is open.
+    ///
+    /// `room_id` none or blank means the profile composer is active again.
+    /// Additive on protocol generation 1. Does not start or stop Voice Agent.
+    SetOpenRoom {
+        /// Client-chosen id. The daemon echoes it and does not interpret it.
+        id: u64,
+        /// Open room id. Missing, none, or blank returns talk to the profile.
+        #[serde(default)]
+        room_id: Option<String>,
+    },
 }
 
 /// Daemon messages after a client connects.
@@ -1103,6 +1114,19 @@ mod tests {
             room_id: "standup".into(),
             text: "hi — only sally reply".into(),
         });
+        assert_round_trip(&ClientMessage::SetOpenRoom {
+            id: 43,
+            room_id: Some("standup".to_owned()),
+        });
+        let open_room_missing: ClientMessage =
+            serde_json::from_str(r#"{"type":"set_open_room","id":7}"#).expect("decode");
+        assert!(matches!(
+            open_room_missing,
+            ClientMessage::SetOpenRoom {
+                id: 7,
+                room_id: None
+            }
+        ));
         let reload_playback_json = serde_json::to_string(&reload_playback).expect("encode");
         assert!(reload_playback_json.contains("\"type\":\"reload_playback\""));
         let talk_stop_json = serde_json::to_string(&talk_stop).expect("encode");

@@ -106,21 +106,8 @@ pub(crate) fn parse_slash_command(text: &str) -> Option<SlashCommand> {
 /// Help text for `/help`.
 #[must_use]
 pub(crate) fn help_text() -> String {
-    "Commands: /help /status /clear /halve|/reduce /compact /model [ai|voice <id>] /voice [list|<id>] /reasoning [list|<mode>] /new /profile [<name>] /sleep /hibernate /resume /refresh. /sleep is 2-way off (wake word still works). /hibernate stops the mic until /resume or Settings Resume. The HUD 2-way control uses sleep, not hibernate. /profile resets TTS voice to Default."
+    "Commands: /help /status /clear /halve|/reduce /compact /model [ai|voice <id>] /voice [list|<id>] /reasoning [list|<mode>] /new /profile [<name>] /sleep /hibernate /resume /refresh. /sleep is 2-way off (wake word still works). /hibernate stops the mic until /resume or Settings Resume. The HUD 2-way control uses sleep, not hibernate. /profile does not change the Settings voice."
         .to_owned()
-}
-
-/// Clear `selected_tts_voice` so the next speak resolves to Default (Eve on xAI).
-///
-/// Profile switches call this. Empty is the source of truth; do not store the
-/// resolved id. Best-effort: a missing providers file is an error for the caller
-/// to ignore.
-pub(crate) fn clear_tts_voice_default() -> Result<(), String> {
-    let store = open_provider_store()?;
-    let mut settings = store.load().map_err(|e| e.to_string())?;
-    settings.selected_tts_voice.clear();
-    store.save(&settings).map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 /// Load providers.json for slash model/voice commands.

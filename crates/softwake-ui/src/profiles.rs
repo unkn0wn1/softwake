@@ -13,7 +13,8 @@ use softwake_soul::{
     create_profile, ensure_migrated, list_profiles, load_app_config, load_profile_meta,
     profile_name_in, profile_owner_from_pack_dir, profile_pack_dir, rename_profile,
     resolve_config_dir, resolve_main_profile_id, resolve_soul_dir, set_active_profile,
-    set_allow_all, set_global_doc_flags, set_profile_role, try_load_effective,
+    set_allow_all, set_global_doc_flags, set_profile_role, set_profile_tts_voice,
+    try_load_effective,
 };
 
 use crate::pack::{self, PackSnapshot};
@@ -64,6 +65,8 @@ pub struct ProfilesSnapshot {
     pub allow_all: bool,
     /// Profile role (`general` or `coding`).
     pub role: String,
+    /// This profile's non-S2S xAI voice. Empty uses Settings, then eve.
+    pub tts_voice: String,
     /// Main `user.md` body for the read-only preview.
     pub global_user: String,
     /// Main `rules.md` body for the read-only preview.
@@ -154,6 +157,7 @@ fn snapshot_at(config: &Path, selected_id: &str) -> Result<ProfilesSnapshot, Str
         use_global_rules: is_main || meta.use_global_rules,
         allow_all: meta.allow_all,
         role: meta.role.clone(),
+        tts_voice: meta.tts_voice,
         global_user: global.user,
         global_rules: global.rules,
         global_glossary: global.glossary,
@@ -202,13 +206,7 @@ pub fn profile_rename(id: String, name: String) -> Result<ProfilesSnapshot, Stri
 #[tauri::command]
 pub fn profile_set_active(id: String) -> Result<ProfilesSnapshot, String> {
     let config = config_dir()?;
-    let previous = load_app_config(&config)
-        .map(|app| app.active_profile)
-        .unwrap_or_default();
     set_active_profile(&config, &id).map_err(|error| error.to_string())?;
-    if previous != id {
-        let _ = crate::providers::clear_selected_tts_voice();
-    }
     snapshot_at(&config, &id)
 }
 
@@ -243,6 +241,27 @@ pub fn profile_set_allow_all(id: String, allow_all: bool) -> Result<ProfilesSnap
 pub fn profile_set_role(id: String, role: String) -> Result<ProfilesSnapshot, String> {
     let config = config_dir()?;
     set_profile_role(&config, &id, &role).map_err(|error| error.to_string())?;
+    snapshot_at(&config, id.trim())
+}
+
+/// Store this profile's non-S2S voice. Empty keeps Settings, then eve.
+///
+/// Does not write Settings `selected_tts_voice`.
+#[tauri::command]
+pub fn profile_set_tts_voice(id: String, voice: String) -> Result<ProfilesSnapshot, String> {
+    let config = config_dir()?;
+    let trimmed = voice.trim();
+    let stored = if trimmed.is_empty() {
+        String::new()
+    } else {
+        let Some(canonical) =
+            softwake_providers::resolve_tts_voice(softwake_providers::ProviderId::XaiKey, trimmed)
+        else {
+            return Err("that voice is not a built-in xAI TTS voice".to_owned());
+        };
+        canonical.to_owned()
+    };
+    set_profile_tts_voice(&config, &id, &stored).map_err(|error| error.to_string())?;
     snapshot_at(&config, id.trim())
 }
 
@@ -305,8 +324,6 @@ pub fn hud_switch_profile(id: String) -> Result<HudSwitchProfileResult, String> 
     let already = app.active_profile == id;
     if !already {
         set_active_profile(&config, &id).map_err(|error| error.to_string())?;
-        // One voice store: profile switch returns to Default (empty).
-        let _ = crate::providers::clear_selected_tts_voice();
     }
     let snapshot = snapshot_at(&config, &id)?;
     let (refresh_ok, refresh_message) = match ask_refresh() {
