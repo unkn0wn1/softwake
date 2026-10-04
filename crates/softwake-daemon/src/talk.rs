@@ -251,19 +251,73 @@ fn speak_via_stream(
     }
 }
 
+/// How often a room line rechecks the speech stamp while waiting for idle.
+#[cfg(not(test))]
+const ROOM_LINE_IDLE_POLL: std::time::Duration = std::time::Duration::from_millis(40);
+
+/// Wait until playback is idle, the 120s budget ends, or `speech_gen` is stale.
+///
+/// Returns false when the stamp is stale so the caller does not sit on the
+/// full idle timeout and does not start playback. Returns true when idle or
+/// when the budget elapsed with the stamp still current.
+#[cfg(not(test))]
+fn wait_room_line_until_idle(speech_gen: u64, timeout: std::time::Duration) -> bool {
+    let start = std::time::Instant::now();
+    loop {
+        if !crate::team::room_speech_allows(speech_gen) {
+            return false;
+        }
+        if softwake_voice::wait_for_playback_idle(ROOM_LINE_IDLE_POLL) {
+            return true;
+        }
+        if start.elapsed() >= timeout {
+            return true;
+        }
+    }
+}
+
 /// Speak one room-member line in that member's voice, after the log write.
 ///
 /// Waits for the previous clip, plays with `interrupt` false, then waits again
 /// so the next member does not overlap. Does not open a Voice Agent session.
+///
+/// `speech_gen` is the stamp taken when the operator line was committed. When
+/// barge-in or Voice Agent speech-started has cleared the room speech queue,
+/// this returns without playing, including while it would otherwise wait up to
+/// 120s for idle.
 #[cfg(not(test))]
-pub(crate) fn speak_room_member_line(profile_voice: &str, text: &str) {
+pub(crate) fn speak_room_member_line(profile_voice: &str, text: &str, speech_gen: u64) {
+    if !crate::team::room_speech_allows(speech_gen) {
+        return;
+    }
     let Ok(ready) = crate::chat::load_disk_chat() else {
         return;
     };
+    let clip = crate::team::RoomSpeechClip {
+        text: text.to_owned(),
+        voice: profile_voice.to_owned(),
+    };
+    if !crate::team::enqueue_waiting_room_audio(clip.clone(), speech_gen) {
+        return;
+    }
     let idle = std::time::Duration::from_secs(120);
-    let _ = softwake_voice::wait_for_playback_idle(idle);
+    if !wait_room_line_until_idle(speech_gen, idle) {
+        return;
+    }
+    if !crate::team::claim_waiting_room_audio(&clip, speech_gen) {
+        return;
+    }
+    // Re-check after the claim. A clear that landed in this gap must not start
+    // the clip. If playback still wins the race, cut it immediately.
+    if !crate::team::room_speech_allows(speech_gen) {
+        return;
+    }
     let _ = speak_reply_with_interrupt(&ready, text, profile_voice, false);
-    let _ = softwake_voice::wait_for_playback_idle(idle);
+    if !crate::team::room_speech_allows(speech_gen) {
+        softwake_voice::interrupt_playback();
+        return;
+    }
+    let _ = wait_room_line_until_idle(speech_gen, idle);
 }
 
 pub(crate) fn stt_model_for(provider: ProviderId, selected: &str) -> Result<String, String> {

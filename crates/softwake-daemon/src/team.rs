@@ -4,6 +4,7 @@ use std::env;
 use std::fmt::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 
 use softwake_soul::{
     ProfileMeta, ensure_profile_home, list_profiles, load_profile_meta, profile_pack_dir,
@@ -495,6 +496,182 @@ fn run_grok_prompt(prompt: &str, cwd: &std::path::Path, plan_mode: bool) -> Resu
     }
 }
 
+/// One room-member line waiting to play, or staged before it is appended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RoomSpeechClip {
+    pub text: String,
+    pub voice: String,
+}
+
+/// Counts from [`RoomSpeechQueue::clear`]. `generation` is the value after the bump.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RoomSpeechClearReport {
+    /// Generation after the bump. A stamp from before `clear` fails `allows`.
+    pub generation: u64,
+    /// Clips removed from the waiting-audio list.
+    pub dropped_audio: usize,
+    /// Replies removed before they were appended to the room log.
+    pub dropped_unposted: usize,
+}
+
+/// In-memory queue of room-member speech that has not started playback.
+///
+/// Generation starts at 0. `clear` drops both lists and bumps the generation
+/// with `wrapping_add`. It takes no log path and does no I/O, so a line already
+/// stored in the room log stays there.
+#[derive(Debug, Default)]
+pub(crate) struct RoomSpeechQueue {
+    generation: u64,
+    waiting_audio: Vec<RoomSpeechClip>,
+    unposted: Vec<RoomSpeechClip>,
+}
+
+impl RoomSpeechQueue {
+    pub(crate) fn enqueue_waiting_audio(&mut self, clip: RoomSpeechClip) {
+        self.waiting_audio.push(clip);
+    }
+
+    /// Push `clip` when `captured` is still current.
+    ///
+    /// Returns false and does not push when `captured` is stale.
+    #[must_use]
+    pub(crate) fn stage_unposted(&mut self, clip: &RoomSpeechClip, captured: u64) -> bool {
+        if !self.allows(captured) {
+            return false;
+        }
+        self.unposted.push(clip.clone());
+        true
+    }
+
+    /// Drop waiting audio and unposted replies, then bump the generation.
+    ///
+    /// Does not spawn a player, kill a process, or rewrite a room log.
+    #[must_use]
+    pub(crate) fn clear(&mut self) -> RoomSpeechClearReport {
+        let dropped_audio = self.waiting_audio.len();
+        let dropped_unposted = self.unposted.len();
+        self.waiting_audio.clear();
+        self.unposted.clear();
+        self.generation = self.generation.wrapping_add(1);
+        RoomSpeechClearReport {
+            generation: self.generation,
+            dropped_audio,
+            dropped_unposted,
+        }
+    }
+
+    /// True when `captured` is the generation this queue still honors.
+    #[must_use]
+    pub(crate) const fn allows(&self, captured: u64) -> bool {
+        captured == self.generation
+    }
+
+    #[must_use]
+    pub(crate) fn unposted_contains(&self, clip: &RoomSpeechClip) -> bool {
+        self.unposted.iter().any(|item| item == clip)
+    }
+
+    /// Remove one matching staged reply. False when `clear` already dropped it.
+    #[must_use]
+    pub(crate) fn take_unposted(&mut self, clip: &RoomSpeechClip) -> bool {
+        take_matching(&mut self.unposted, clip)
+    }
+
+    /// Remove one matching waiting clip. False when `clear` already dropped it.
+    #[must_use]
+    pub(crate) fn take_waiting(&mut self, clip: &RoomSpeechClip) -> bool {
+        take_matching(&mut self.waiting_audio, clip)
+    }
+}
+
+fn take_matching(clips: &mut Vec<RoomSpeechClip>, clip: &RoomSpeechClip) -> bool {
+    let Some(index) = clips.iter().position(|item| item == clip) else {
+        return false;
+    };
+    clips.remove(index);
+    true
+}
+
+fn room_speech_queue() -> std::sync::MutexGuard<'static, RoomSpeechQueue> {
+    static LOCK: OnceLock<Mutex<RoomSpeechQueue>> = OnceLock::new();
+    let lock = LOCK.get_or_init(|| Mutex::new(RoomSpeechQueue::default()));
+    lock.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Clear queued member speech. Production also interrupts playback.
+///
+/// [`RoomSpeechQueue::clear`] does not touch the player. This wrapper does,
+/// outside tests, so a clip that wins the race after the generation check
+/// still dies. No log path: text already in the room log is left alone.
+pub(crate) fn clear_room_speech_queue() {
+    let _report = room_speech_queue().clear();
+    #[cfg(not(test))]
+    softwake_voice::interrupt_playback();
+}
+
+/// Generation stamped onto a fan-out when the operator line is committed.
+///
+/// Reading does not bump. [`clear_room_speech_queue`] bumps.
+#[must_use]
+pub(crate) fn room_speech_generation() -> u64 {
+    room_speech_queue().generation
+}
+
+#[must_use]
+pub(crate) fn room_speech_allows(captured: u64) -> bool {
+    room_speech_queue().allows(captured)
+}
+
+fn stage_unposted_room_reply(clip: &RoomSpeechClip, captured: u64) -> bool {
+    room_speech_queue().stage_unposted(clip, captured)
+}
+
+fn claim_unposted_room_reply(clip: &RoomSpeechClip, captured: u64) -> bool {
+    let mut queue = room_speech_queue();
+    if !queue.allows(captured) || !queue.unposted_contains(clip) {
+        return false;
+    }
+    queue.take_unposted(clip)
+}
+
+/// Record a member line whose log row exists and whose clip has not started.
+///
+/// Returns false when `captured` is already stale, and does not push.
+#[must_use]
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "called from speak_room_member_line, which tests do not compile"
+    )
+)]
+pub(crate) fn enqueue_waiting_room_audio(clip: RoomSpeechClip, captured: u64) -> bool {
+    let mut queue = room_speech_queue();
+    if !queue.allows(captured) {
+        return false;
+    }
+    queue.enqueue_waiting_audio(clip);
+    true
+}
+
+/// Take the waiting clip only when `captured` is current and `clear` left it.
+#[must_use]
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "called from speak_room_member_line, which tests do not compile"
+    )
+)]
+pub(crate) fn claim_waiting_room_audio(clip: &RoomSpeechClip, captured: u64) -> bool {
+    let mut queue = room_speech_queue();
+    if !queue.allows(captured) {
+        return false;
+    }
+    queue.take_waiting(clip)
+}
+
 /// Prepared member fan-out after the operator line is on disk.
 ///
 /// [`commit_operator_room_post`] returns this so the IPC path can reply, then
@@ -510,6 +687,8 @@ pub(crate) struct RoomFanoutJob {
     pub rooms_dir: PathBuf,
     pub state_dir: PathBuf,
     pub room_path: PathBuf,
+    /// Speech-queue generation at operator commit. Not bumped here.
+    pub speech_gen: u64,
 }
 
 /// Write the operator line and return immediately with an optional fan-out job.
@@ -559,6 +738,9 @@ pub(crate) fn commit_operator_room_post(
         },
     )?;
     let _ = mark_room_turn(&rooms_dir, room_id, "operator");
+    // Stamp at commit, before profile lookup, and do not bump. An interrupt
+    // during lookup must still invalidate this fan-out.
+    let speech_gen = room_speech_generation();
 
     let xdg = env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
     let home = env::var_os("HOME").map(PathBuf::from);
@@ -586,6 +768,7 @@ pub(crate) fn commit_operator_room_post(
         rooms_dir,
         state_dir,
         room_path: path,
+        speech_gen,
     };
     Ok((message, Some(job)))
 }
@@ -594,6 +777,9 @@ pub(crate) fn commit_operator_room_post(
 ///
 /// `oneshot` must lock the runtime only for the duration of one LLM turn so
 /// the UI/IPC path stays free. Replies append to the room log as they finish.
+///
+/// When `job.speech_gen` is stale, the loop stops. Later members are not
+/// appended and are not spoken. Lines already appended stay in the log.
 #[allow(
     clippy::too_many_lines,
     reason = "room fan-out + cool-down stay in one ADR-0052 flow"
@@ -614,6 +800,9 @@ where
     let mut thread_notes = String::new();
 
     for (index, member) in job.members.iter().enumerate() {
+        if !room_speech_allows(job.speech_gen) {
+            break;
+        }
         if index > 0 {
             pause_between_members();
         }
@@ -640,18 +829,43 @@ where
         let stimulus = format!(
             "You are in Softwake room `{room_id}` (title: {title}). You are {display} (profile id `{member_id}`).\n\nRecent room context:\n{prior}\n\nOperator message:\n{text}\n\nSoftwake wakes every room member, one at a time, with a cool-down between turns. Another member already speaking does not cancel your turn.\nDecide for yourself:\n- If you should reply, write your room message only (no preamble).\n- If you should stay quiet, reply with exactly: NO_REPLY"
         );
+        if !room_speech_allows(job.speech_gen) {
+            break;
+        }
         let reply = match oneshot(member_id, &instructions, meta.allow_all, &stimulus) {
             Ok(r) => r,
             Err(error) => {
+                if !room_speech_allows(job.speech_gen) {
+                    break;
+                }
                 skipped.push(format!("{member_id} (error: {error})"));
                 continue;
             }
         };
+        // After the oneshot, before any append. A stale stamp must not post.
+        if !room_speech_allows(job.speech_gen) {
+            break;
+        }
         if is_no_reply(&reply) {
             skipped.push(format!("{member_id} (NO_REPLY)"));
             continue;
         }
         let trimmed = reply.trim();
+        let clip = RoomSpeechClip {
+            text: trimmed.to_owned(),
+            voice: meta.tts_voice.clone(),
+        };
+        // Stage then take so a clear that landed after the oneshot drops this
+        // reply. If it is gone, do not append and do not speak.
+        if !stage_unposted_room_reply(&clip, job.speech_gen) {
+            break;
+        }
+        if !claim_unposted_room_reply(&clip, job.speech_gen) {
+            break;
+        }
+        if !room_speech_allows(job.speech_gen) {
+            break;
+        }
         if let Err(error) = append_room_log(
             &job.state_dir,
             room_id,
@@ -677,7 +891,7 @@ where
         // Non-S2S path: one clip per member, in this member's voice, before the next.
         #[cfg(not(test))]
         {
-            crate::talk::speak_room_member_line(&meta.tts_voice, trimmed);
+            crate::talk::speak_room_member_line(&meta.tts_voice, trimmed, job.speech_gen);
         }
     }
 
@@ -755,5 +969,53 @@ mod tests {
             &target
         ));
         assert!(!room_lists_member(&["spencer".into()], &target));
+    }
+
+    #[test]
+    fn clear_drops_queued_member_speech_and_leaves_the_log() {
+        // Local queue, not the process global. No audio device and no network.
+        let mut queue = RoomSpeechQueue::default();
+        let stamped = 0_u64;
+        assert!(queue.allows(stamped));
+        queue.enqueue_waiting_audio(RoomSpeechClip {
+            text: "the build is green".to_owned(),
+            voice: "ara".to_owned(),
+        });
+        let unposted = RoomSpeechClip {
+            text: "I can take the notes".to_owned(),
+            voice: "rex".to_owned(),
+        };
+        assert!(queue.stage_unposted(&unposted, stamped));
+        assert!(queue.unposted_contains(&unposted));
+        // Operator line plus the member line already in the log. clear must
+        // not receive this vec and must not rewrite it.
+        let room_log = vec![
+            "operator: are we shipping today".to_owned(),
+            "Sally: the build is green".to_owned(),
+        ];
+        let room_log_before = room_log.clone();
+
+        let report = queue.clear();
+
+        assert_eq!(report.dropped_audio, 1);
+        assert_eq!(report.dropped_unposted, 1);
+        assert!(queue.waiting_audio.is_empty());
+        assert!(queue.unposted.is_empty());
+        assert!(!queue.allows(stamped));
+        assert!(queue.allows(report.generation));
+        assert_eq!(report.generation, stamped.wrapping_add(1));
+        assert!(!queue.take_waiting(&RoomSpeechClip {
+            text: "the build is green".to_owned(),
+            voice: "ara".to_owned(),
+        }));
+        assert_eq!(room_log, room_log_before);
+        assert!(!queue.unposted_contains(&unposted));
+        // A stamp from before the interrupt cannot stage another reply.
+        // The generation clear just published can.
+        assert!(!queue.stage_unposted(&unposted, stamped));
+        assert!(queue.unposted.is_empty());
+        assert!(queue.stage_unposted(&unposted, report.generation));
+        assert!(queue.unposted_contains(&unposted));
+        assert_eq!(room_log, room_log_before);
     }
 }
