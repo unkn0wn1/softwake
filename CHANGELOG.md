@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- **Room speech interrupt:** barge-in and Voice Agent speech-started clear waiting member audio and member replies that are not in the room log yet. Lines already in the log stay.
+
 - **Room S2S utterance coalesce:** with Voice Agent S2S and a room open, free-speech energy VAD stays off (S2S alone owns the mic). Rapid Voice Agent user transcript fragments merge into one operator room post after a short quiet window instead of waking every member on each partial.
 
 - **Boot awake:** a valid pack comes up Awake and speaks the awake line once. An invalid pack stays Sleep with no announcement. `Machine::new` and test runtimes stay asleep.

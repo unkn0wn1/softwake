@@ -2373,6 +2373,8 @@ impl Runtime {
             if !s2s && softwake_voice::input_muted() && !self.user_mic_muted {
                 if self.barge.note(level) {
                     crate::announce::cancel_speech();
+                    // Same barge that stops Eve also drops later room-member lines.
+                    crate::team::clear_room_speech_queue();
                     Self::request_cancel_ask(&self.ask_cancel);
                     self.barge.reset();
                     self.auto_utt.reset();
@@ -2455,6 +2457,11 @@ impl Runtime {
                 crate::voice_agent::VaHudPhase::Listening => "listening",
             };
             self.set_turn_phase(Some(label));
+        }
+        if speech_starts > 0 {
+            // User started speaking while S2S owns the mic. Clear once per
+            // pump, not per PCM frame, before this utterance is opened.
+            crate::team::clear_room_speech_queue();
         }
         for _ in 0..speech_starts {
             // Keep one generation while S2S fragments are still coalescing.
