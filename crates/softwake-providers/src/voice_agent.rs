@@ -141,6 +141,33 @@ pub fn voice_agent_session_update_json(
     json!({ "type": "session.update", "session": session }).to_string()
 }
 
+/// One conversation item so the next voice turn can see text already spoken elsewhere.
+///
+/// Does not include `response.create`. The session should not speak this line back.
+#[must_use]
+#[cfg(any(feature = "live-http", test))]
+pub fn voice_agent_context_item_json(role: &str, text: &str) -> String {
+    let role = if role.eq_ignore_ascii_case("assistant") {
+        "assistant"
+    } else {
+        "user"
+    };
+    let content_type = if role == "assistant" {
+        "output_text"
+    } else {
+        "input_text"
+    };
+    json!({
+        "type": "conversation.item.create",
+        "item": {
+            "type": "message",
+            "role": role,
+            "content": [{ "type": content_type, "text": text }]
+        }
+    })
+    .to_string()
+}
+
 /// Build `input_audio_buffer.append` for one PCM16 little-endian clip.
 #[must_use]
 pub fn voice_agent_append_pcm_json(pcm16_le: &[u8]) -> String {
@@ -329,6 +356,16 @@ impl VoiceAgentSession {
         let _ = self.send_text(&voice_agent_cancel_json());
     }
 
+    /// Insert a text turn. Does not ask the model to reply.
+    ///
+    /// # Errors
+    ///
+    /// Socket send failures.
+    pub fn send_context_item(&mut self, role: &str, text: &str) -> Result<(), VoiceHttpError> {
+        let payload = voice_agent_context_item_json(role, text);
+        self.send_text(&payload)
+    }
+
     /// Arm a short TCP read timeout (call once after connect).
     pub fn set_read_timeout_ms(&mut self, ms: u64) {
         use std::time::Duration;
@@ -409,6 +446,20 @@ mod tests {
             voice_agent_realtime_url("https://api.x.ai/v1", "grok voice").expect_err("space"),
             VoiceHttpError::Unreachable
         );
+    }
+
+    #[test]
+    fn context_item_does_not_request_a_reply() {
+        let raw = voice_agent_context_item_json("user", "[room spncxrchat] Operator: promoted");
+        let value: Value = serde_json::from_str(&raw).expect("json");
+        assert_eq!(value["type"], "conversation.item.create");
+        assert_eq!(value["item"]["role"], "user");
+        assert_eq!(value["item"]["content"][0]["type"], "input_text");
+        assert!(raw.contains("spncxrchat"));
+        assert!(!raw.contains("response.create"));
+        let assistant = voice_agent_context_item_json("assistant", "Sorted.");
+        assert!(assistant.contains("output_text"));
+        assert!(!assistant.contains("response.create"));
     }
 
     #[test]

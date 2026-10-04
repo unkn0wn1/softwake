@@ -75,6 +75,11 @@ enum BridgeCmd {
     ///
     /// Does not close the socket or send `session.update`.
     SetRoomRoute(bool),
+    /// Add a text turn to the live voice session without asking it to speak.
+    Context {
+        role: String,
+        text: String,
+    },
     Stop,
 }
 
@@ -148,6 +153,23 @@ impl VoiceAgentBridge {
     /// Does not stop the thread or open another socket.
     pub(crate) fn set_room_route(&self, enabled: bool) {
         let _ = self.cmd_tx.send(BridgeCmd::SetRoomRoute(enabled));
+    }
+
+    /// Queue a room line into the open voice session. Does not request a reply.
+    pub(crate) fn inject_context(&self, role: &str, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        let role = if role.eq_ignore_ascii_case("assistant") {
+            "assistant"
+        } else {
+            "user"
+        };
+        let _ = self.cmd_tx.send(BridgeCmd::Context {
+            role: role.to_owned(),
+            text: text.to_owned(),
+        });
     }
 
     /// Cancel in-flight assistant audio on the server and locally.
@@ -311,10 +333,58 @@ pub(crate) fn instructions_from_soul(applied: Option<&str>, agent_name: &str) ->
         "You are {name}, a desktop voice companion. Speak briefly and naturally. Softwake Hands tools are not available on this voice path — answer from knowledge and web search only.\n\n"
     );
     let body = applied.unwrap_or("Be helpful, clear, and kind.");
-    softwake_providers::clip_voice_agent_instructions(
+    let max = softwake_providers::VOICE_AGENT_INSTRUCTIONS_MAX_CHARS;
+    let reserve = 1200usize.min(max / 4);
+    let base = softwake_providers::clip_voice_agent_instructions(
         &format!("{header}{body}"),
-        softwake_providers::VOICE_AGENT_INSTRUCTIONS_MAX_CHARS,
+        max.saturating_sub(reserve),
+    );
+    let recent = voice_recent_chat(reserve);
+    if recent.is_empty() {
+        return base;
+    }
+    softwake_providers::clip_voice_agent_instructions(
+        &format!("{base}\n\nRecent chat, including rooms you were in:\n{recent}"),
+        max,
     )
+}
+
+/// Tail of the active profile's plaintext HUD chat, for a new voice session.
+///
+/// Tests skip this so they do not read the operator's real chat.
+#[cfg(test)]
+fn voice_recent_chat(_max_chars: usize) -> String {
+    String::new()
+}
+
+#[cfg(not(test))]
+fn voice_recent_chat(max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    let turns = crate::hud_seed::load_plaintext_hud_turns();
+    if turns.is_empty() {
+        return String::new();
+    }
+    let mut kept: Vec<String> = Vec::new();
+    let mut used = 0usize;
+    for turn in turns.into_iter().rev() {
+        let line = turn.content.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let add = line.chars().count() + 1;
+        if used > 0 && used.saturating_add(add) > max_chars {
+            break;
+        }
+        used = used.saturating_add(add);
+        kept.push(line.to_owned());
+        if used >= max_chars {
+            break;
+        }
+    }
+    kept.reverse();
+    kept.join("\n")
 }
 
 #[cfg(feature = "live-http")]
@@ -378,6 +448,9 @@ fn worker_loop(
                     session.cancel_response();
                     abort_va_player(&mut player);
                     response_active = false;
+                }
+                Ok(BridgeCmd::Context { role, text }) => {
+                    let _ = session.send_context_item(&role, &text);
                 }
                 Ok(BridgeCmd::SetRoomRoute(enabled)) => {
                     room_route = enabled;

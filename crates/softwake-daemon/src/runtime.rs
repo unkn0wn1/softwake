@@ -189,6 +189,14 @@ pub(crate) struct Runtime {
     s2s_room_pending: Option<String>,
     /// When the last S2S fragment was merged into [`Self::s2s_room_pending`].
     s2s_room_last_frag: Option<Instant>,
+    /// Coalesced S2S user text for the 1-1 profile chat (no room open).
+    s2s_profile_pending: Option<String>,
+    /// When the last profile S2S fragment was merged.
+    s2s_profile_last_frag: Option<Instant>,
+    /// Latest operator line for the profile chat HUD. Not a room post.
+    operator_said: Option<String>,
+    /// Bumps once per profile utterance. Fragments of the same utterance keep it.
+    operator_said_seq: u64,
 }
 
 /// Chat request copied off the runtime so member threads can call HTTP together.
@@ -303,6 +311,10 @@ impl Runtime {
             auto_pcm_joined_room_clip: false,
             s2s_room_pending: None,
             s2s_room_last_frag: None,
+            s2s_profile_pending: None,
+            s2s_profile_last_frag: None,
+            operator_said: None,
+            operator_said_seq: 0,
         };
         #[cfg(test)]
         {
@@ -1888,6 +1900,7 @@ impl Runtime {
             self.drop_s2s_user_transcript = false;
             self.auto_pcm_joined_room_clip = false;
             self.abandon_s2s_room_coalesce();
+            self.abandon_s2s_profile_coalesce();
         }
         self.open_room_id = next;
         if let Some(bridge) = self.voice_agent.as_ref() {
@@ -1935,6 +1948,10 @@ impl Runtime {
         }
         self.ptt_room_release = false;
         self.auto_pcm_joined_room_clip = false;
+        self.open_operator_said(text);
+        // Voice Agent may echo this press-to-talk line. Drop that one transcript
+        // so the profile chat does not grow a second user bubble.
+        self.drop_s2s_user_transcript = true;
         self.ask_from_free_speech = from_free_speech;
         let outcome = self.ask(text);
         self.ask_from_free_speech = false;
@@ -1974,8 +1991,98 @@ impl Runtime {
         }
     }
 
+    fn open_operator_said(&mut self, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        self.operator_said_seq = self.operator_said_seq.saturating_add(1).max(1);
+        self.operator_said = Some(text.to_owned());
+    }
+
+    fn grow_operator_said(&mut self, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        if self.operator_said_seq == 0 {
+            self.open_operator_said(text);
+            return;
+        }
+        self.operator_said = Some(text.to_owned());
+    }
+
+    /// 1-1 profile chat: keep the operator's words, not only the agent reply.
+    fn note_s2s_profile_transcript(&mut self, text: &str) {
+        if self.talk.is_armed() {
+            return;
+        }
+        if self.drop_s2s_user_transcript {
+            self.drop_s2s_user_transcript = false;
+            return;
+        }
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        let merged = match self.s2s_profile_pending.as_deref() {
+            Some(prior) => coalesce_s2s_room_transcript(prior, text),
+            None => text.to_owned(),
+        };
+        if self.s2s_profile_pending.is_none() {
+            self.open_operator_said(&merged);
+        } else {
+            self.grow_operator_said(&merged);
+        }
+        self.s2s_profile_pending = Some(merged);
+        self.s2s_profile_last_frag = Some(Instant::now());
+    }
+
+    fn abandon_s2s_profile_coalesce(&mut self) {
+        self.s2s_profile_pending = None;
+        self.s2s_profile_last_frag = None;
+    }
+
+    fn flush_s2s_profile_coalesce_if_due(&mut self) {
+        if self.open_room_id.is_some() {
+            return;
+        }
+        let Some(last) = self.s2s_profile_last_frag else {
+            return;
+        };
+        if last.elapsed() < Duration::from_millis(S2S_ROOM_COALESCE_MS) {
+            return;
+        }
+        self.flush_s2s_profile_coalesce();
+    }
+
+    /// Commit one coalesced profile utterance into the awake text session.
+    fn flush_s2s_profile_coalesce(&mut self) {
+        self.s2s_profile_last_frag = None;
+        let Some(text) = self.s2s_profile_pending.take() else {
+            return;
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        self.grow_operator_said(text);
+        if self.session.phase() == softwake_session::SessionPhase::Open {
+            let already = self.session.messages().last().is_some_and(|message| {
+                message.role == softwake_session::MessageRole::User && message.content == text
+            });
+            if !already {
+                let _ = self.session.push_user_turn(text);
+            }
+        }
+        if let Some(profile_id) = crate::hud_chat_write::active_profile_id() {
+            crate::hud_chat_write::append_role_turn(&profile_id, "user", "You", text);
+        }
+    }
+
     fn on_s2s_user_transcript(&mut self, text: &str) {
         if self.open_room_id.is_none() {
+            self.note_s2s_profile_transcript(text);
             return;
         }
         if self.talk.is_armed() {
@@ -2526,6 +2633,7 @@ impl Runtime {
             self.on_s2s_user_transcript(&text);
         }
         self.flush_s2s_room_coalesce_if_due();
+        self.flush_s2s_profile_coalesce_if_due();
         if dead {
             self.stop_voice_agent();
         }
@@ -3104,6 +3212,37 @@ impl Runtime {
         }
     }
 
+    /// Copy room lines for the active profile into the open text session and,
+    /// when Voice Agent is up, into that live voice session. Other profiles stay
+    /// on disk until their own session opens.
+    pub(crate) fn ingest_room_history(&mut self, turns: &[crate::team::RoomHistoryTurn]) {
+        let Some(active) = crate::hud_chat_write::active_profile_id() else {
+            return;
+        };
+        for turn in turns {
+            if turn.profile_id != active || turn.text.trim().is_empty() {
+                continue;
+            }
+            if self.session.phase() == softwake_session::SessionPhase::Open {
+                let already = self
+                    .session
+                    .messages()
+                    .iter()
+                    .any(|message| message.content == turn.text);
+                if !already {
+                    if turn.role.eq_ignore_ascii_case("assistant") {
+                        let _ = self.session.push_assistant_turn(&turn.text);
+                    } else {
+                        let _ = self.session.push_user_turn(&turn.text);
+                    }
+                }
+            }
+            if let Some(bridge) = self.voice_agent.as_ref() {
+                bridge.inject_context(&turn.role, &turn.text);
+            }
+        }
+    }
+
     /// Ack an operator room post after the line is on disk (fan-out is async).
     pub(crate) fn ack_room_post(&mut self, message: String) -> Outcome {
         self.last_status_message = Some(message.clone());
@@ -3203,6 +3342,8 @@ impl Runtime {
             mic_muted: self.user_mic_muted,
             phase: self.turn_phase.clone(),
             build: Some(crate::build_stamp()),
+            operator_said: self.operator_said.clone(),
+            operator_said_seq: self.operator_said_seq,
         }
     }
 
@@ -3807,6 +3948,10 @@ mod talk_tests {
         let status = posted.body.status().expect("room post");
         let message = status.message.as_deref().unwrap_or("");
         assert!(message.contains("operator posted"), "ack was {message}");
+        assert!(
+            status.operator_said.is_none(),
+            "room speech is not a profile bubble"
+        );
         assert!(message.contains("standup"), "ack was {message}");
         assert_eq!(runtime.session.messages().len(), before);
         assert_eq!(runtime.pending_room_fanout.len(), 1);
@@ -3832,6 +3977,8 @@ mod talk_tests {
         let asked = runtime.talk_stop();
         let reply = asked.body.status().expect("asked");
         assert_eq!(reply.message.as_deref(), Some("she replies"));
+        assert_eq!(reply.operator_said.as_deref(), Some("what time is it"));
+        assert!(reply.operator_said_seq >= 1);
         assert!(runtime.session.messages().len() > before);
     }
 
@@ -3912,6 +4059,27 @@ mod talk_tests {
         runtime.set_open_room(None);
         assert!(runtime.s2s_room_pending.is_none());
         assert_eq!(runtime.pending_room_fanout.len(), 2);
+    }
+
+    #[test]
+    fn profile_s2s_speech_is_a_user_turn_without_a_room_post() {
+        let (mut runtime, _dir) = awake();
+        runtime.on_s2s_user_transcript("I said, have you");
+        runtime.on_s2s_user_transcript("Have you been listening");
+        assert!(runtime.pending_room_fanout.is_empty());
+        assert_eq!(
+            runtime.operator_said.as_deref(),
+            Some("I said, have you been listening")
+        );
+        let seq = runtime.operator_said_seq;
+        assert!(seq >= 1);
+        runtime.flush_s2s_profile_coalesce();
+        assert!(runtime.session.messages().iter().any(|message| {
+            message.role == softwake_session::MessageRole::User
+                && message.content == "I said, have you been listening"
+        }));
+        assert_eq!(runtime.operator_said_seq, seq);
+        assert!(runtime.pending_room_fanout.is_empty());
     }
 
     #[test]

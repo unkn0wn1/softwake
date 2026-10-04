@@ -432,6 +432,15 @@ pub struct Status {
     /// Daemon build stamp (`0.1.0 · abc1234 · built_at`). Additive; absent on older daemons.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<String>,
+    /// Operator speech in the open 1-1 profile chat. Room posts stay on the room log.
+    ///
+    /// Additive on protocol generation 1. Absent when this status has no profile utterance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_said: Option<String>,
+    /// Generation of [`Self::operator_said`]. `0` means none. Same generation may grow
+    /// as Voice Agent fragments coalesce. A new utterance bumps it.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub operator_said_seq: u64,
 }
 
 #[allow(
@@ -440,6 +449,10 @@ pub struct Status {
 )]
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
 }
 
 /// Successful status or a structured error.
@@ -854,6 +867,8 @@ mod tests {
             mic_muted: false,
             phase: None,
             build: None,
+            operator_said: None,
+            operator_said_seq: 0,
         }
     }
 
@@ -1198,6 +1213,8 @@ mod tests {
             mic_muted: false,
             phase: None,
             build: None,
+            operator_said: None,
+            operator_said_seq: 0,
         };
         assert_round_trip(&with_pending);
         let pending_json = serde_json::to_string(&with_pending).expect("encode");
@@ -1255,6 +1272,8 @@ mod tests {
             mic_muted: false,
             phase: None,
             build: None,
+            operator_said: None,
+            operator_said_seq: 0,
         };
         assert_round_trip(&with_level);
         let json = serde_json::to_string(&with_level).expect("encode");
@@ -1281,6 +1300,8 @@ mod tests {
             mic_muted: false,
             phase: None,
             build: None,
+            operator_said: None,
+            operator_said_seq: 0,
         };
         let json = serde_json::to_string(&without).expect("encode");
         assert!(!json.contains("capture_level"));
@@ -1314,6 +1335,8 @@ mod tests {
             mic_muted: false,
             phase: None,
             build: None,
+            operator_said: None,
+            operator_said_seq: 0,
         };
         assert_round_trip(&missing);
 
@@ -1341,6 +1364,8 @@ mod tests {
             mic_muted: false,
             phase: None,
             build: None,
+            operator_said: None,
+            operator_said_seq: 0,
         };
         let json = serde_json::to_string(&ok).expect("encode");
         assert!(json.contains("\"soul\":{\"ok\":true}"));
