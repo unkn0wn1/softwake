@@ -13,7 +13,7 @@
 //! `ask` completes one provider turn on the open session while awake
 //! ([ADR 0013](../../docs/ADR-0013-session-provider.md)).
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use softwake_audio::rms_level;
 use softwake_ipc::VoiceState as WireState;
@@ -37,6 +37,52 @@ use crate::soul::LoadedSoul;
 pub(crate) struct Outcome {
     pub(crate) body: ResponseBody,
     pub(crate) events: Vec<WireEvent>,
+}
+
+/// Quiet after the last Voice Agent user transcript before one room post.
+const S2S_ROOM_COALESCE_MS: u64 = 800;
+
+/// Merge successive Voice Agent user transcripts into one room utterance.
+///
+/// Prefers prefix extension and shared trailing/leading words so overlapping
+/// ASR fragments become a single sentence. Disjoint fragments join with a space.
+fn coalesce_s2s_room_transcript(prior: &str, next: &str) -> String {
+    let prior = prior.trim();
+    let next = next.trim();
+    if next.is_empty() {
+        return prior.to_owned();
+    }
+    if prior.is_empty() {
+        return next.to_owned();
+    }
+    let prior_l = prior.to_ascii_lowercase();
+    let next_l = next.to_ascii_lowercase();
+    if next_l.starts_with(&prior_l) {
+        return next.to_owned();
+    }
+    if prior_l.starts_with(&next_l) {
+        return prior.to_owned();
+    }
+    let prior_words: Vec<&str> = prior.split_whitespace().collect();
+    let next_words: Vec<&str> = next.split_whitespace().collect();
+    let max = prior_words.len().min(next_words.len());
+    let mut shared = 0usize;
+    for n in (1..=max).rev() {
+        let same = prior_words[prior_words.len() - n..]
+            .iter()
+            .zip(next_words[..n].iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b));
+        if same {
+            shared = n;
+            break;
+        }
+    }
+    if shared > 0 {
+        let mut words = prior_words;
+        words.extend_from_slice(&next_words[shared..]);
+        return words.join(" ");
+    }
+    format!("{prior} {next}")
 }
 
 #[allow(
@@ -139,6 +185,10 @@ pub(crate) struct Runtime {
     ptt_room_release: bool,
     /// The queued free-speech clip already joined the open room generation.
     auto_pcm_joined_room_clip: bool,
+    /// Coalesced S2S user text waiting for quiet before one room post.
+    s2s_room_pending: Option<String>,
+    /// When the last S2S fragment was merged into [`Self::s2s_room_pending`].
+    s2s_room_last_frag: Option<Instant>,
 }
 
 impl Runtime {
@@ -242,6 +292,8 @@ impl Runtime {
             drop_s2s_user_transcript: false,
             ptt_room_release: false,
             auto_pcm_joined_room_clip: false,
+            s2s_room_pending: None,
+            s2s_room_last_frag: None,
         };
         #[cfg(test)]
         {
@@ -1782,6 +1834,7 @@ impl Runtime {
             self.room_utt_posted = self.room_utt_gen;
             self.drop_s2s_user_transcript = false;
             self.auto_pcm_joined_room_clip = false;
+            self.abandon_s2s_room_coalesce();
         }
         self.open_room_id = next;
         if let Some(bridge) = self.voice_agent.as_ref() {
@@ -1877,6 +1930,48 @@ impl Runtime {
         }
         if self.drop_s2s_user_transcript {
             self.drop_s2s_user_transcript = false;
+            return;
+        }
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        // One generation for the coalesced utterance; SpeechStarted may already
+        // have opened it. Do not post yet - wait for quiet.
+        self.begin_room_utterance();
+        let merged = match self.s2s_room_pending.as_deref() {
+            Some(prior) => coalesce_s2s_room_transcript(prior, text),
+            None => text.to_owned(),
+        };
+        self.s2s_room_pending = Some(merged);
+        self.s2s_room_last_frag = Some(Instant::now());
+    }
+
+    /// Drop buffered S2S room text without posting (composer change / close).
+    fn abandon_s2s_room_coalesce(&mut self) {
+        self.s2s_room_pending = None;
+        self.s2s_room_last_frag = None;
+    }
+
+    /// Post the buffered S2S room utterance if the quiet window has elapsed.
+    fn flush_s2s_room_coalesce_if_due(&mut self) {
+        let Some(last) = self.s2s_room_last_frag else {
+            return;
+        };
+        if last.elapsed() < Duration::from_millis(S2S_ROOM_COALESCE_MS) {
+            return;
+        }
+        self.flush_s2s_room_coalesce();
+    }
+
+    /// Commit one coalesced S2S room post (tests call this to skip the quiet wait).
+    fn flush_s2s_room_coalesce(&mut self) {
+        self.s2s_room_last_frag = None;
+        let Some(text) = self.s2s_room_pending.take() else {
+            return;
+        };
+        let text = text.trim();
+        if text.is_empty() {
             return;
         }
         let _ = self.route_finished_utterance(text, false);
@@ -2305,10 +2400,11 @@ impl Runtime {
             }
             // `auto_ok` was computed before the loop (often false while TTS muted).
             // After a barge, allow free-speech buffering on this frame.
-            let room_listen = self.open_room_id.is_some();
+            // When S2S owns the mic, free-speech stays off even with a room open.
+            // Room posts then come from the S2S coalesce path (and PTT).
             let listen_ok = (auto_ok || barged)
                 && awake
-                && (!s2s || room_listen)
+                && !s2s
                 && !self.voice_test
                 && !self.talk.is_armed()
                 && self.pending_auto_pcm.is_none()
@@ -2361,11 +2457,15 @@ impl Runtime {
             self.set_turn_phase(Some(label));
         }
         for _ in 0..speech_starts {
-            self.begin_room_utterance();
+            // Keep one generation while S2S fragments are still coalescing.
+            if self.s2s_room_pending.is_none() {
+                self.begin_room_utterance();
+            }
         }
         for text in user_transcripts {
             self.on_s2s_user_transcript(&text);
         }
+        self.flush_s2s_room_coalesce_if_due();
         if dead {
             self.stop_voice_agent();
         }
@@ -3673,6 +3773,85 @@ mod talk_tests {
         let reply = asked.body.status().expect("asked");
         assert_eq!(reply.message.as_deref(), Some("she replies"));
         assert!(runtime.session.messages().len() > before);
+    }
+
+    #[test]
+    fn coalesce_s2s_room_transcript_merges_fragments() {
+        assert_eq!(super::coalesce_s2s_room_transcript("", "hello"), "hello");
+        assert_eq!(super::coalesce_s2s_room_transcript("hello", ""), "hello");
+        assert_eq!(super::coalesce_s2s_room_transcript("hello", "   "), "hello");
+        assert_eq!(
+            super::coalesce_s2s_room_transcript("hello", "hello world"),
+            "hello world"
+        );
+        assert_eq!(
+            super::coalesce_s2s_room_transcript("hello world", "hello"),
+            "hello world"
+        );
+        assert_eq!(
+            super::coalesce_s2s_room_transcript("I said, have you", "Have you been"),
+            "I said, have you been"
+        );
+        assert_eq!(
+            super::coalesce_s2s_room_transcript("alpha", "beta"),
+            "alpha beta"
+        );
+    }
+
+    #[test]
+    fn s2s_room_transcripts_coalesce_into_one_post() {
+        let _lock = room_xdg_lock();
+        let scratch = RoomScratch::new();
+        let config = scratch.config();
+        let state = scratch.state();
+        let _env = RoomEnv::swap(&config, &state);
+        let rooms = config.join("softwake").join("rooms");
+        softwake_tools::save_room(
+            &rooms,
+            &softwake_tools::RoomFile {
+                version: 1,
+                id: "standup".to_owned(),
+                title: "Standup".to_owned(),
+                members: vec!["not-a-profile".to_owned()],
+                created_ms: 0,
+                updated_ms: 0,
+                last_turn_ms: 0,
+                last_speaker: None,
+            },
+        )
+        .expect("save room");
+
+        let (mut runtime, _dir) = awake();
+        runtime.set_open_room(Some("standup".to_owned()));
+        runtime.on_s2s_user_transcript("I said, have you");
+        runtime.on_s2s_user_transcript("Have you been");
+        runtime.on_s2s_user_transcript("ever said that");
+        assert!(
+            runtime.pending_room_fanout.is_empty(),
+            "fragments must wait for quiet flush"
+        );
+        assert_eq!(
+            runtime.s2s_room_pending.as_deref(),
+            Some("I said, have you been ever said that")
+        );
+        runtime.flush_s2s_room_coalesce();
+        assert_eq!(runtime.pending_room_fanout.len(), 1);
+        assert_eq!(
+            runtime.pending_room_fanout[0].operator_text,
+            "I said, have you been ever said that"
+        );
+        assert!(runtime.s2s_room_pending.is_none());
+
+        runtime.on_s2s_user_transcript("Good girl");
+        assert_eq!(runtime.pending_room_fanout.len(), 1);
+        runtime.flush_s2s_room_coalesce();
+        assert_eq!(runtime.pending_room_fanout.len(), 2);
+        assert_eq!(runtime.pending_room_fanout[1].operator_text, "Good girl");
+
+        runtime.on_s2s_user_transcript("partial only");
+        runtime.set_open_room(None);
+        assert!(runtime.s2s_room_pending.is_none());
+        assert_eq!(runtime.pending_room_fanout.len(), 2);
     }
 
     #[test]
