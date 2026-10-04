@@ -219,6 +219,8 @@ mod tests {
                     mic_muted: false,
                     phase: None,
                     build: None,
+                    operator_said: None,
+                    operator_said_seq: 0,
                 }),
             }),
             line(&ServerMessage::Event {

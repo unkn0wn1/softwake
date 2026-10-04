@@ -110,6 +110,8 @@ let roomViewOpen = false;
 let roomSendBusy = false;
 let roomFanoutPollTimer = null;
 let roomFanoutPollTicks = 0;
+/** Last profile-chat operator utterance generation painted as a user bubble. */
+let operatorSaidSeq = 0;
 const roomHiddenIds = ["chat-toolbar", "log", "ask-form", "context-meter", "live"];
 
 function invoke(command, args) {
@@ -738,6 +740,63 @@ function pushUser(text) {
     return;
   }
   pushTurn({ role: "user", name: "You", text: clean, ts: Date.now(), error: false, note: "" });
+}
+
+function findOperatorTurn(seq) {
+  for (let i = turns.length - 1; i >= 0; i -= 1) {
+    if (turns[i].voiceSeq === seq) {
+      return turns[i];
+    }
+  }
+  return null;
+}
+
+/**
+ * Paint the operator's 1-1 speech as a user bubble. Room chat has its own bubbles.
+ * The same generation updates in place while Voice Agent fragments coalesce.
+ */
+function applyOperatorSaid(status) {
+  if (!status || roomViewOpen) {
+    return;
+  }
+  const clean = String(status.operator_said || "").trim();
+  const seq = Number(status.operator_said_seq) || 0;
+  if (!clean || !seq) {
+    return;
+  }
+  if (seq === operatorSaidSeq) {
+    const existing = findOperatorTurn(seq);
+    if (existing && existing.text !== clean) {
+      existing.text = clean;
+      renderLog();
+      scheduleChatSave();
+    }
+    return;
+  }
+  if (operatorSaidSeq === 0) {
+    for (let i = turns.length - 1; i >= 0; i -= 1) {
+      if (turns[i].role === "user") {
+        if (turns[i].text === clean) {
+          operatorSaidSeq = seq;
+          turns[i].voiceSeq = seq;
+        }
+        break;
+      }
+    }
+    if (operatorSaidSeq === seq) {
+      return;
+    }
+  }
+  operatorSaidSeq = seq;
+  pushTurn({
+    role: "user",
+    name: "You",
+    text: clean,
+    ts: Date.now(),
+    error: false,
+    note: "",
+    voiceSeq: seq,
+  });
 }
 
 function replyNote(detail, text) {
@@ -1834,6 +1893,7 @@ async function refresh() {
     const detail = (snap && snap.detail) || "";
     const phase = (snap && snap.phase) || "";
     lastStatusMessage = message;
+    applyOperatorSaid(snap);
     considerStatus(message, detail, phase);
     applyPending(snap && snap.pending_tool);
     applyContextMeter(snap);
@@ -1931,6 +1991,7 @@ function endTalk() {
         const message = (status && (status.message || status.detail)) || "(no reply text)";
         const detail = (status && status.detail) || "";
         const phase = (status && status.phase) || "";
+        applyOperatorSaid(status);
         if (isRoomPostAck(message)) {
           lastReplyKey = message + "\0" + detail + "\0" + phase;
           lastStatusMessage = message;
@@ -2206,6 +2267,7 @@ form.addEventListener("submit", (event) => {
   syncCancelBtn();
   invoke("hud_ask", { text: asked })
     .then((status) => {
+      applyOperatorSaid(status);
       applyPending(status && status.pending_tool);
       applyContextMeter({
         state: (status && status.state) || state,

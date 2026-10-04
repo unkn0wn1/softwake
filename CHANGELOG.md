@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- **Room lines in profile chat:** when a member speaks or is addressed in a room, that line is also written into that profile's own chat, labeled with the room id and who spoke. Operator posts in a room go to every member. Other members' lines and private notes stay out. The open text session and Voice Agent session for that profile receive the line for the next turn.
+
+- **Profile speech bubbles:** operator speech in a 1-1 profile chat shows as a user bubble, not only the agent reply. Room bubbles are unchanged.
+
 - **Room speech interrupt:** barge-in and Voice Agent speech-started clear waiting member audio and member replies that are not in the room log yet. Lines already in the log stay.
 
 - **Room S2S utterance coalesce:** with Voice Agent S2S and a room open, free-speech energy VAD stays off (S2S alone owns the mic). Rapid Voice Agent user transcript fragments merge into one operator room post after a short quiet window instead of waking every member on each partial.

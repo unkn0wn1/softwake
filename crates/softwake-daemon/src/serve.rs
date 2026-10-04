@@ -635,6 +635,8 @@ fn publish_thinking(shared: &Shared, detail: &str) {
             mic_muted: false,
             phase: Some("thinking".to_owned()),
             build: None,
+            operator_said: None,
+            operator_said_seq: 0,
         });
     }
 }
@@ -689,6 +691,8 @@ fn placeholder_status() -> Status {
         mic_muted: false,
         phase: None,
         build: None,
+        operator_said: None,
+        operator_said_seq: 0,
     }
 }
 
@@ -735,12 +739,33 @@ fn spawn_pending_room_fanouts(shared: &Arc<Shared>) {
 
 fn spawn_room_fanout(shared: &Arc<Shared>, job: crate::team::RoomFanoutJob) {
     let shared = Arc::clone(shared);
+    let history = std::sync::Arc::clone(&job.history);
+    let already = history.lock().map(|guard| guard.len()).unwrap_or(0);
+    {
+        let initial = history
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default();
+        lock(&shared.runtime).ingest_room_history(&initial);
+    }
+    let shared_done = Arc::clone(&shared);
     let _ = thread::Builder::new()
         .name("softwake-room-fanout".to_owned())
         .spawn(move || {
             crate::team::run_room_fanout(&job, |profile_id, instructions, allow_all, stimulus| {
                 room_member_oneshot(&shared, profile_id, instructions, allow_all, stimulus)
             });
+            let fresh = history
+                .lock()
+                .map(|guard| {
+                    if guard.len() > already {
+                        guard[already..].to_vec()
+                    } else {
+                        Vec::new()
+                    }
+                })
+                .unwrap_or_default();
+            lock(&shared_done.runtime).ingest_room_history(&fresh);
         });
 }
 

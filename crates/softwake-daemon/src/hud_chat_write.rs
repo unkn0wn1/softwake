@@ -48,11 +48,61 @@ fn now_ms() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
+#[cfg(test)]
+pub(crate) static HISTORY_CONFIG_OVERRIDE: std::sync::Mutex<Option<PathBuf>> =
+    std::sync::Mutex::new(None);
+
 fn profile_hud_path(profile_id: &str) -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        if let Ok(guard) = HISTORY_CONFIG_OVERRIDE.lock() {
+            if let Some(root) = guard.as_ref() {
+                return Some(root.join("profiles").join(profile_id).join(FILE_NAME));
+            }
+        }
+    }
     let xdg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let config = resolve_config_dir(xdg.as_deref(), home.as_deref()).ok()?;
     Some(profile_pack_dir(&config, profile_id).join(FILE_NAME))
+}
+
+/// Append one turn to a profile's HUD chat.
+///
+/// In tests this writes only while [`HISTORY_CONFIG_OVERRIDE`] is set, so
+/// room and voice tests cannot touch the operator's real profile chat.
+pub(crate) fn append_role_turn(profile_id: &str, role: &str, name: &str, text: &str) {
+    let profile_id = profile_id.trim();
+    let text = text.trim();
+    if profile_id.is_empty() || text.is_empty() {
+        return;
+    }
+    #[cfg(test)]
+    {
+        let active = HISTORY_CONFIG_OVERRIDE
+            .lock()
+            .map(|guard| guard.is_some())
+            .unwrap_or(false);
+        if !active {
+            return;
+        }
+    }
+    let role = if role.eq_ignore_ascii_case("assistant") {
+        "assistant"
+    } else {
+        "user"
+    };
+    append_turns(
+        profile_id,
+        &[InboxTurn {
+            role: role.to_owned(),
+            name: name.to_owned(),
+            text: text.to_owned(),
+            ts: now_ms(),
+            error: false,
+            note: String::new(),
+        }],
+    );
 }
 
 /// Append user + assistant turns for `profile_id`.

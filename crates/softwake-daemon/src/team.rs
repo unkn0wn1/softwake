@@ -3,7 +3,7 @@
 use std::env;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use softwake_soul::{
     ProfileMeta, ensure_profile_home, list_profiles, load_profile_meta, profile_pack_dir,
@@ -252,9 +252,7 @@ pub(crate) fn run_agent_message(
             }
         },
     );
-    let sender_profile = sender
-        .as_ref()
-        .map_or("operator", |from| from.id.as_str());
+    let sender_profile = sender.as_ref().map_or("operator", |from| from.id.as_str());
     let stored_reply = if is_no_reply(&reply) {
         None
     } else {
@@ -746,6 +744,131 @@ pub(crate) struct RoomFanoutJob {
     pub room_path: PathBuf,
     /// Speech-queue generation at operator commit. Not bumped here.
     pub speech_gen: u64,
+    /// Operator line, then member lines, copied into profile chats.
+    pub history: Arc<Mutex<Vec<RoomHistoryTurn>>>,
+}
+
+/// One room line copied into a profile's own chat. Text includes room id and speaker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RoomHistoryTurn {
+    /// Profile whose HUD chat receives the line.
+    pub profile_id: String,
+    /// `user` when someone else spoke, `assistant` when this profile spoke.
+    pub role: String,
+    /// Speaker display name.
+    pub name: String,
+    /// Labeled body the private session can read.
+    pub text: String,
+}
+
+/// `[room standup] Sally: hello`
+#[must_use]
+pub(crate) fn room_history_label(room_id: &str, speaker: &str, text: &str) -> String {
+    format!("[room {room_id}] {speaker}: {}", text.trim())
+}
+
+fn name_mentioned(text: &str, name: &str) -> bool {
+    let name = name.trim();
+    if name.chars().count() < 2 {
+        return false;
+    }
+    let hay = text.to_lowercase();
+    let needle = name.to_lowercase();
+    let bytes = hay.as_bytes();
+    let mut start = 0;
+    while let Some(rel) = hay[start..].find(&needle) {
+        let abs = start + rel;
+        let before_ok = abs == 0 || !bytes[abs - 1].is_ascii_alphanumeric();
+        let after = abs + needle.len();
+        let after_ok = after >= bytes.len() || !bytes[after].is_ascii_alphanumeric();
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs + needle.len();
+    }
+    false
+}
+
+/// Public room line -> per-profile turns.
+///
+/// Operator posts (`to_every_member`) go to every member. A member say goes to
+/// the speaker and to members named in the text. Other members' lines, including
+/// private notes, are not copied here.
+#[must_use]
+pub(crate) fn profile_history_for_public_line(
+    room_id: &str,
+    speaker_id: &str,
+    speaker_name: &str,
+    text: &str,
+    members: &[(&str, &str)],
+    to_every_member: bool,
+) -> Vec<RoomHistoryTurn> {
+    let text = text.trim();
+    if text.is_empty() || room_id.trim().is_empty() {
+        return Vec::new();
+    }
+    let speaker_name = if speaker_name.trim().is_empty() {
+        speaker_id
+    } else {
+        speaker_name.trim()
+    };
+    let labeled = room_history_label(room_id, speaker_name, text);
+    let mut out = Vec::new();
+    for (id, display) in members {
+        let id = id.trim();
+        if id.is_empty() {
+            continue;
+        }
+        let is_speaker = id == speaker_id;
+        let addressed = to_every_member
+            || is_speaker
+            || name_mentioned(text, display)
+            || name_mentioned(text, id);
+        if !addressed {
+            continue;
+        }
+        let role = if is_speaker && !to_every_member {
+            "assistant"
+        } else {
+            "user"
+        };
+        out.push(RoomHistoryTurn {
+            profile_id: id.to_owned(),
+            role: role.to_owned(),
+            name: speaker_name.to_owned(),
+            text: labeled.clone(),
+        });
+    }
+    out
+}
+
+fn persist_room_history(turns: &[RoomHistoryTurn]) {
+    for turn in turns {
+        crate::hud_chat_write::append_role_turn(
+            &turn.profile_id,
+            &turn.role,
+            &turn.name,
+            &turn.text,
+        );
+    }
+}
+
+fn remember_room_history(job: &RoomFanoutJob, turns: Vec<RoomHistoryTurn>) {
+    if turns.is_empty() {
+        return;
+    }
+    persist_room_history(&turns);
+    if let Ok(mut guard) = job.history.lock() {
+        guard.extend(turns);
+    }
+}
+
+fn display_of(meta: &ProfileMeta) -> String {
+    if meta.name.trim().is_empty() {
+        softwake_soul::DEFAULT_AGENT_NAME.to_owned()
+    } else {
+        meta.name.clone()
+    }
 }
 
 /// Write the operator line and return immediately with an optional fan-out job.
@@ -805,6 +928,23 @@ pub(crate) fn commit_operator_room_post(
     } else {
         room.title.clone()
     };
+    let displays: Vec<(String, String)> = members
+        .iter()
+        .map(|meta| (meta.id.clone(), display_of(meta)))
+        .collect();
+    let history_members: Vec<(&str, &str)> = displays
+        .iter()
+        .map(|(id, name)| (id.as_str(), name.as_str()))
+        .collect();
+    let operator_history = profile_history_for_public_line(
+        room_id,
+        "operator",
+        "Operator",
+        text,
+        &history_members,
+        true,
+    );
+    persist_room_history(&operator_history);
     let wake_n = members.len();
     let message =
         format!("room `{room_id}`: operator posted; waking {wake_n} member(s) in background");
@@ -822,6 +962,7 @@ pub(crate) fn commit_operator_room_post(
         state_dir,
         room_path: path,
         speech_gen,
+        history: Arc::new(Mutex::new(operator_history)),
     };
     Ok((message, Some(job)))
 }
@@ -1058,7 +1199,7 @@ fn run_one_room_member<F>(
         );
         return;
     }
-    publish_logged_member_reply(job, member, reply.trim(), peers, replied, skipped);
+    publish_logged_member_reply(job, member, roster, reply.trim(), peers, replied, skipped);
 }
 
 /// `PRIVATE <name>: <message>` is a note to one member, not a room line.
@@ -1264,6 +1405,7 @@ fn publish_private_member_note<F>(
 fn publish_logged_member_reply(
     job: &RoomFanoutJob,
     member: &LoadedRoomMember,
+    roster: &[LoadedRoomMember],
     trimmed: &str,
     peers: &Mutex<String>,
     replied: &Mutex<Vec<String>>,
@@ -1316,6 +1458,19 @@ fn publish_logged_member_reply(
         peers_guard.push_str(&room_peer_said_line(&member.display, trimmed));
         push_line(replied, format!("{} ({})", member.display, member.id));
     }
+    let roster_pairs: Vec<(&str, &str)> = roster
+        .iter()
+        .map(|peer| (peer.id.as_str(), peer.display.as_str()))
+        .collect();
+    let turns = profile_history_for_public_line(
+        job.room_id.as_str(),
+        member.id.as_str(),
+        member.display.as_str(),
+        trimmed,
+        &roster_pairs,
+        false,
+    );
+    remember_room_history(job, turns);
     let queued = enqueue_waiting_room_audio(clip, job.speech_gen);
     #[cfg(not(test))]
     if queued {
@@ -1533,6 +1688,7 @@ mod tests {
             state_dir: dir.to_path_buf(),
             room_path: dir.join("parallel.json"),
             speech_gen,
+            history: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -1808,5 +1964,66 @@ mod tests {
             voice: "ara".to_owned(),
         }));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn operator_post_and_member_say_are_in_that_profile_history() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "softwake-room-history-{}-{nanos}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("temp");
+        *crate::hud_chat_write::HISTORY_CONFIG_OVERRIDE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(root.clone());
+
+        let members = [("sally", "Sally"), ("joi", "Joi")];
+        let operator = profile_history_for_public_line(
+            "spncxrchat",
+            "operator",
+            "Operator",
+            "Sally, you are Chief of Staff and my PA",
+            &members,
+            true,
+        );
+        let said = profile_history_for_public_line(
+            "spncxrchat",
+            "sally",
+            "Sally",
+            "Sorted. Chief of Staff and your PA it is.",
+            &members,
+            false,
+        );
+        persist_room_history(&operator);
+        persist_room_history(&said);
+
+        let sally = std::fs::read_to_string(root.join("profiles/sally/hud-chat.json"))
+            .expect("sally history");
+        let joi =
+            std::fs::read_to_string(root.join("profiles/joi/hud-chat.json")).expect("joi history");
+        assert!(sally.contains("[room spncxrchat] Operator:"), "{sally}");
+        assert!(sally.contains("Chief of Staff and my PA"), "{sally}");
+        assert!(sally.contains("[room spncxrchat] Sally:"), "{sally}");
+        assert!(
+            sally.contains("Sorted. Chief of Staff and your PA it is."),
+            "{sally}"
+        );
+        assert!(sally.contains("\"role\": \"user\""), "{sally}");
+        assert!(sally.contains("\"role\": \"assistant\""), "{sally}");
+        assert!(joi.contains("[room spncxrchat] Operator:"), "{joi}");
+        assert!(
+            !joi.contains("Sorted. Chief of Staff"),
+            "joi must not receive sally's room line: {joi}"
+        );
+
+        *crate::hud_chat_write::HISTORY_CONFIG_OVERRIDE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

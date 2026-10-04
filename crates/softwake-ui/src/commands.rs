@@ -253,6 +253,12 @@ pub struct HudSnapshot {
     pub context_compact_at: Option<u8>,
     /// True when the latest ask compacted older turns.
     pub context_compacted: bool,
+    /// Operator speech for the open profile chat. Omitted when none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator_said: Option<String>,
+    /// Generation of `operator_said`. `0` means none.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub operator_said_seq: u64,
 }
 
 /// UI (+ optional daemon) build stamp for Settings / HUD chrome.
@@ -316,10 +322,16 @@ pub async fn hud_snapshot() -> Result<HudSnapshot, String> {
             context_limit: status.context_limit,
             context_compact_at: status.context_compact_at,
             context_compacted: status.context_compacted,
+            operator_said: status.operator_said,
+            operator_said_seq: status.operator_said_seq,
         })
     })
     .await
     .map_err(|error| format!("hud snapshot task failed: {error}"))?
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
 }
 
 fn mock_level(capture_running: bool) -> f64 {
