@@ -287,6 +287,20 @@ body {
   word-break: break-word;
 }
 
+.room-bubble details.room-dm {
+  margin: 0;
+}
+
+.room-bubble details.room-dm summary {
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 0.72rem;
+}
+
+.room-bubble .room-dm-reply {
+  margin-top: 0.35rem;
+}
+
 .room-panel-status {
   margin: 0;
   flex-shrink: 0;

@@ -208,3 +208,88 @@ pub(crate) fn active_profile_id() -> Option<String> {
     let app = load_app_config(&config).ok()?;
     Some(app.active_profile)
 }
+
+/// Write a private note into both profiles' chats. The message text matches.
+///
+/// `sender_id` is omitted when the caller has no profile pack. The recipient
+/// still gets the note.
+pub(crate) fn append_dm_histories(
+    sender_id: Option<&str>,
+    sender_name: &str,
+    recipient_id: &str,
+    recipient_name: &str,
+    text: &str,
+    reply: Option<&str>,
+) {
+    let (sender_turns, recipient_turns) =
+        dm_history_turns(sender_name, recipient_name, text, reply, now_ms());
+    if let Some(sender_id) = sender_id {
+        append_turns(sender_id, &sender_turns);
+    }
+    append_turns(recipient_id, &recipient_turns);
+}
+
+/// Same message text on both sides. A reply, when present, is on both sides too.
+fn dm_history_turns(
+    sender_name: &str,
+    recipient_name: &str,
+    text: &str,
+    reply: Option<&str>,
+    ts: u64,
+) -> (Vec<InboxTurn>, Vec<InboxTurn>) {
+    let mut sender_turns = vec![InboxTurn {
+        role: "assistant".into(),
+        name: sender_name.to_owned(),
+        text: text.to_owned(),
+        ts,
+        error: false,
+        note: String::new(),
+    }];
+    let mut recipient_turns = vec![InboxTurn {
+        role: "user".into(),
+        name: sender_name.to_owned(),
+        text: text.to_owned(),
+        ts,
+        error: false,
+        note: String::new(),
+    }];
+    if let Some(reply) = reply.map(str::trim).filter(|reply| !reply.is_empty()) {
+        sender_turns.push(InboxTurn {
+            role: "user".into(),
+            name: recipient_name.to_owned(),
+            text: reply.to_owned(),
+            ts: ts.saturating_add(1),
+            error: false,
+            note: String::new(),
+        });
+        recipient_turns.push(InboxTurn {
+            role: "assistant".into(),
+            name: recipient_name.to_owned(),
+            text: reply.to_owned(),
+            ts: ts.saturating_add(1),
+            error: false,
+            note: String::new(),
+        });
+    }
+    (sender_turns, recipient_turns)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn both_histories_carry_the_same_message_and_reply() {
+        let (sender, recipient) =
+            dm_history_turns("Sara", "Sally", "ping the notes", Some("got it"), 10);
+        assert_eq!(sender[0].text, "ping the notes");
+        assert_eq!(recipient[0].text, "ping the notes");
+        assert_eq!(sender[0].role, "assistant");
+        assert_eq!(recipient[0].role, "user");
+        assert_eq!(recipient[0].name, "Sara");
+        assert_eq!(sender[1].text, "got it");
+        assert_eq!(recipient[1].text, "got it");
+        assert_eq!(sender[1].name, "Sally");
+        assert_eq!(recipient[1].name, "Sally");
+    }
+}

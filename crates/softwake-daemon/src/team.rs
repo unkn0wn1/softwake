@@ -13,8 +13,8 @@ use softwake_tools::{
     AGENT_MESSAGE_TOOL, AgentMessageArgs, GOAL_RUN_TOOL, GoalBackend, GoalProgressEvent,
     GoalRunArgs, GoalRunResult, GoalStopReason, ROOM_COOLDOWN_MS, RoomLogKind, RoomLogLine,
     append_room_log, format_goal_result, mark_room_turn, resolve_rooms_dir,
-    resolve_rooms_state_dir, room_cooldown_elapsed, select_goal_backend, softwake_plan_prompt,
-    verify_acceptance,
+    resolve_rooms_state_dir, room_cooldown_elapsed, room_log_context_line, select_goal_backend,
+    softwake_plan_prompt, verify_acceptance,
 };
 
 use crate::runtime::Runtime;
@@ -195,6 +195,9 @@ fn log_room(
             text: text.to_owned(),
             iteration,
             phase: phase.map(str::to_owned),
+            to_profile_id: None,
+            to_name: None,
+            reply: None,
         },
     );
     let _ = mark_room_turn(&rooms_dir, room_id, profile_id);
@@ -204,6 +207,7 @@ fn log_room(
 pub(crate) fn run_agent_message(
     runtime: &mut Runtime,
     args: &AgentMessageArgs,
+    sender_id: Option<&str>,
 ) -> Result<String, String> {
     let target = resolve_profile_meta(&args.to)?;
     let (meta, instructions) = load_profile_instructions(&target.id)?;
@@ -227,27 +231,68 @@ pub(crate) fn run_agent_message(
             }
         }
     }
+    let sender = sender_id.and_then(|id| resolve_profile_meta(id).ok());
+    if sender.as_ref().is_some_and(|from| from.id == target.id) {
+        return Err("agent_message cannot target the sending profile".into());
+    }
     let reply =
         runtime.oneshot_as_profile(&target.id, &instructions, meta.allow_all, &args.text)?;
-    let name = if meta.name.trim().is_empty() {
-        softwake_soul::DEFAULT_AGENT_NAME
+    let target_name = if meta.name.trim().is_empty() {
+        softwake_soul::DEFAULT_AGENT_NAME.to_owned()
     } else {
-        meta.name.as_str()
+        meta.name.clone()
     };
-    log_room(
-        args.room_id.as_deref(),
-        &target.id,
-        name,
-        RoomLogKind::Dm,
-        &format!("DM in: {}\nDM out: {reply}", args.text),
-        None,
-        None,
+    let sender_name = sender.as_ref().map_or_else(
+        || "Operator".to_owned(),
+        |from| {
+            if from.name.trim().is_empty() {
+                softwake_soul::DEFAULT_AGENT_NAME.to_owned()
+            } else {
+                from.name.clone()
+            }
+        },
     );
-    // Best-effort HUD for target
-    let () = crate::hud_chat_write::append_exchange(&target.id, "peer", &args.text, name, &reply);
+    let sender_profile = sender
+        .as_ref()
+        .map_or("operator", |from| from.id.as_str());
+    let stored_reply = if is_no_reply(&reply) {
+        None
+    } else {
+        Some(reply.trim().to_owned())
+    };
+    if let Some(room_id) = args.room_id.as_deref() {
+        if let Ok((rooms_dir, state_dir)) = rooms_dirs() {
+            let _ = append_room_log(
+                &state_dir,
+                room_id,
+                &RoomLogLine {
+                    ts_ms: softwake_tools::now_ms(),
+                    profile_id: sender_profile.to_owned(),
+                    name: sender_name.clone(),
+                    kind: RoomLogKind::Dm,
+                    text: args.text.clone(),
+                    iteration: None,
+                    phase: None,
+                    to_profile_id: Some(target.id.clone()),
+                    to_name: Some(target_name.clone()),
+                    reply: stored_reply.clone(),
+                },
+            );
+            let _ = mark_room_turn(&rooms_dir, room_id, sender_profile);
+        }
+    }
+    crate::hud_chat_write::append_dm_histories(
+        sender.as_ref().map(|from| from.id.as_str()),
+        &sender_name,
+        &target.id,
+        &target_name,
+        &args.text,
+        stored_reply.as_deref(),
+    );
+    let shown = stored_reply.as_deref().unwrap_or("(no reply)");
     Ok(format!(
-        "{AGENT_MESSAGE_TOOL}: {} ({}) replied:\n{reply}",
-        name, target.id
+        "{AGENT_MESSAGE_TOOL}: {sender_name} sent a message to {target_name} ({}):\n{shown}",
+        target.id
     ))
 }
 
@@ -725,14 +770,7 @@ pub(crate) fn commit_operator_room_post(
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
-        .map(|line| {
-            let who = if line.name.is_empty() {
-                line.profile_id.as_str()
-            } else {
-                line.name.as_str()
-            };
-            format!("[{}] {who}: {}", line.kind.as_str(), line.text)
-        })
+        .map(room_log_context_line)
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -747,6 +785,9 @@ pub(crate) fn commit_operator_room_post(
             text: text.to_owned(),
             iteration: None,
             phase: None,
+            to_profile_id: None,
+            to_name: None,
+            reply: None,
         },
     )?;
     let _ = mark_room_turn(&rooms_dir, room_id, "operator");
@@ -837,11 +878,13 @@ Other members this turn:
 {peers}
 
 Other members may be answering at the same time. You only see peers who have already spoken. If none have, answer the operator. Do not wait for them. Another member already speaking does not cancel your turn.
-You may reply to a peer, address another member by name in this room message (for example, Sarah: what do you think?), reply to the operator, or stay quiet (NO_REPLY).
+You may reply to a peer, address another member by name in this room message (for example, Sarah: what do you think?), reply to the operator, send a private note to one other member, or stay quiet (NO_REPLY).
 A room message is spoken in the room. It is not a private note.
 Decide for yourself:
 - If you should reply, write your room message only (no preamble).
-- If you should stay quiet, reply with exactly: NO_REPLY"
+- If you should stay quiet, reply with exactly: NO_REPLY
+- To send a private note to exactly one other member instead of speaking, reply with exactly: PRIVATE <name>: <message>
+A private note is not spoken. The room only shows that you sent it. The note and any reply are written to both chats."
     )
 }
 
@@ -931,7 +974,7 @@ fn run_loaded_room_fanout<F>(
             let replied = &replied;
             let skipped = &skipped;
             scope.spawn(move || {
-                run_one_room_member(job, member, peers, replied, skipped, oneshot);
+                run_one_room_member(job, member, members, peers, replied, skipped, oneshot);
             });
         }
     });
@@ -961,6 +1004,7 @@ fn run_loaded_room_fanout<F>(
 fn run_one_room_member<F>(
     job: &RoomFanoutJob,
     member: &LoadedRoomMember,
+    roster: &[LoadedRoomMember],
     peers: &Mutex<String>,
     replied: &Mutex<Vec<String>>,
     skipped: &Mutex<Vec<String>>,
@@ -1008,7 +1052,213 @@ fn run_one_room_member<F>(
         push_line(skipped, format!("{} (NO_REPLY)", member.id));
         return;
     }
+    if looks_like_private_note(&reply) {
+        publish_private_member_note(
+            job, member, roster, &reply, peers, replied, skipped, oneshot,
+        );
+        return;
+    }
     publish_logged_member_reply(job, member, reply.trim(), peers, replied, skipped);
+}
+
+/// `PRIVATE <name>: <message>` is a note to one member, not a room line.
+fn looks_like_private_note(reply: &str) -> bool {
+    private_note_body(reply).is_some()
+}
+
+/// Recipient token and note body. `None` when this is not a private note.
+fn parse_private_note(reply: &str) -> Option<(String, String)> {
+    let rest = private_note_body(reply)?;
+    let (to, text) = rest.split_once(':')?;
+    let to = to.trim();
+    let text = text.trim();
+    if to.is_empty() || text.is_empty() || to.contains('\n') || to.contains(',') {
+        return None;
+    }
+    Some((to.to_owned(), text.to_owned()))
+}
+
+fn private_note_body(reply: &str) -> Option<&str> {
+    let trimmed = reply.trim();
+    let prefix = "PRIVATE";
+    let rest = trimmed.get(prefix.len()..)?;
+    if !trimmed[..prefix.len()].eq_ignore_ascii_case(prefix) {
+        return None;
+    }
+    if !rest.starts_with(|c: char| c.is_ascii_whitespace()) {
+        return None;
+    }
+    Some(rest.trim_start())
+}
+
+fn find_loaded_member<'a>(
+    roster: &'a [LoadedRoomMember],
+    needle: &str,
+) -> Option<&'a LoadedRoomMember> {
+    let needle = needle.trim();
+    if needle.is_empty() {
+        return None;
+    }
+    if let Some(member) = roster.iter().find(|member| member.id == needle) {
+        return Some(member);
+    }
+    if let Some(member) = roster
+        .iter()
+        .find(|member| member.id.eq_ignore_ascii_case(needle))
+    {
+        return Some(member);
+    }
+    let lower = needle.to_ascii_lowercase();
+    roster
+        .iter()
+        .find(|member| member.display.trim().to_ascii_lowercase() == lower)
+}
+
+fn private_reply_stimulus(
+    room_id: &str,
+    sender_display: &str,
+    recipient_display: &str,
+    recipient_id: &str,
+    text: &str,
+) -> String {
+    format!(
+        "\
+You are {recipient_display} (profile id `{recipient_id}`) in Softwake room `{room_id}`.
+{sender_display} sent you a private message. It is not spoken in the room.
+
+Private message:
+{text}
+
+Reply to {sender_display} only. Write the reply text alone, or exactly NO_REPLY if you have nothing to say.
+Do not write a room message."
+    )
+}
+
+/// Collapsed peer line. The note body stays out of the room prompt.
+#[must_use]
+fn room_private_peer_line(sender_display: &str, target_display: &str) -> String {
+    format!("{sender_display} (another agent in this room) sent a message to {target_display}")
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "room private-note publish stays next to the spoken path"
+)]
+fn publish_private_member_note<F>(
+    job: &RoomFanoutJob,
+    member: &LoadedRoomMember,
+    roster: &[LoadedRoomMember],
+    raw_reply: &str,
+    peers: &Mutex<String>,
+    replied: &Mutex<Vec<String>>,
+    skipped: &Mutex<Vec<String>>,
+    oneshot: &F,
+) where
+    F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
+{
+    let Some((to, text)) = parse_private_note(raw_reply) else {
+        push_line(skipped, format!("{} (private note malformed)", member.id));
+        return;
+    };
+    if !room_speech_allows(job.speech_gen) {
+        return;
+    }
+    let Some(target) = find_loaded_member(roster, &to) else {
+        push_line(
+            skipped,
+            format!("{} (private note to unknown `{to}`)", member.id),
+        );
+        return;
+    };
+    if target.id == member.id {
+        push_line(skipped, format!("{} (private note to self)", member.id));
+        return;
+    }
+    let stimulus = private_reply_stimulus(
+        job.room_id.as_str(),
+        &member.display,
+        &target.display,
+        target.id.as_str(),
+        &text,
+    );
+    if !room_speech_allows(job.speech_gen) {
+        return;
+    }
+    let reply_text = match oneshot(
+        target.id.as_str(),
+        &target.instructions,
+        target.allow_all,
+        &stimulus,
+    ) {
+        Ok(reply) => reply,
+        Err(error) => {
+            if room_speech_allows(job.speech_gen) {
+                push_line(
+                    skipped,
+                    format!("{} (private reply error: {error})", member.id),
+                );
+            }
+            return;
+        }
+    };
+    if !room_speech_allows(job.speech_gen) {
+        return;
+    }
+    let stored_reply = if is_no_reply(&reply_text) {
+        None
+    } else {
+        Some(reply_text.trim().to_owned())
+    };
+    {
+        let mut peers_guard = peers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !room_speech_allows(job.speech_gen) {
+            return;
+        }
+        if let Err(error) = append_room_log(
+            &job.state_dir,
+            job.room_id.as_str(),
+            &RoomLogLine {
+                ts_ms: softwake_tools::now_ms(),
+                profile_id: member.id.clone(),
+                name: member.display.clone(),
+                kind: RoomLogKind::Dm,
+                text: text.clone(),
+                iteration: None,
+                phase: None,
+                to_profile_id: Some(target.id.clone()),
+                to_name: Some(target.display.clone()),
+                reply: stored_reply.clone(),
+            },
+        ) {
+            drop(peers_guard);
+            push_line(skipped, format!("{} (log error: {error})", member.id));
+            return;
+        }
+        let _ = mark_room_turn(&job.rooms_dir, job.room_id.as_str(), member.id.as_str());
+        if !peers_guard.is_empty() {
+            peers_guard.push('\n');
+        }
+        peers_guard.push_str(&room_private_peer_line(&member.display, &target.display));
+        push_line(
+            replied,
+            format!(
+                "{} ({}) private to {}",
+                member.display, member.id, target.display
+            ),
+        );
+    }
+    #[cfg(not(test))]
+    crate::hud_chat_write::append_dm_histories(
+        Some(member.id.as_str()),
+        &member.display,
+        &target.id,
+        &target.display,
+        &text,
+        stored_reply.as_deref(),
+    );
 }
 
 fn publish_logged_member_reply(
@@ -1050,6 +1300,9 @@ fn publish_logged_member_reply(
                 text: trimmed.to_owned(),
                 iteration: None,
                 phase: None,
+                to_profile_id: None,
+                to_name: None,
+                reply: None,
             },
         ) {
             drop(peers_guard);
@@ -1197,7 +1450,7 @@ mod tests {
         assert!(stimulus.contains("Other members this turn:\n(none yet)"));
         assert!(
             stimulus.contains(
-                "You may reply to a peer, address another member by name in this room message (for example, Sarah: what do you think?), reply to the operator, or stay quiet (NO_REPLY)."
+                "You may reply to a peer, address another member by name in this room message (for example, Sarah: what do you think?), reply to the operator, send a private note to one other member, or stay quiet (NO_REPLY)."
             )
         );
         assert!(!stimulus.contains("another agent in this room"));
@@ -1240,13 +1493,15 @@ mod tests {
         assert!(stimulus.contains("Recent room context:\n[say] Kai: yesterday we slipped the cut"));
         assert!(
             stimulus.contains(
-                "You may reply to a peer, address another member by name in this room message (for example, Sarah: what do you think?), reply to the operator, or stay quiet (NO_REPLY)."
+                "You may reply to a peer, address another member by name in this room message (for example, Sarah: what do you think?), reply to the operator, send a private note to one other member, or stay quiet (NO_REPLY)."
             )
         );
         assert!(
             stimulus.contains("- If you should reply, write your room message only (no preamble).")
         );
         assert!(stimulus.contains("- If you should stay quiet, reply with exactly: NO_REPLY"));
+        assert!(stimulus.contains("PRIVATE <name>: <message>"));
+        assert!(stimulus.contains("A private note is not spoken."));
         let lower = stimulus.to_ascii_lowercase();
         assert!(!lower.contains("must reply"));
         assert!(!lower.contains("must respond"));
@@ -1438,5 +1693,120 @@ mod tests {
             assert!(!stimulus.contains("(none yet)"));
             assert!(stimulus.contains("Sarah: what do you think?"));
         }
+    }
+
+    #[test]
+    fn private_note_parses_one_recipient_only() {
+        let parsed = parse_private_note("PRIVATE Spencer: ping the notes").unwrap();
+        assert_eq!(parsed.0, "Spencer");
+        assert_eq!(parsed.1, "ping the notes");
+        assert!(parse_private_note("private Sally: hi").is_some());
+        assert!(parse_private_note("PRIVATE Spencer, Sally: hi").is_none());
+        assert!(parse_private_note("hello room").is_none());
+        assert!(!looks_like_private_note("hello room"));
+        let line = room_private_peer_line("Sara", "Sally");
+        assert_eq!(
+            line,
+            "Sara (another agent in this room) sent a message to Sally"
+        );
+        assert!(!line.contains("ping"));
+    }
+
+    #[test]
+    fn private_note_is_logged_not_spoken_and_a_room_say_still_enqueues() {
+        let _hold = hold_speech_queue_tests();
+        let dir = parallel_temp("dm");
+        let say = "shipping today";
+        let note = "ping the notes";
+        let _drain = DrainWaiting {
+            texts: vec![say.to_owned()],
+        };
+        let job = parallel_job(&dir, room_speech_generation());
+        let members = vec![
+            loaded_member("sara", "Sara", "ara"),
+            loaded_member("spencer", "Spencer", "rex"),
+        ];
+        let oneshot = |id: &str, _instructions: &str, _allow_all: bool, stimulus: &str| {
+            if stimulus.contains("sent you a private message") {
+                assert_eq!(id, "spencer");
+                assert!(stimulus.contains(note));
+                assert!(stimulus.contains("not spoken"));
+                return Ok("got it".to_owned());
+            }
+            if id == "sara" {
+                Ok(format!("PRIVATE Spencer: {note}"))
+            } else {
+                Ok(say.to_owned())
+            }
+        };
+        run_loaded_room_fanout(&job, &members, "", &[], &oneshot);
+        let raw = std::fs::read_to_string(dir.join("parallel").join("log.jsonl")).expect("log");
+        let lines: Vec<softwake_tools::RoomLogLine> = raw
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("row"))
+            .collect();
+        let dm = lines
+            .iter()
+            .find(|line| line.kind == RoomLogKind::Dm)
+            .expect("dm");
+        assert_eq!(dm.name, "Sara");
+        assert_eq!(dm.profile_id, "sara");
+        assert_eq!(dm.text, note);
+        assert_eq!(dm.to_name.as_deref(), Some("Spencer"));
+        assert_eq!(dm.to_profile_id.as_deref(), Some("spencer"));
+        assert_eq!(dm.reply.as_deref(), Some("got it"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.kind == RoomLogKind::Say && line.text == say)
+        );
+        assert!(!raw.contains("PRIVATE Spencer"));
+        let clip = RoomSpeechClip {
+            text: note.to_owned(),
+            voice: "ara".to_owned(),
+        };
+        assert!(!room_speech_waiting_has(&clip));
+        assert!(room_speech_waiting_has(&RoomSpeechClip {
+            text: say.to_owned(),
+            voice: "rex".to_owned(),
+        }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn interrupt_drops_a_private_note_that_is_not_logged_yet() {
+        let _hold = hold_speech_queue_tests();
+        let dir = parallel_temp("dm-clear");
+        let job = parallel_job(&dir, room_speech_generation());
+        let members = vec![
+            loaded_member("sara", "Sara", "ara"),
+            loaded_member("spencer", "Spencer", "rex"),
+        ];
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let oneshot = |id: &str, _instructions: &str, _allow_all: bool, stimulus: &str| {
+            assert!(
+                !stimulus.contains("sent you a private message"),
+                "interrupt must drop the note before a reply oneshot"
+            );
+            barrier.wait();
+            if id == "sara" {
+                clear_room_speech_queue();
+                Ok("PRIVATE Spencer: ping the notes".to_owned())
+            } else {
+                Ok("NO_REPLY".to_owned())
+            }
+        };
+        run_loaded_room_fanout(&job, &members, "", &[], &oneshot);
+        let path = dir.join("parallel").join("log.jsonl");
+        if path.is_file() {
+            let raw = std::fs::read_to_string(&path).expect("log");
+            assert!(!raw.contains("ping the notes"), "{raw}");
+            assert!(!raw.contains("PRIVATE"), "{raw}");
+        }
+        assert!(!room_speech_waiting_has(&RoomSpeechClip {
+            text: "ping the notes".to_owned(),
+            voice: "ara".to_owned(),
+        }));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
