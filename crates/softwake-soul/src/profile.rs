@@ -3,7 +3,7 @@
 //! Layout under the Softwake config root:
 //!
 //! ```text
-//! softwake.json                 # { "version": 1, "active_profile": "<id>", optional kws_*_milli, free_speech_end_silence_ms, tts_playback_timeout_ms, webhook_enabled, webhook_port, voice_agent_s2s }
+//! softwake.json                 # { "version": 1, "active_profile": "<id>", optional kws_*_milli, free_speech_end_silence_ms, tts_playback_timeout_ms, webhook_enabled, webhook_port, voice_agent_s2s, room_requeue_recheck }
 //! profiles/<id>/profile.json    # id, name, use_global_user/glossary/rules (default true)
 //! profiles/<id>/{soul,user,rules,glossary}.md
 //! soul/                         # legacy pack; migration source only
@@ -96,6 +96,16 @@ pub struct AppConfig {
     /// the mode. Default remains STT→chat→TTS ([ADR 0007] / [ADR 0050]).
     #[serde(default)]
     pub voice_agent_s2s: bool,
+    /// When true, a queued room reply may be revised once before it plays.
+    ///
+    /// Missing key → true. Settings → Rooms writes this key. Off keeps the
+    /// draft that was logged when the member finished ([ADR 0053]).
+    #[serde(default = "default_room_requeue_recheck")]
+    pub room_requeue_recheck: bool,
+}
+
+fn default_room_requeue_recheck() -> bool {
+    true
 }
 
 fn app_config_version() -> u32 {
@@ -137,6 +147,7 @@ impl Default for AppConfig {
             webhook_enabled: false,
             webhook_port: default_webhook_port(),
             voice_agent_s2s: false,
+            room_requeue_recheck: default_room_requeue_recheck(),
         }
     }
 }
@@ -619,6 +630,22 @@ pub fn set_voice_agent_s2s(config_dir: &Path, enabled: bool) -> Result<AppConfig
     let mut config = load_app_config(config_dir).unwrap_or_default();
     config.version = APP_CONFIG_VERSION;
     config.voice_agent_s2s = enabled;
+    write_app_config(config_dir, &config)?;
+    Ok(config)
+}
+
+/// Enable or disable queued room-reply re-check in `softwake.json`.
+///
+/// A missing key stays on. The next room fan-out reads the file. Nothing reloads live.
+///
+/// # Errors
+///
+/// Config path or write failure.
+pub fn set_room_requeue_recheck(config_dir: &Path, enabled: bool) -> Result<AppConfig, SoulError> {
+    ensure_migrated(config_dir)?;
+    let mut config = load_app_config(config_dir).unwrap_or_default();
+    config.version = APP_CONFIG_VERSION;
+    config.room_requeue_recheck = enabled;
     write_app_config(config_dir, &config)?;
     Ok(config)
 }
@@ -1135,6 +1162,10 @@ mod tests {
         assert_eq!(app.tts_playback_timeout_ms, TTS_PLAYBACK_TIMEOUT_MS_DEFAULT);
         assert_eq!(AppConfig::default().kws_threshold_milli, 150);
         assert!(!AppConfig::default().voice_agent_s2s);
+        assert!(AppConfig::default().room_requeue_recheck);
+        let missing_recheck: AppConfig =
+            serde_json::from_slice(br#"{"version":1,"active_profile":"default"}"#).expect("parse");
+        assert!(missing_recheck.room_requeue_recheck);
         assert_eq!(
             AppConfig::default().free_speech_end_silence_ms,
             FREE_SPEECH_END_SILENCE_MS_DEFAULT
@@ -1212,6 +1243,21 @@ mod tests {
         assert!(loaded.voice_agent_s2s);
         let off = set_voice_agent_s2s(&root.path, false).expect("s2s off");
         assert!(!off.voice_agent_s2s);
+
+        assert!(
+            load_app_config(&root.path)
+                .expect("recheck default")
+                .room_requeue_recheck
+        );
+        let recheck_off = set_room_requeue_recheck(&root.path, false).expect("recheck off");
+        assert!(!recheck_off.room_requeue_recheck);
+        assert!(
+            !load_app_config(&root.path)
+                .expect("recheck reload")
+                .room_requeue_recheck
+        );
+        let recheck_on = set_room_requeue_recheck(&root.path, true).expect("recheck on");
+        assert!(recheck_on.room_requeue_recheck);
     }
 
     #[test]

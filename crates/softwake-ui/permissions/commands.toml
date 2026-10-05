@@ -311,6 +311,16 @@ commands.allow = ["free_speech_silence_set"]
 
 
 [[permission]]
+identifier = "allow-room-requeue-recheck-snapshot"
+description = "Read whether queued room replies are revised before playback."
+commands.allow = ["room_requeue_recheck_snapshot"]
+
+[[permission]]
+identifier = "allow-room-requeue-recheck-set"
+description = "Save whether queued room replies are revised before playback."
+commands.allow = ["room_requeue_recheck_set"]
+
+[[permission]]
 identifier = "allow-voice-agent-s2s-snapshot"
 description = "Read whether Voice Agent continuous S2S is enabled."
 commands.allow = ["voice_agent_s2s_snapshot"]

@@ -413,6 +413,11 @@
         <section id="pane-rooms" class="pane glass pane-fill hidden" hidden aria-labelledby="rooms-title">
           <h2 id="rooms-title">Rooms</h2>
           <p class="meta">Multi-agent rooms (ADR-0052). Day-to-day chat is on the HUD left rail (Profiles, then Rooms halfway down). This page is for creating rooms and editing members (profile id or display name). A post wakes every member in order; each decides to reply or NO_REPLY. Cool-down and single-flight keep them from piling on at once.</p>
+          <label class="field row-check" for="room-requeue-recheck">
+            <input id="room-requeue-recheck" type="checkbox" />
+            <span>Revise queued replies while an earlier line plays</span>
+          </label>
+          <p id="room-requeue-recheck-hint" class="meta">Saved as <code>room_requeue_recheck</code> in softwake.json. On by default. Off keeps the first draft.</p>
           <p id="rooms-path" class="meta"></p>
           <label for="rooms-list" class="visually-hidden">Rooms</label>
           <select id="rooms-list" aria-label="Room list" size="4" class="rooms-list-select"></select>

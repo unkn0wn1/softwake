@@ -275,6 +275,10 @@ struct ClientSlot {
     thread: JoinHandle<()>,
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Response carries ResponseBody for the wire; boxing would churn every call site"
+)]
 enum Outbound {
     Response { id: u64, body: ResponseBody },
     Event(WireEvent),

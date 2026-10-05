@@ -21,6 +21,7 @@ mod playback_prefs;
 mod profiles;
 mod providers;
 mod remote_agent;
+mod room_recheck_prefs;
 mod rooms;
 mod skills;
 mod timers;
@@ -159,6 +160,8 @@ pub fn run() {
             rooms::room_update,
             rooms::room_delete,
             rooms::room_post,
+            room_recheck_prefs::room_requeue_recheck_snapshot,
+            room_recheck_prefs::room_requeue_recheck_set,
             commands::hud_save_size,
             commands::hud_seed_session,
             commands::hud_drop_session_turns,
@@ -592,6 +595,8 @@ mod tests {
         "room_update",
         "room_delete",
         "room_post",
+        "room_requeue_recheck_snapshot",
+        "room_requeue_recheck_set",
         "global_docs_snapshot",
         "global_docs_save",
         "hud_save_size",
@@ -694,6 +699,8 @@ mod tests {
         "allow-room-update",
         "allow-room-delete",
         "allow-room-post",
+        "allow-room-requeue-recheck-snapshot",
+        "allow-room-requeue-recheck-set",
         "allow-global-docs-snapshot",
         "allow-global-docs-save",
         "allow-hud-save-size",

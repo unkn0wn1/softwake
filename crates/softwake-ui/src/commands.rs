@@ -330,6 +330,10 @@ pub async fn hud_snapshot() -> Result<HudSnapshot, String> {
     .map_err(|error| format!("hud snapshot task failed: {error}"))?
 }
 
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde skip_serializing_if requires fn(&T) -> bool"
+)]
 fn is_zero_u64(value: &u64) -> bool {
     *value == 0
 }
