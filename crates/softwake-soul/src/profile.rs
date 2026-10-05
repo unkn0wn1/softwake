@@ -98,8 +98,9 @@ pub struct AppConfig {
     pub voice_agent_s2s: bool,
     /// When true, a queued room reply may be revised once before it plays.
     ///
-    /// Missing key → true. Settings → Rooms writes this key. Off keeps the
-    /// draft that was logged when the member finished ([ADR 0053]).
+    /// Missing key → true. Settings → Rooms writes this key. The room log
+    /// gets the line when that clip is about to play, in both modes. Off
+    /// skips the model call and speaks the draft ([ADR 0053]).
     #[serde(default = "default_room_requeue_recheck")]
     pub room_requeue_recheck: bool,
 }

@@ -3173,6 +3173,7 @@ function showPane(name) {
     }
   } else {
     setSubnavVisible(document.querySelector("#rooms-subnav"), false);
+    stopRoomsFanoutPoll();
   }
   if (name === "skills") {
     refreshSkills();
@@ -3280,6 +3281,34 @@ document.querySelector("#rooms-delete")?.addEventListener("click", async () => {
     if (err) err.textContent = errorText(error);
   }
 });
+let roomsFanoutPollTimer = null;
+
+function stopRoomsFanoutPoll() {
+  if (roomsFanoutPollTimer) {
+    clearInterval(roomsFanoutPollTimer);
+    roomsFanoutPollTimer = null;
+  }
+}
+
+function startRoomsFanoutPoll(roomId) {
+  stopRoomsFanoutPoll();
+  let first = true;
+  roomsFanoutPollTimer = setInterval(async () => {
+    const roomsPane = document.querySelector("#pane-rooms");
+    if (!roomsPane || roomsPane.hidden) {
+      stopRoomsFanoutPoll();
+      return;
+    }
+    const statusText = first ? "Members waking…" : undefined;
+    first = false;
+    try {
+      await refreshRooms(roomId, statusText);
+    } catch (_error) {
+      stopRoomsFanoutPoll();
+    }
+  }, 1200);
+}
+
 document.querySelector("#rooms-send")?.addEventListener("click", async () => {
   const roomId =
     (roomsSnap && roomsSnap.selected_id) ||
@@ -3293,23 +3322,7 @@ document.querySelector("#rooms-send")?.addEventListener("click", async () => {
     const snap = await invoke("room_post", { roomId, text: composeText });
     roomsComposingNew = false;
     applyRoomsSnapshot(snap, "Posted. Members waking in background…");
-    // Light poll so member bubbles appear as fan-out finishes.
-    let ticks = 0;
-    const timer = setInterval(async () => {
-      ticks += 1;
-      if (ticks > 40) {
-        clearInterval(timer);
-        return;
-      }
-      try {
-        await refreshRooms(
-          roomId,
-          ticks === 1 ? "Members waking…" : undefined
-        );
-      } catch (_) {
-        clearInterval(timer);
-      }
-    }, 1200);
+    startRoomsFanoutPoll(roomId);
   } catch (error) {
     const err = document.querySelector("#rooms-error");
     if (err) err.textContent = errorText(error);

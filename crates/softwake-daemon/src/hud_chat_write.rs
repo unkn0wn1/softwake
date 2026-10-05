@@ -179,24 +179,23 @@ pub(crate) fn append_assistant_notice(profile_id: &str, text: &str) {
     );
 }
 
+/// True when a test has pointed HUD writes at a temp config.
+///
+/// The room play path appends a line once and does not rewrite it, so this
+/// guard stays with the test helpers below.
+#[cfg(test)]
 fn history_writes_allowed() -> bool {
-    #[cfg(test)]
-    {
-        HISTORY_CONFIG_OVERRIDE
-            .lock()
-            .map(|guard| guard.is_some())
-            .unwrap_or(false)
-    }
-    #[cfg(not(test))]
-    {
-        true
-    }
+    HISTORY_CONFIG_OVERRIDE
+        .lock()
+        .map(|guard| guard.is_some())
+        .unwrap_or(false)
 }
 
 /// Replace plaintext HUD turns whose text equals `old_text`.
 ///
-/// Encrypted vault chats are left alone. Tests write only while
-/// [`HISTORY_CONFIG_OVERRIDE`] is set.
+/// Encrypted vault chats are left alone. The room play path no longer calls
+/// this. Tests keep it so a matching plaintext turn can still be edited.
+#[cfg(test)]
 pub(crate) fn replace_role_turn(profile_id: &str, old_text: &str, new_text: &str) {
     let old_text = old_text.trim();
     let new_text = new_text.trim();
@@ -207,6 +206,7 @@ pub(crate) fn replace_role_turn(profile_id: &str, old_text: &str, new_text: &str
 }
 
 /// Delete plaintext HUD turns whose text equals `text`.
+#[cfg(test)]
 pub(crate) fn delete_role_turn(profile_id: &str, text: &str) {
     let text = text.trim();
     if text.is_empty() {
@@ -215,6 +215,7 @@ pub(crate) fn delete_role_turn(profile_id: &str, text: &str) {
     edit_turns(profile_id, text, None);
 }
 
+#[cfg(test)]
 fn edit_turns(profile_id: &str, old_text: &str, new_text: Option<&str>) {
     if !history_writes_allowed() {
         return;
