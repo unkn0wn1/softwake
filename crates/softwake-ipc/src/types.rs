@@ -451,6 +451,10 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde skip_serializing_if requires fn(&T) -> bool"
+)]
 fn is_zero_u64(value: &u64) -> bool {
     *value == 0
 }
@@ -791,6 +795,10 @@ pub enum ClientMessage {
 /// Daemon messages after a client connects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Response carries ResponseBody for the wire; boxing would churn every call site"
+)]
 pub enum ServerMessage {
     /// The versions matched. Further messages may be requests.
     HelloOk {

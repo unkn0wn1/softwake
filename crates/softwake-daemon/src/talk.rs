@@ -286,9 +286,10 @@ fn room_member_playback_lock() -> std::sync::MutexGuard<'static, ()> {
 
 /// Speak one room-member line in that member's voice, after the log write.
 ///
-/// The fan-out has already enqueued this clip. Wait until it is the oldest
-/// waiting line, then play it with `interrupt` false. One playback lock keeps
-/// a single TTS player. This does not open a Voice Agent session.
+/// The fan-out has already enqueued this clip and applied any queued re-check.
+/// `text` is the final line. Wait until it is the oldest waiting line, then
+/// play it with `interrupt` false. One playback lock keeps a single TTS player.
+/// This does not open a Voice Agent session and does not write `selected_tts_voice`.
 ///
 /// `speech_gen` is the stamp taken when the operator line was committed. When
 /// barge-in or Voice Agent speech-started has cleared the room speech queue,

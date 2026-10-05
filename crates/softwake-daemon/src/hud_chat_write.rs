@@ -52,6 +52,15 @@ fn now_ms() -> u64 {
 pub(crate) static HISTORY_CONFIG_OVERRIDE: std::sync::Mutex<Option<PathBuf>> =
     std::sync::Mutex::new(None);
 
+/// One test at a time may point HUD writes at a temp directory.
+#[cfg(test)]
+pub(crate) fn hold_history_override_tests() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn profile_hud_path(profile_id: &str) -> Option<PathBuf> {
     #[cfg(test)]
     {
@@ -167,6 +176,91 @@ pub(crate) fn append_assistant_notice(profile_id: &str, text: &str) {
             error: false,
             note: "while_away".into(),
         }],
+    );
+}
+
+fn history_writes_allowed() -> bool {
+    #[cfg(test)]
+    {
+        HISTORY_CONFIG_OVERRIDE
+            .lock()
+            .map(|guard| guard.is_some())
+            .unwrap_or(false)
+    }
+    #[cfg(not(test))]
+    {
+        true
+    }
+}
+
+/// Replace plaintext HUD turns whose text equals `old_text`.
+///
+/// Encrypted vault chats are left alone. Tests write only while
+/// [`HISTORY_CONFIG_OVERRIDE`] is set.
+pub(crate) fn replace_role_turn(profile_id: &str, old_text: &str, new_text: &str) {
+    let old_text = old_text.trim();
+    let new_text = new_text.trim();
+    if old_text.is_empty() || new_text.is_empty() || old_text == new_text {
+        return;
+    }
+    edit_turns(profile_id, old_text, Some(new_text));
+}
+
+/// Delete plaintext HUD turns whose text equals `text`.
+pub(crate) fn delete_role_turn(profile_id: &str, text: &str) {
+    let text = text.trim();
+    if text.is_empty() {
+        return;
+    }
+    edit_turns(profile_id, text, None);
+}
+
+fn edit_turns(profile_id: &str, old_text: &str, new_text: Option<&str>) {
+    if !history_writes_allowed() {
+        return;
+    }
+    let Some(path) = profile_hud_path(profile_id) else {
+        return;
+    };
+    let Ok(bytes) = fs::read(&path) else {
+        return;
+    };
+    let Ok(file) = serde_json::from_slice::<HudChatFile>(&bytes) else {
+        return;
+    };
+    if file.encrypted == Some(true) {
+        return;
+    }
+    let Some(mut turns) = file.turns else {
+        return;
+    };
+    let mut changed = false;
+    if let Some(new_text) = new_text {
+        for turn in &mut turns {
+            if turn.text == old_text {
+                new_text.clone_into(&mut turn.text);
+                changed = true;
+            }
+        }
+    } else {
+        let before = turns.len();
+        turns.retain(|turn| turn.text != old_text);
+        changed = turns.len() != before;
+    }
+    if !changed {
+        return;
+    }
+    write_atomic(
+        &path,
+        &HudChatFile {
+            version: file.version,
+            turns: Some(turns),
+            encrypted: file.encrypted,
+            kdf: file.kdf,
+            salt_b64: file.salt_b64,
+            nonce_b64: file.nonce_b64,
+            ciphertext_b64: file.ciphertext_b64,
+        },
     );
 }
 
@@ -341,5 +435,42 @@ mod tests {
         assert_eq!(recipient[1].text, "got it");
         assert_eq!(sender[1].name, "Sally");
         assert_eq!(recipient[1].name, "Sally");
+    }
+
+    #[test]
+    fn replace_and_delete_hit_only_the_matching_turn() {
+        let _hold = super::hold_history_override_tests();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "softwake-hud-recheck-{}-{nanos}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("temp");
+        *HISTORY_CONFIG_OVERRIDE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(root.clone());
+        append_role_turn("sally", "assistant", "Sally", "[room standup] Sally: draft");
+        append_role_turn("sally", "user", "Joi", "[room standup] Joi: other");
+        replace_role_turn(
+            "sally",
+            "[room standup] Sally: draft",
+            "[room standup] Sally: final",
+        );
+        let body = std::fs::read_to_string(root.join("profiles/sally/hud-chat.json")).expect("hud");
+        assert!(body.contains("Sally: final"), "{body}");
+        assert!(!body.contains("Sally: draft"), "{body}");
+        assert!(body.contains("Joi: other"), "{body}");
+        delete_role_turn("sally", "[room standup] Joi: other");
+        let body = std::fs::read_to_string(root.join("profiles/sally/hud-chat.json")).expect("hud");
+        assert!(!body.contains("Joi: other"), "{body}");
+        assert!(body.contains("Sally: final"), "{body}");
+        *HISTORY_CONFIG_OVERRIDE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -3041,6 +3041,48 @@ function applyRoomsSnapshot(snap, statusText) {
   if (err) err.textContent = "";
 }
 
+const roomRecheckBox = document.querySelector("#room-requeue-recheck");
+let roomRecheckEditing = false;
+let roomRecheckLoaded = null;
+
+async function loadRoomRecheck() {
+  if (!roomRecheckBox) return;
+  try {
+    const snap = await invoke("room_requeue_recheck_snapshot");
+    if (roomRecheckEditing || !snap || typeof snap.enabled !== "boolean") return;
+    roomRecheckEditing = true;
+    roomRecheckBox.checked = !!snap.enabled;
+    roomRecheckLoaded = !!snap.enabled;
+    roomRecheckEditing = false;
+  } catch (error) {
+    const err = document.querySelector("#rooms-error");
+    if (err) err.textContent = errorText(error);
+  }
+}
+
+if (roomRecheckBox) {
+  roomRecheckBox.addEventListener("change", async () => {
+    if (roomRecheckEditing) return;
+    const enabled = !!roomRecheckBox.checked;
+    if (roomRecheckLoaded !== null && enabled === roomRecheckLoaded) return;
+    roomRecheckEditing = true;
+    try {
+      const err = document.querySelector("#rooms-error");
+      if (err) err.textContent = "";
+      const snap = await invoke("room_requeue_recheck_set", { enabled });
+      roomRecheckLoaded = !!snap.enabled;
+      roomRecheckBox.checked = !!snap.enabled;
+      const status = document.querySelector("#rooms-status");
+      if (status) status.textContent = (snap && snap.message) || "";
+    } catch (error) {
+      roomRecheckBox.checked = !!roomRecheckLoaded;
+      const err = document.querySelector("#rooms-error");
+      if (err) err.textContent = errorText(error);
+    }
+    roomRecheckEditing = false;
+  });
+}
+
 async function refreshRooms(selectedId, statusText) {
   try {
     const args = {};
@@ -3125,6 +3167,7 @@ function showPane(name) {
   }
   if (name === "rooms") {
     setSubnavVisible(document.querySelector("#rooms-subnav"), true);
+    loadRoomRecheck();
     if (!roomsComposingNew) {
       refreshRooms(roomsSnap && roomsSnap.selected_id ? roomsSnap.selected_id : null);
     }

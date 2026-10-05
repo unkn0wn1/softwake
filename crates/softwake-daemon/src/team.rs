@@ -3,11 +3,14 @@
 use std::env;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
+use crate::room_recheck::{FanoutSay, RecheckDecision, decision_from_oneshot};
 use softwake_soul::{
-    ProfileMeta, ensure_profile_home, list_profiles, load_profile_meta, profile_pack_dir,
-    resolve_config_dir, try_load_effective,
+    ProfileMeta, ensure_profile_home, list_profiles, load_app_config, load_profile_meta,
+    profile_pack_dir, resolve_config_dir, try_load_effective,
 };
 use softwake_tools::{
     AGENT_MESSAGE_TOOL, AgentMessageArgs, GOAL_RUN_TOOL, GoalBackend, GoalProgressEvent,
@@ -93,11 +96,7 @@ fn room_lists_member(members: &[String], target: &ProfileMeta) -> bool {
 }
 
 fn is_no_reply(text: &str) -> bool {
-    let lower = text
-        .trim()
-        .trim_matches(|c: char| c == '.' || c == '!' || c == '"')
-        .to_ascii_lowercase();
-    lower.is_empty() || lower == "no_reply" || lower == "no reply"
+    crate::room_recheck::is_quiet_reply(text)
 }
 
 /// One in-flight room fan-out. Later posts wait so members do not interleave.
@@ -550,6 +549,31 @@ pub(crate) struct RoomSpeechClearReport {
     pub dropped_audio: usize,
     /// Replies removed before they were appended to the room log.
     pub dropped_unposted: usize,
+    /// Re-checks removed before their result was applied.
+    pub dropped_rechecks: usize,
+}
+
+/// One re-check started for a clip that is still waiting.
+#[derive(Debug)]
+struct PendingRecheck {
+    clip: RoomSpeechClip,
+    started: Instant,
+    decision: Option<RecheckDecision>,
+}
+
+/// Result of looking at one clip's re-check under the queue lock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RecheckPoll {
+    /// Nothing was started. Play the draft.
+    Idle,
+    /// Started, and the wait budget has not elapsed.
+    Pending,
+    /// The model returned before the budget.
+    Ready(RecheckDecision),
+    /// The budget elapsed with no decision. Play the draft.
+    TimedOut,
+    /// `clear` bumped the generation. Do not play or rewrite.
+    Stale,
 }
 
 /// In-memory queue of room-member speech that has not started playback.
@@ -562,6 +586,7 @@ pub(crate) struct RoomSpeechQueue {
     generation: u64,
     waiting_audio: Vec<RoomSpeechClip>,
     unposted: Vec<RoomSpeechClip>,
+    pending_rechecks: Vec<PendingRecheck>,
 }
 
 impl RoomSpeechQueue {
@@ -588,13 +613,16 @@ impl RoomSpeechQueue {
     pub(crate) fn clear(&mut self) -> RoomSpeechClearReport {
         let dropped_audio = self.waiting_audio.len();
         let dropped_unposted = self.unposted.len();
+        let dropped_rechecks = self.pending_rechecks.len();
         self.waiting_audio.clear();
         self.unposted.clear();
+        self.pending_rechecks.clear();
         self.generation = self.generation.wrapping_add(1);
         RoomSpeechClearReport {
             generation: self.generation,
             dropped_audio,
             dropped_unposted,
+            dropped_rechecks,
         }
     }
 
@@ -618,7 +646,89 @@ impl RoomSpeechQueue {
     /// Remove one matching waiting clip. False when `clear` already dropped it.
     #[must_use]
     pub(crate) fn take_waiting(&mut self, clip: &RoomSpeechClip) -> bool {
-        take_matching(&mut self.waiting_audio, clip)
+        let removed = take_matching(&mut self.waiting_audio, clip);
+        if removed {
+            let _ = take_pending(&mut self.pending_rechecks, clip);
+        }
+        removed
+    }
+
+    /// Start at most one re-check for a clip that is still waiting.
+    fn begin_recheck(&mut self, clip: &RoomSpeechClip, speech_gen: u64, started: Instant) -> bool {
+        if !self.allows(speech_gen) || !self.waiting_audio.iter().any(|item| item == clip) {
+            return false;
+        }
+        if self.pending_rechecks.iter().any(|item| item.clip == *clip) {
+            return false;
+        }
+        self.pending_rechecks.push(PendingRecheck {
+            clip: clip.clone(),
+            started,
+            decision: None,
+        });
+        true
+    }
+
+    /// Store a decision only while this generation still owns the waiting clip.
+    fn store_recheck(
+        &mut self,
+        clip: &RoomSpeechClip,
+        speech_gen: u64,
+        decision: RecheckDecision,
+    ) -> bool {
+        if !self.allows(speech_gen) || !self.waiting_audio.iter().any(|item| item == clip) {
+            return false;
+        }
+        let Some(pending) = self
+            .pending_rechecks
+            .iter_mut()
+            .find(|item| item.clip == *clip && item.decision.is_none())
+        else {
+            return false;
+        };
+        pending.decision = Some(decision);
+        true
+    }
+
+    /// Read the re-check. Ready and timed-out remove the pending row.
+    fn take_recheck(
+        &mut self,
+        clip: &RoomSpeechClip,
+        speech_gen: u64,
+        now: Instant,
+    ) -> RecheckPoll {
+        if !self.allows(speech_gen) {
+            return RecheckPoll::Stale;
+        }
+        let Some(index) = self
+            .pending_rechecks
+            .iter()
+            .position(|item| item.clip == *clip)
+        else {
+            return RecheckPoll::Idle;
+        };
+        if self.pending_rechecks[index].decision.is_some() {
+            let pending = self.pending_rechecks.remove(index);
+            if let Some(decision) = pending.decision {
+                return RecheckPoll::Ready(decision);
+            }
+            return RecheckPoll::Pending;
+        }
+        let started = self.pending_rechecks[index].started;
+        if now.saturating_duration_since(started) >= crate::room_recheck::ROOM_REQUEUE_RECHECK_WAIT
+        {
+            self.pending_rechecks.remove(index);
+            return RecheckPoll::TimedOut;
+        }
+        RecheckPoll::Pending
+    }
+
+    fn rename_waiting(&mut self, clip: &RoomSpeechClip, new_text: &str) -> bool {
+        let Some(slot) = self.waiting_audio.iter_mut().find(|item| *item == clip) else {
+            return false;
+        };
+        new_text.clone_into(&mut slot.text);
+        true
     }
 }
 
@@ -627,6 +737,14 @@ fn take_matching(clips: &mut Vec<RoomSpeechClip>, clip: &RoomSpeechClip) -> bool
         return false;
     };
     clips.remove(index);
+    true
+}
+
+fn take_pending(pending: &mut Vec<PendingRecheck>, clip: &RoomSpeechClip) -> bool {
+    let Some(index) = pending.iter().position(|item| item.clip == *clip) else {
+        return false;
+    };
+    pending.remove(index);
     true
 }
 
@@ -684,6 +802,29 @@ pub(crate) fn enqueue_waiting_room_audio(clip: RoomSpeechClip, captured: u64) ->
     }
     queue.enqueue_waiting_audio(clip);
     true
+}
+
+#[cfg(not(test))]
+fn begin_room_recheck(clip: &RoomSpeechClip, speech_gen: u64, started: Instant) -> bool {
+    room_speech_queue().begin_recheck(clip, speech_gen, started)
+}
+
+fn store_room_recheck(clip: &RoomSpeechClip, speech_gen: u64, decision: RecheckDecision) -> bool {
+    room_speech_queue().store_recheck(clip, speech_gen, decision)
+}
+
+#[cfg(not(test))]
+fn take_room_recheck(clip: &RoomSpeechClip, speech_gen: u64, now: Instant) -> RecheckPoll {
+    room_speech_queue().take_recheck(clip, speech_gen, now)
+}
+
+#[cfg(not(test))]
+fn rename_waiting_room_audio(clip: &RoomSpeechClip, new_text: &str, speech_gen: u64) -> bool {
+    let mut queue = room_speech_queue();
+    if !queue.allows(speech_gen) {
+        return false;
+    }
+    queue.rename_waiting(clip, new_text)
 }
 
 /// Take the waiting clip only when `captured` is current and `clear` left it.
@@ -746,6 +887,8 @@ pub(crate) struct RoomFanoutJob {
     pub speech_gen: u64,
     /// Operator line, then member lines, copied into profile chats.
     pub history: Arc<Mutex<Vec<RoomHistoryTurn>>>,
+    /// Public says logged in this fan-out, draft text until a re-check replaces it.
+    pub fanout_says: Arc<Mutex<Vec<FanoutSay>>>,
 }
 
 /// One room line copied into a profile's own chat. Text includes room id and speaker.
@@ -963,6 +1106,7 @@ pub(crate) fn commit_operator_room_post(
         room_path: path,
         speech_gen,
         history: Arc::new(Mutex::new(operator_history)),
+        fanout_says: Arc::new(Mutex::new(Vec::new())),
     };
     Ok((message, Some(job)))
 }
@@ -1076,7 +1220,19 @@ where
             voice: meta.tts_voice.clone(),
         });
     }
-    run_loaded_room_fanout(job, &loaded, "", &skipped_early, &oneshot);
+    let recheck_enabled = room_requeue_recheck_enabled();
+    run_loaded_room_fanout(job, &loaded, "", &skipped_early, &oneshot, recheck_enabled);
+}
+
+fn room_requeue_recheck_enabled() -> bool {
+    let xdg = env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
+    let home = env::var_os("HOME").map(PathBuf::from);
+    let Ok(config) = resolve_config_dir(xdg.as_deref(), home.as_deref()) else {
+        return true;
+    };
+    load_app_config(&config)
+        .map(|app| app.room_requeue_recheck)
+        .unwrap_or(true)
 }
 
 /// Profile pack already read. Member threads only run the oneshot and the log.
@@ -1103,21 +1259,36 @@ fn run_loaded_room_fanout<F>(
     initial_peers: &str,
     skipped_early: &[String],
     oneshot: &F,
+    recheck_enabled: bool,
 ) where
     F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
 {
     let peers = Mutex::new(initial_peers.to_owned());
     let replied = Mutex::new(Vec::new());
     let skipped = Mutex::new(skipped_early.to_vec());
+    let (recheck_tx, recheck_rx) = std::sync::mpsc::channel();
     std::thread::scope(|scope| {
+        scope.spawn(|| run_recheck_worker(recheck_rx, oneshot));
         for member in members {
             let peers = &peers;
             let replied = &replied;
             let skipped = &skipped;
+            let recheck_tx = recheck_tx.clone();
             scope.spawn(move || {
-                run_one_room_member(job, member, members, peers, replied, skipped, oneshot);
+                run_one_room_member(
+                    job,
+                    member,
+                    members,
+                    peers,
+                    replied,
+                    skipped,
+                    oneshot,
+                    &recheck_tx,
+                    recheck_enabled,
+                );
             });
         }
+        drop(recheck_tx);
     });
     let replied = replied
         .into_inner()
@@ -1142,6 +1313,10 @@ fn run_loaded_room_fanout<F>(
     );
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "room member turn stays next to the speech queue and the re-check"
+)]
 fn run_one_room_member<F>(
     job: &RoomFanoutJob,
     member: &LoadedRoomMember,
@@ -1150,6 +1325,8 @@ fn run_one_room_member<F>(
     replied: &Mutex<Vec<String>>,
     skipped: &Mutex<Vec<String>>,
     oneshot: &F,
+    recheck_tx: &Sender<RecheckRequest>,
+    recheck_enabled: bool,
 ) where
     F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
 {
@@ -1199,37 +1376,28 @@ fn run_one_room_member<F>(
         );
         return;
     }
-    publish_logged_member_reply(job, member, roster, reply.trim(), peers, replied, skipped);
+    publish_logged_member_reply(
+        job,
+        member,
+        roster,
+        reply.trim(),
+        peers,
+        replied,
+        skipped,
+        oneshot,
+        recheck_tx,
+        recheck_enabled,
+    );
 }
 
 /// `PRIVATE <name>: <message>` is a note to one member, not a room line.
 fn looks_like_private_note(reply: &str) -> bool {
-    private_note_body(reply).is_some()
+    crate::room_recheck::looks_like_private_note(reply)
 }
 
 /// Recipient token and note body. `None` when this is not a private note.
 fn parse_private_note(reply: &str) -> Option<(String, String)> {
-    let rest = private_note_body(reply)?;
-    let (to, text) = rest.split_once(':')?;
-    let to = to.trim();
-    let text = text.trim();
-    if to.is_empty() || text.is_empty() || to.contains('\n') || to.contains(',') {
-        return None;
-    }
-    Some((to.to_owned(), text.to_owned()))
-}
-
-fn private_note_body(reply: &str) -> Option<&str> {
-    let trimmed = reply.trim();
-    let prefix = "PRIVATE";
-    let rest = trimmed.get(prefix.len()..)?;
-    if !trimmed[..prefix.len()].eq_ignore_ascii_case(prefix) {
-        return None;
-    }
-    if !rest.starts_with(|c: char| c.is_ascii_whitespace()) {
-        return None;
-    }
-    Some(rest.trim_start())
+    crate::room_recheck::parse_private_note(reply)
 }
 
 fn find_loaded_member<'a>(
@@ -1402,7 +1570,11 @@ fn publish_private_member_note<F>(
     );
 }
 
-fn publish_logged_member_reply(
+#[allow(
+    clippy::too_many_arguments,
+    reason = "room reply publish stays next to the speech queue and the re-check"
+)]
+fn publish_logged_member_reply<F>(
     job: &RoomFanoutJob,
     member: &LoadedRoomMember,
     roster: &[LoadedRoomMember],
@@ -1410,7 +1582,12 @@ fn publish_logged_member_reply(
     peers: &Mutex<String>,
     replied: &Mutex<Vec<String>>,
     skipped: &Mutex<Vec<String>>,
-) {
+    oneshot: &F,
+    recheck_tx: &Sender<RecheckRequest>,
+    recheck_enabled: bool,
+) where
+    F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
+{
     let clip = RoomSpeechClip {
         text: trimmed.to_owned(),
         voice: member.voice.clone(),
@@ -1471,18 +1648,453 @@ fn publish_logged_member_reply(
         false,
     );
     remember_room_history(job, turns);
-    let queued = enqueue_waiting_room_audio(clip, job.speech_gen);
+    record_fanout_say(job, member, trimmed);
+    let queued = enqueue_waiting_room_audio(clip.clone(), job.speech_gen);
     #[cfg(not(test))]
     if queued {
-        crate::talk::speak_room_member_line(&member.voice, trimmed, job.speech_gen);
+        let env = RecheckEnv {
+            job,
+            oneshot,
+            recheck_tx,
+            recheck_enabled,
+            peers,
+            replied,
+            skipped,
+            roster,
+        };
+        drive_queued_room_line(&env, member, &clip);
     }
     #[cfg(test)]
-    let _ = queued;
+    {
+        let _ = (queued, oneshot, recheck_tx, recheck_enabled);
+    }
+}
+
+/// Model work for one waiting clip. The worker applies nothing itself.
+struct RecheckRequest {
+    profile_id: String,
+    instructions: String,
+    allow_all: bool,
+    prompt: String,
+    clip: RoomSpeechClip,
+    speech_gen: u64,
+}
+
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "the worker owns the receiver so the scoped thread can move it"
+)]
+fn run_recheck_worker<F>(rx: Receiver<RecheckRequest>, oneshot: &F)
+where
+    F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
+{
+    while let Ok(request) = rx.recv() {
+        if !room_speech_allows(request.speech_gen) || !room_speech_waiting_has(&request.clip) {
+            continue;
+        }
+        let decision = decision_from_oneshot(oneshot(
+            &request.profile_id,
+            &request.instructions,
+            request.allow_all,
+            &request.prompt,
+        ));
+        let _stored = store_room_recheck(&request.clip, request.speech_gen, decision);
+    }
+}
+
+#[cfg(not(test))]
+struct RecheckEnv<'a, F> {
+    job: &'a RoomFanoutJob,
+    oneshot: &'a F,
+    recheck_tx: &'a Sender<RecheckRequest>,
+    recheck_enabled: bool,
+    peers: &'a Mutex<String>,
+    replied: &'a Mutex<Vec<String>>,
+    skipped: &'a Mutex<Vec<String>>,
+    roster: &'a [LoadedRoomMember],
+}
+
+fn record_fanout_say(job: &RoomFanoutJob, member: &LoadedRoomMember, text: &str) {
+    job.fanout_says
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(FanoutSay {
+            profile_id: member.id.clone(),
+            name: member.display.clone(),
+            text: text.to_owned(),
+        });
+}
+
+fn revise_fanout_say(job: &RoomFanoutJob, profile_id: &str, draft: &str, revised: Option<&str>) {
+    let mut says = job
+        .fanout_says
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(index) = says
+        .iter()
+        .position(|say| say.profile_id == profile_id && say.text == draft)
+    else {
+        return;
+    };
+    if let Some(revised) = revised {
+        revised.clone_into(&mut says[index].text);
+    } else {
+        says.remove(index);
+    }
+}
+
+fn rewrite_peer_line(peers: &Mutex<String>, old_line: &str, new_line: Option<&str>) {
+    let mut guard = peers
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut kept = Vec::new();
+    let mut done = false;
+    for line in guard.split('\n') {
+        if !done && line == old_line {
+            done = true;
+            if let Some(new_line) = new_line {
+                kept.push(new_line.to_owned());
+            }
+        } else if !line.is_empty() {
+            kept.push(line.to_owned());
+        }
+    }
+    *guard = kept.join("\n");
+}
+
+fn patch_room_history(job: &RoomFanoutJob, old_label: &str, new_label: Option<&str>) {
+    let mut guard = job
+        .history
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(new_label) = new_label {
+        for turn in &mut *guard {
+            if turn.text == old_label {
+                new_label.clone_into(&mut turn.text);
+            }
+        }
+    } else {
+        guard.retain(|turn| turn.text != old_label);
+    }
+}
+
+/// What happened when a re-check tried to rewrite one queued say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecheckCommit {
+    /// The draft row was replaced or deleted.
+    Applied,
+    /// The draft row was already gone. Do not play and do not append.
+    Missing,
+    /// The log could not be rewritten. The draft row is unchanged.
+    Failed,
+}
+
+/// Replace or delete the draft say, its peer line, and the profile mirrors.
+///
+/// [`RecheckCommit::Missing`] means the row is already gone: do not play and
+/// do not append. [`RecheckCommit::Failed`] leaves the draft in the log.
+fn commit_recheck_text(
+    job: &RoomFanoutJob,
+    member: &LoadedRoomMember,
+    roster: &[LoadedRoomMember],
+    peers: &Mutex<String>,
+    draft: &str,
+    revised: Option<&str>,
+) -> RecheckCommit {
+    let found = match crate::room_log_edit::rewrite_room_say(
+        &job.state_dir,
+        job.room_id.as_str(),
+        member.id.as_str(),
+        draft,
+        revised,
+    ) {
+        Ok(found) => found,
+        Err(error) => {
+            eprintln!("softwaked: room re-check could not rewrite the log: {error}");
+            return RecheckCommit::Failed;
+        }
+    };
+    if !found {
+        return RecheckCommit::Missing;
+    }
+    let old_line = room_peer_said_line(&member.display, draft);
+    let new_line = revised.map(|text| room_peer_said_line(&member.display, text));
+    rewrite_peer_line(peers, &old_line, new_line.as_deref());
+    let old_label = room_history_label(job.room_id.as_str(), member.display.as_str(), draft);
+    let new_label =
+        revised.map(|text| room_history_label(job.room_id.as_str(), member.display.as_str(), text));
+    patch_room_history(job, &old_label, new_label.as_deref());
+    let roster_pairs: Vec<(&str, &str)> = roster
+        .iter()
+        .map(|peer| (peer.id.as_str(), peer.display.as_str()))
+        .collect();
+    let mirrors = profile_history_for_public_line(
+        job.room_id.as_str(),
+        member.id.as_str(),
+        member.display.as_str(),
+        draft,
+        &roster_pairs,
+        false,
+    );
+    for turn in &mirrors {
+        if let Some(label) = &new_label {
+            crate::hud_chat_write::replace_role_turn(&turn.profile_id, &old_label, label);
+        } else {
+            crate::hud_chat_write::delete_role_turn(&turn.profile_id, &old_label);
+        }
+    }
+    revise_fanout_say(job, member.id.as_str(), draft, revised);
+    RecheckCommit::Applied
+}
+
+#[cfg(not(test))]
+fn request_recheck_for(
+    env: &RecheckEnv<'_, impl Fn(&str, &str, bool, &str) -> Result<String, String> + Sync>,
+    profile_id: &str,
+    display: &str,
+    instructions: &str,
+    allow_all: bool,
+    clip: &RoomSpeechClip,
+) {
+    if !env.recheck_enabled {
+        return;
+    }
+    let ahead = {
+        let says = env
+            .job
+            .fanout_says
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        crate::room_recheck::ahead_for(&says, profile_id, clip.text.as_str())
+    };
+    if !crate::room_recheck::recheck_should_run(true, &ahead) {
+        return;
+    }
+    if !begin_room_recheck(clip, env.job.speech_gen, Instant::now()) {
+        return;
+    }
+    let prompt =
+        crate::room_recheck::recheck_prompt(display, profile_id, clip.text.as_str(), &ahead);
+    let _sent = env.recheck_tx.send(RecheckRequest {
+        profile_id: profile_id.to_owned(),
+        instructions: instructions.to_owned(),
+        allow_all,
+        prompt,
+        clip: clip.clone(),
+        speech_gen: env.job.speech_gen,
+    });
+}
+
+#[cfg(not(test))]
+enum PlayChoice {
+    Speak(String),
+    Silent,
+    Stop,
+}
+
+#[cfg(not(test))]
+enum WaitedRecheck {
+    Draft,
+    Ready(RecheckDecision),
+    Stop,
+}
+
+#[cfg(not(test))]
+fn apply_recheck_decision<F>(
+    env: &RecheckEnv<'_, F>,
+    member: &LoadedRoomMember,
+    clip: &RoomSpeechClip,
+    decision: RecheckDecision,
+) -> PlayChoice
+where
+    F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
+{
+    if !room_speech_allows(env.job.speech_gen) {
+        return PlayChoice::Stop;
+    }
+    match decision {
+        RecheckDecision::Keep => PlayChoice::Speak(clip.text.clone()),
+        RecheckDecision::Revise(text) => apply_revision(env, member, clip, text.trim()),
+        RecheckDecision::Drop => match commit_recheck_text(
+            env.job,
+            member,
+            env.roster,
+            env.peers,
+            clip.text.as_str(),
+            None,
+        ) {
+            RecheckCommit::Failed => PlayChoice::Speak(clip.text.clone()),
+            RecheckCommit::Applied | RecheckCommit::Missing => {
+                let _ = claim_waiting_room_audio(clip, env.job.speech_gen);
+                PlayChoice::Silent
+            }
+        },
+        RecheckDecision::Private { to, text } => {
+            apply_private_revision(env, member, clip, &to, &text)
+        }
+    }
+}
+
+#[cfg(not(test))]
+fn apply_revision<F>(
+    env: &RecheckEnv<'_, F>,
+    member: &LoadedRoomMember,
+    clip: &RoomSpeechClip,
+    revised: &str,
+) -> PlayChoice
+where
+    F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
+{
+    if revised.is_empty() || revised == clip.text {
+        return PlayChoice::Speak(clip.text.clone());
+    }
+    match commit_recheck_text(
+        env.job,
+        member,
+        env.roster,
+        env.peers,
+        clip.text.as_str(),
+        Some(revised),
+    ) {
+        RecheckCommit::Failed => return PlayChoice::Speak(clip.text.clone()),
+        RecheckCommit::Missing => {
+            let _ = claim_waiting_room_audio(clip, env.job.speech_gen);
+            return PlayChoice::Silent;
+        }
+        RecheckCommit::Applied => {}
+    }
+    if !rename_waiting_room_audio(clip, revised, env.job.speech_gen) {
+        return PlayChoice::Stop;
+    }
+    PlayChoice::Speak(revised.to_owned())
+}
+
+#[cfg(not(test))]
+fn apply_private_revision<F>(
+    env: &RecheckEnv<'_, F>,
+    member: &LoadedRoomMember,
+    clip: &RoomSpeechClip,
+    to: &str,
+    text: &str,
+) -> PlayChoice
+where
+    F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
+{
+    match commit_recheck_text(
+        env.job,
+        member,
+        env.roster,
+        env.peers,
+        clip.text.as_str(),
+        None,
+    ) {
+        RecheckCommit::Failed => return PlayChoice::Speak(clip.text.clone()),
+        RecheckCommit::Missing => {
+            let _ = claim_waiting_room_audio(clip, env.job.speech_gen);
+            return PlayChoice::Silent;
+        }
+        RecheckCommit::Applied => {}
+    }
+    let _ = claim_waiting_room_audio(clip, env.job.speech_gen);
+    let raw = format!("PRIVATE {to}: {text}");
+    publish_private_member_note(
+        env.job,
+        member,
+        env.roster,
+        &raw,
+        env.peers,
+        env.replied,
+        env.skipped,
+        env.oneshot,
+    );
+    PlayChoice::Silent
+}
+
+#[cfg(not(test))]
+fn wait_recheck(clip: &RoomSpeechClip, speech_gen: u64) -> WaitedRecheck {
+    loop {
+        if !room_speech_allows(speech_gen) {
+            return WaitedRecheck::Stop;
+        }
+        match take_room_recheck(clip, speech_gen, Instant::now()) {
+            RecheckPoll::Idle => return WaitedRecheck::Draft,
+            RecheckPoll::TimedOut => {
+                eprintln!("softwaked: room re-check timed out; playing the draft");
+                return WaitedRecheck::Draft;
+            }
+            RecheckPoll::Ready(decision) => return WaitedRecheck::Ready(decision),
+            RecheckPoll::Stale => return WaitedRecheck::Stop,
+            RecheckPoll::Pending => std::thread::sleep(std::time::Duration::from_millis(40)),
+        }
+    }
+}
+
+/// Wait until this clip is next, apply one re-check, then play or drop it.
+///
+/// The re-check starts here, when the clip becomes the oldest waiting line.
+/// That is the moment the previous clip has been claimed and is playing, so
+/// the model call overlaps that playback. A clip with nothing ahead skips the
+/// call. The 1500 ms budget is measured from the start, then the draft plays.
+#[cfg(not(test))]
+fn drive_queued_room_line<F>(
+    env: &RecheckEnv<'_, F>,
+    member: &LoadedRoomMember,
+    clip: &RoomSpeechClip,
+) where
+    F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
+{
+    let started = Instant::now();
+    let budget = std::time::Duration::from_secs(120);
+    loop {
+        if !room_speech_allows(env.job.speech_gen) || !room_speech_waiting_has(clip) {
+            return;
+        }
+        if started.elapsed() >= budget {
+            return;
+        }
+        if !room_speech_front_is(clip) {
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            continue;
+        }
+        if env.recheck_enabled {
+            request_recheck_for(
+                env,
+                member.id.as_str(),
+                member.display.as_str(),
+                member.instructions.as_str(),
+                member.allow_all,
+                clip,
+            );
+        }
+        let decision = match wait_recheck(clip, env.job.speech_gen) {
+            WaitedRecheck::Stop => return,
+            WaitedRecheck::Draft => RecheckDecision::Keep,
+            WaitedRecheck::Ready(decision) => decision,
+        };
+        match apply_recheck_decision(env, member, clip, decision) {
+            PlayChoice::Speak(text) => {
+                crate::talk::speak_room_member_line(&member.voice, &text, env.job.speech_gen);
+            }
+            PlayChoice::Silent | PlayChoice::Stop => {}
+        }
+        return;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Clears the HUD history override when a re-check test returns.
+    struct ResetHistoryOverride;
+
+    impl Drop for ResetHistoryOverride {
+        fn drop(&mut self) {
+            *crate::hud_chat_write::HISTORY_CONFIG_OVERRIDE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        }
+    }
 
     #[test]
     fn grant_path_compiles_helpers() {
@@ -1689,6 +2301,7 @@ mod tests {
             room_path: dir.join("parallel.json"),
             speech_gen,
             history: Arc::new(Mutex::new(Vec::new())),
+            fanout_says: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -1773,7 +2386,7 @@ mod tests {
             inflight.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
             result
         };
-        run_loaded_room_fanout(&job, &members, "", &[], &oneshot);
+        run_loaded_room_fanout(&job, &members, "", &[], &oneshot, false);
         assert!(
             max_inflight.load(std::sync::atomic::Ordering::SeqCst) >= 2,
             "both member oneshots must overlap"
@@ -1835,7 +2448,7 @@ mod tests {
                 Ok("beta line".to_owned())
             }
         };
-        run_loaded_room_fanout(&job, &members, &seed, &[], &oneshot);
+        run_loaded_room_fanout(&job, &members, &seed, &[], &oneshot, false);
         assert!(
             max_inflight.load(std::sync::atomic::Ordering::SeqCst) >= 2,
             "seeded history must not serialize the oneshots"
@@ -1895,7 +2508,7 @@ mod tests {
                 Ok(say.to_owned())
             }
         };
-        run_loaded_room_fanout(&job, &members, "", &[], &oneshot);
+        run_loaded_room_fanout(&job, &members, "", &[], &oneshot, false);
         let raw = std::fs::read_to_string(dir.join("parallel").join("log.jsonl")).expect("log");
         let lines: Vec<softwake_tools::RoomLogLine> = raw
             .lines()
@@ -1952,7 +2565,7 @@ mod tests {
                 Ok("NO_REPLY".to_owned())
             }
         };
-        run_loaded_room_fanout(&job, &members, "", &[], &oneshot);
+        run_loaded_room_fanout(&job, &members, "", &[], &oneshot, false);
         let path = dir.join("parallel").join("log.jsonl");
         if path.is_file() {
             let raw = std::fs::read_to_string(&path).expect("log");
@@ -1968,6 +2581,7 @@ mod tests {
 
     #[test]
     fn operator_post_and_member_say_are_in_that_profile_history() {
+        let _hold = crate::hud_chat_write::hold_history_override_tests();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock")
@@ -2025,5 +2639,166 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn recheck_budget_falls_back_and_clear_discards_a_late_result() {
+        let mut queue = RoomSpeechQueue::default();
+        let stamped = 0_u64;
+        let clip = RoomSpeechClip {
+            text: "draft line".to_owned(),
+            voice: "ara".to_owned(),
+        };
+        let later = RoomSpeechClip {
+            text: "second line".to_owned(),
+            voice: "rex".to_owned(),
+        };
+        queue.enqueue_waiting_audio(clip.clone());
+        queue.enqueue_waiting_audio(later);
+        assert!(queue.rename_waiting(&clip, "draft final"));
+        let renamed = RoomSpeechClip {
+            text: "draft final".to_owned(),
+            voice: "ara".to_owned(),
+        };
+        assert_eq!(queue.waiting_audio.first(), Some(&renamed));
+
+        let elapsed =
+            crate::room_recheck::ROOM_REQUEUE_RECHECK_WAIT + std::time::Duration::from_millis(5);
+        let started = Instant::now().checked_sub(elapsed).expect("clock");
+        assert!(queue.begin_recheck(&renamed, stamped, started));
+        assert!(
+            !queue.begin_recheck(&renamed, stamped, Instant::now()),
+            "one re-check per reply"
+        );
+        assert!(queue.store_recheck(&renamed, stamped, RecheckDecision::Keep));
+        assert_eq!(
+            queue.take_recheck(&renamed, stamped, Instant::now()),
+            RecheckPoll::Ready(RecheckDecision::Keep)
+        );
+
+        assert!(queue.begin_recheck(&renamed, stamped, started));
+        assert_eq!(
+            queue.take_recheck(&renamed, stamped, Instant::now()),
+            RecheckPoll::TimedOut
+        );
+        assert_eq!(
+            queue.take_recheck(&renamed, stamped, Instant::now()),
+            RecheckPoll::Idle
+        );
+
+        assert!(queue.begin_recheck(&renamed, stamped, Instant::now()));
+        assert_eq!(
+            queue.take_recheck(&renamed, stamped, Instant::now()),
+            RecheckPoll::Pending
+        );
+        let report = queue.clear();
+        assert_eq!(report.dropped_rechecks, 1);
+        assert_eq!(report.dropped_audio, 2);
+        assert!(!queue.allows(stamped));
+        assert!(!queue.store_recheck(
+            &renamed,
+            stamped,
+            RecheckDecision::Revise("too late".to_owned())
+        ));
+        assert_eq!(
+            queue.take_recheck(&renamed, stamped, Instant::now()),
+            RecheckPoll::Stale
+        );
+    }
+
+    #[test]
+    fn recheck_revision_replaces_the_draft_without_a_second_row() {
+        let _hold = crate::hud_chat_write::hold_history_override_tests();
+        let dir = parallel_temp("revise");
+        let cfg = dir.join("cfg");
+        std::fs::create_dir_all(&cfg).expect("cfg");
+        let _reset = ResetHistoryOverride;
+        *crate::hud_chat_write::HISTORY_CONFIG_OVERRIDE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(cfg.clone());
+
+        let job = parallel_job(&dir, 0);
+        let roster = vec![
+            loaded_member("sally", "Sally", "ara"),
+            loaded_member("joi", "Joi", "rex"),
+        ];
+        let peers = Mutex::new(String::new());
+        let draft = "Joi, the build is green";
+        let revised = "Joi, the build slipped";
+        append_room_log(
+            &dir,
+            "parallel",
+            &RoomLogLine {
+                ts_ms: 10,
+                profile_id: "sally".to_owned(),
+                name: "Sally".to_owned(),
+                kind: RoomLogKind::Say,
+                text: draft.to_owned(),
+                iteration: None,
+                phase: None,
+                to_profile_id: None,
+                to_name: None,
+                reply: None,
+            },
+        )
+        .expect("log");
+        record_fanout_say(&job, &roster[0], draft);
+        peers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push_str(&room_peer_said_line("Sally", draft));
+        let turns = profile_history_for_public_line(
+            "parallel",
+            "sally",
+            "Sally",
+            draft,
+            &[("sally", "Sally"), ("joi", "Joi")],
+            false,
+        );
+        remember_room_history(&job, turns);
+        assert_eq!(
+            commit_recheck_text(&job, &roster[0], &roster, &peers, draft, Some(revised)),
+            RecheckCommit::Applied
+        );
+        let raw = std::fs::read_to_string(dir.join("parallel/log.jsonl")).expect("log");
+        assert_eq!(raw.lines().count(), 1, "{raw}");
+        assert!(raw.contains(revised), "{raw}");
+        assert!(!raw.contains("is green"), "{raw}");
+        let sally =
+            std::fs::read_to_string(cfg.join("profiles/sally/hud-chat.json")).expect("sally");
+        let joi = std::fs::read_to_string(cfg.join("profiles/joi/hud-chat.json")).expect("joi");
+        assert!(sally.contains(revised), "{sally}");
+        assert!(!sally.contains("is green"), "{sally}");
+        assert!(joi.contains(revised), "{joi}");
+        assert!(!joi.contains("is green"), "{joi}");
+        let said = job
+            .fanout_says
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(said[0].text, revised);
+        drop(said);
+        let peer_text = peers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert!(peer_text.contains(revised), "{peer_text}");
+        assert!(!peer_text.contains("is green"), "{peer_text}");
+
+        assert_eq!(
+            commit_recheck_text(&job, &roster[0], &roster, &peers, revised, None),
+            RecheckCommit::Applied
+        );
+        let raw = std::fs::read_to_string(dir.join("parallel/log.jsonl")).expect("log");
+        assert!(!raw.contains(revised), "{raw}");
+        assert!(
+            job.fanout_says
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty()
+        );
+        let sally =
+            std::fs::read_to_string(cfg.join("profiles/sally/hud-chat.json")).expect("sally");
+        assert!(!sally.contains(revised), "{sally}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

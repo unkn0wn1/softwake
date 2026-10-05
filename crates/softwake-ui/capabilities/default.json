@@ -105,6 +105,8 @@
     "allow-room-update",
     "allow-room-delete",
     "allow-room-post",
+    "allow-room-requeue-recheck-snapshot",
+    "allow-room-requeue-recheck-set",
     "allow-global-docs-snapshot",
     "allow-global-docs-save",
     "allow-ui-prefs-set-hud-pinned",
