@@ -36,7 +36,7 @@ fn message_for(enabled: bool) -> String {
     if enabled {
         "Queued replies can be revised once before they play".to_owned()
     } else {
-        "Queued replies stay as first drafted".to_owned()
+        "Queued replies speak the first draft when that line plays".to_owned()
     }
 }
 

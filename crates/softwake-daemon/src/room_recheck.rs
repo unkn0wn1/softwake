@@ -1,7 +1,8 @@
 //! One revise-or-keep check for a room reply that is still waiting to play.
 //!
 //! The check is not a new room turn. The model returns KEEP, `NO_REPLY`, a
-//! private note, or a replacement line. Callers apply that once
+//! private note, or a replacement line. The room log appends the final public
+//! line when that clip is about to play
 //! ([ADR 0053](../../docs/ADR-0053-room-queued-reply-recheck.md)).
 
 use std::time::Duration;
@@ -14,13 +15,13 @@ pub(crate) const ROOM_REQUEUE_RECHECK_WAIT: Duration = Duration::from_millis(150
 /// What the short re-check model call decided.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RecheckDecision {
-    /// Play the draft unchanged.
+    /// Append the draft at play time and speak it.
     Keep,
-    /// Remove the draft from the log and do not play it.
+    /// Do not log this reply and do not play it.
     Drop,
-    /// Replace the draft with this public line.
+    /// Append this public line once at play time, then speak it.
     Revise(String),
-    /// Drop the public draft and send an existing private note.
+    /// Send a private note at play time and do not speak a public line.
     Private { to: String, text: String },
 }
 
@@ -33,14 +34,17 @@ pub(crate) struct AheadLine {
     pub text: String,
 }
 
-/// One public say logged in this fan-out, in log order.
+/// One public reply queued in this fan-out, in finish order.
+///
+/// `text` is the draft until the play-time decision stores the final line.
+/// The room log does not have the row until that decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FanoutSay {
     /// Profile id of the speaker.
     pub profile_id: String,
     /// Display name stored on the log row.
     pub name: String,
-    /// Current body. KEEP leaves the draft. A revision overwrites it.
+    /// Draft until play time, then the final line.
     pub text: String,
 }
 

@@ -578,9 +578,11 @@ enum RecheckPoll {
 
 /// In-memory queue of room-member speech that has not started playback.
 ///
-/// Generation starts at 0. `clear` drops both lists and bumps the generation
-/// with `wrapping_add`. It takes no log path and does no I/O, so a line already
-/// stored in the room log stays there.
+/// Generation starts at 0. `clear` drops waiting audio, unposted replies, and
+/// pending re-checks, then bumps the generation with `wrapping_add`. It takes
+/// no log path and does no I/O. A public say is appended when that clip is
+/// about to play, so a clip `clear` drops has no row. A line already appended
+/// stays in the log.
 #[derive(Debug, Default)]
 pub(crate) struct RoomSpeechQueue {
     generation: u64,
@@ -759,7 +761,8 @@ fn room_speech_queue() -> std::sync::MutexGuard<'static, RoomSpeechQueue> {
 ///
 /// [`RoomSpeechQueue::clear`] does not touch the player. This wrapper does,
 /// outside tests, so a clip that wins the race after the generation check
-/// still dies. No log path: text already in the room log is left alone.
+/// still dies. No log path: a line already appended stays. A clip that was
+/// still waiting was not appended, so it leaves no row.
 pub(crate) fn clear_room_speech_queue() {
     let _report = room_speech_queue().clear();
     #[cfg(not(test))]
@@ -791,8 +794,9 @@ fn claim_unposted_room_reply(clip: &RoomSpeechClip, captured: u64) -> bool {
     queue.take_unposted(clip)
 }
 
-/// Record a member line whose log row exists and whose clip has not started.
+/// Record a member line whose clip has not started.
 ///
+/// The room log row is written later, when the clip is about to play.
 /// Returns false when `captured` is already stale, and does not push.
 #[must_use]
 pub(crate) fn enqueue_waiting_room_audio(clip: RoomSpeechClip, captured: u64) -> bool {
@@ -818,7 +822,6 @@ fn take_room_recheck(clip: &RoomSpeechClip, speech_gen: u64, now: Instant) -> Re
     room_speech_queue().take_recheck(clip, speech_gen, now)
 }
 
-#[cfg(not(test))]
 fn rename_waiting_room_audio(clip: &RoomSpeechClip, new_text: &str, speech_gen: u64) -> bool {
     let mut queue = room_speech_queue();
     if !queue.allows(speech_gen) {
@@ -829,13 +832,6 @@ fn rename_waiting_room_audio(clip: &RoomSpeechClip, new_text: &str, speech_gen: 
 
 /// Take the waiting clip only when `captured` is current and `clear` left it.
 #[must_use]
-#[cfg_attr(
-    test,
-    allow(
-        dead_code,
-        reason = "called from speak_room_member_line, which tests do not compile"
-    )
-)]
 pub(crate) fn claim_waiting_room_audio(clip: &RoomSpeechClip, captured: u64) -> bool {
     let mut queue = room_speech_queue();
     if !queue.allows(captured) {
@@ -887,7 +883,10 @@ pub(crate) struct RoomFanoutJob {
     pub speech_gen: u64,
     /// Operator line, then member lines, copied into profile chats.
     pub history: Arc<Mutex<Vec<RoomHistoryTurn>>>,
-    /// Public says logged in this fan-out, draft text until a re-check replaces it.
+    /// Public replies in this fan-out, in finish order.
+    ///
+    /// Text is the draft until the play-time decision stores the final line.
+    /// The room log does not have that row yet.
     pub fanout_says: Arc<Mutex<Vec<FanoutSay>>>,
 }
 
@@ -1177,13 +1176,13 @@ A private note is not spoken. The room only shows that you sent it. The note and
 ///
 /// Each member runs on its own thread. The 1500ms room cool-down may run once
 /// before any of them start. It does not sit between LLM calls. Prompt build
-/// snapshots peers already logged and does not wait for the others. When a
-/// reply returns, it is appended and enqueued immediately. `NO_REPLY` skips
-/// are left out. One TTS path plays the queue. This does not open a Voice
-/// Agent session per member.
+/// snapshots peers already appended and does not wait for the others. When a
+/// reply returns, it is enqueued immediately. The room log stays unchanged
+/// until that clip is about to play. `NO_REPLY` skips are left out. One TTS
+/// path plays the queue. This does not open a Voice Agent session per member.
 ///
 /// When `job.speech_gen` is stale, a reply that is not logged yet is dropped.
-/// Lines already appended stay in the log.
+/// A line already appended at play time stays in the log.
 pub(crate) fn run_room_fanout<F>(job: &RoomFanoutJob, oneshot: F)
 where
     F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
@@ -1601,57 +1600,13 @@ fn publish_logged_member_reply<F>(
     if !room_speech_allows(job.speech_gen) {
         return;
     }
-    {
-        let mut peers_guard = peers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !room_speech_allows(job.speech_gen) {
-            return;
-        }
-        if let Err(error) = append_room_log(
-            &job.state_dir,
-            job.room_id.as_str(),
-            &RoomLogLine {
-                ts_ms: softwake_tools::now_ms(),
-                profile_id: member.id.clone(),
-                name: member.display.clone(),
-                kind: RoomLogKind::Say,
-                text: trimmed.to_owned(),
-                iteration: None,
-                phase: None,
-                to_profile_id: None,
-                to_name: None,
-                reply: None,
-            },
-        ) {
-            drop(peers_guard);
-            push_line(skipped, format!("{} (log error: {error})", member.id));
-            return;
-        }
-        let _ = mark_room_turn(&job.rooms_dir, job.room_id.as_str(), member.id.as_str());
-        if !peers_guard.is_empty() {
-            peers_guard.push('\n');
-        }
-        peers_guard.push_str(&room_peer_said_line(&member.display, trimmed));
-        push_line(replied, format!("{} ({})", member.display, member.id));
-    }
-    let roster_pairs: Vec<(&str, &str)> = roster
-        .iter()
-        .map(|peer| (peer.id.as_str(), peer.display.as_str()))
-        .collect();
-    let turns = profile_history_for_public_line(
-        job.room_id.as_str(),
-        member.id.as_str(),
-        member.display.as_str(),
-        trimmed,
-        &roster_pairs,
-        false,
-    );
-    remember_room_history(job, turns);
     record_fanout_say(job, member, trimmed);
-    let queued = enqueue_waiting_room_audio(clip.clone(), job.speech_gen);
+    if !enqueue_waiting_room_audio(clip.clone(), job.speech_gen) {
+        revise_fanout_say(job, member.id.as_str(), trimmed, None);
+        return;
+    }
     #[cfg(not(test))]
-    if queued {
+    {
         let env = RecheckEnv {
             job,
             oneshot,
@@ -1666,7 +1621,15 @@ fn publish_logged_member_reply<F>(
     }
     #[cfg(test)]
     {
-        let _ = (queued, oneshot, recheck_tx, recheck_enabled);
+        let _ = (
+            roster,
+            peers,
+            replied,
+            skipped,
+            oneshot,
+            recheck_tx,
+            recheck_enabled,
+        );
     }
 }
 
@@ -1743,108 +1706,190 @@ fn revise_fanout_say(job: &RoomFanoutJob, profile_id: &str, draft: &str, revised
     }
 }
 
-fn rewrite_peer_line(peers: &Mutex<String>, old_line: &str, new_line: Option<&str>) {
-    let mut guard = peers
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut kept = Vec::new();
-    let mut done = false;
-    for line in guard.split('\n') {
-        if !done && line == old_line {
-            done = true;
-            if let Some(new_line) = new_line {
-                kept.push(new_line.to_owned());
-            }
-        } else if !line.is_empty() {
-            kept.push(line.to_owned());
-        }
-    }
-    *guard = kept.join("\n");
+/// Borrowed fan-out state for the moment a clip is about to play.
+struct PlayEnv<'a, F> {
+    job: &'a RoomFanoutJob,
+    roster: &'a [LoadedRoomMember],
+    peers: &'a Mutex<String>,
+    replied: &'a Mutex<Vec<String>>,
+    skipped: &'a Mutex<Vec<String>>,
+    oneshot: &'a F,
 }
 
-fn patch_room_history(job: &RoomFanoutJob, old_label: &str, new_label: Option<&str>) {
-    let mut guard = job
-        .history
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(new_label) = new_label {
-        for turn in &mut *guard {
-            if turn.text == old_label {
-                new_label.clone_into(&mut turn.text);
-            }
-        }
-    } else {
-        guard.retain(|turn| turn.text != old_label);
-    }
+/// What playback should do after the final line is chosen.
+enum PlayChoice {
+    /// The log holds this text. Speak it.
+    Speak(String),
+    /// Nothing to speak. The queue clip was claimed when the line was dropped.
+    Silent,
+    /// Generation changed, or the clip is already gone.
+    Stop,
 }
 
-/// What happened when a re-check tried to rewrite one queued say.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RecheckCommit {
-    /// The draft row was replaced or deleted.
-    Applied,
-    /// The draft row was already gone. Do not play and do not append.
-    Missing,
-    /// The log could not be rewritten. The draft row is unchanged.
-    Failed,
-}
-
-/// Replace or delete the draft say, its peer line, and the profile mirrors.
+/// Append the final public line once.
 ///
-/// [`RecheckCommit::Missing`] means the row is already gone: do not play and
-/// do not append. [`RecheckCommit::Failed`] leaves the draft in the log.
-fn commit_recheck_text(
-    job: &RoomFanoutJob,
+/// The draft was not logged at enqueue. `text` is the draft or the revision.
+/// On success the peer snapshot, profile mirrors, and `job.history` match
+/// that one line. On failure the clip is dropped and nothing is appended.
+fn commit_final_public_line<F>(
+    env: &PlayEnv<'_, F>,
     member: &LoadedRoomMember,
-    roster: &[LoadedRoomMember],
-    peers: &Mutex<String>,
-    draft: &str,
-    revised: Option<&str>,
-) -> RecheckCommit {
-    let found = match crate::room_log_edit::rewrite_room_say(
-        &job.state_dir,
-        job.room_id.as_str(),
-        member.id.as_str(),
-        draft,
-        revised,
-    ) {
-        Ok(found) => found,
-        Err(error) => {
-            eprintln!("softwaked: room re-check could not rewrite the log: {error}");
-            return RecheckCommit::Failed;
-        }
-    };
-    if !found {
-        return RecheckCommit::Missing;
+    clip: &RoomSpeechClip,
+    text: &str,
+) -> bool
+where
+    F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
+{
+    if !room_speech_allows(env.job.speech_gen) || !room_speech_waiting_has(clip) {
+        return false;
     }
-    let old_line = room_peer_said_line(&member.display, draft);
-    let new_line = revised.map(|text| room_peer_said_line(&member.display, text));
-    rewrite_peer_line(peers, &old_line, new_line.as_deref());
-    let old_label = room_history_label(job.room_id.as_str(), member.display.as_str(), draft);
-    let new_label =
-        revised.map(|text| room_history_label(job.room_id.as_str(), member.display.as_str(), text));
-    patch_room_history(job, &old_label, new_label.as_deref());
-    let roster_pairs: Vec<(&str, &str)> = roster
+    let text = text.trim();
+    if text.is_empty() {
+        revise_fanout_say(env.job, member.id.as_str(), clip.text.as_str(), None);
+        let _ = claim_waiting_room_audio(clip, env.job.speech_gen);
+        push_line(env.skipped, format!("{} (empty)", member.id));
+        return false;
+    }
+    if let Err(error) = append_room_log(
+        &env.job.state_dir,
+        env.job.room_id.as_str(),
+        &RoomLogLine {
+            ts_ms: softwake_tools::now_ms(),
+            profile_id: member.id.clone(),
+            name: member.display.clone(),
+            kind: RoomLogKind::Say,
+            text: text.to_owned(),
+            iteration: None,
+            phase: None,
+            to_profile_id: None,
+            to_name: None,
+            reply: None,
+        },
+    ) {
+        eprintln!("softwaked: room line could not be logged: {error}");
+        revise_fanout_say(env.job, member.id.as_str(), clip.text.as_str(), None);
+        let _ = claim_waiting_room_audio(clip, env.job.speech_gen);
+        push_line(env.skipped, format!("{} (log error: {error})", member.id));
+        return false;
+    }
+    let _ = mark_room_turn(
+        &env.job.rooms_dir,
+        env.job.room_id.as_str(),
+        member.id.as_str(),
+    );
+    {
+        let mut peers_guard = env
+            .peers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !peers_guard.is_empty() {
+            peers_guard.push('\n');
+        }
+        peers_guard.push_str(&room_peer_said_line(&member.display, text));
+    }
+    let roster_pairs: Vec<(&str, &str)> = env
+        .roster
         .iter()
         .map(|peer| (peer.id.as_str(), peer.display.as_str()))
         .collect();
-    let mirrors = profile_history_for_public_line(
-        job.room_id.as_str(),
+    let turns = profile_history_for_public_line(
+        env.job.room_id.as_str(),
         member.id.as_str(),
         member.display.as_str(),
-        draft,
+        text,
         &roster_pairs,
         false,
     );
-    for turn in &mirrors {
-        if let Some(label) = &new_label {
-            crate::hud_chat_write::replace_role_turn(&turn.profile_id, &old_label, label);
-        } else {
-            crate::hud_chat_write::delete_role_turn(&turn.profile_id, &old_label);
+    remember_room_history(env.job, turns);
+    push_line(env.replied, format!("{} ({})", member.display, member.id));
+    revise_fanout_say(env.job, member.id.as_str(), clip.text.as_str(), Some(text));
+    true
+}
+
+fn speak_committed<F>(
+    env: &PlayEnv<'_, F>,
+    member: &LoadedRoomMember,
+    clip: &RoomSpeechClip,
+    text: &str,
+) -> PlayChoice
+where
+    F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
+{
+    if commit_final_public_line(env, member, clip, text) {
+        PlayChoice::Speak(text.to_owned())
+    } else {
+        PlayChoice::Stop
+    }
+}
+
+fn speak_revised<F>(
+    env: &PlayEnv<'_, F>,
+    member: &LoadedRoomMember,
+    clip: &RoomSpeechClip,
+    revised: &str,
+) -> PlayChoice
+where
+    F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
+{
+    if !commit_final_public_line(env, member, clip, revised) {
+        return PlayChoice::Stop;
+    }
+    if !rename_waiting_room_audio(clip, revised, env.job.speech_gen) {
+        return PlayChoice::Stop;
+    }
+    PlayChoice::Speak(revised.to_owned())
+}
+
+/// Append the final line for one re-check result, or append nothing.
+///
+/// KEEP, a skipped check, a timeout, and a model error log the draft.
+/// A revision logs only the new text. `NO_REPLY` logs nothing.
+/// `PRIVATE` uses the private-note path and does not speak.
+fn apply_play_decision<F>(
+    env: &PlayEnv<'_, F>,
+    member: &LoadedRoomMember,
+    clip: &RoomSpeechClip,
+    decision: RecheckDecision,
+) -> PlayChoice
+where
+    F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
+{
+    if !room_speech_allows(env.job.speech_gen) || !room_speech_waiting_has(clip) {
+        return PlayChoice::Stop;
+    }
+    match decision {
+        RecheckDecision::Keep => speak_committed(env, member, clip, clip.text.as_str()),
+        RecheckDecision::Revise(text) => {
+            let revised = text.trim();
+            if revised.is_empty() || revised == clip.text {
+                speak_committed(env, member, clip, clip.text.as_str())
+            } else {
+                speak_revised(env, member, clip, revised)
+            }
+        }
+        RecheckDecision::Drop => {
+            revise_fanout_say(env.job, member.id.as_str(), clip.text.as_str(), None);
+            let _ = claim_waiting_room_audio(clip, env.job.speech_gen);
+            push_line(env.skipped, format!("{} (NO_REPLY)", member.id));
+            PlayChoice::Silent
+        }
+        RecheckDecision::Private { to, text } => {
+            revise_fanout_say(env.job, member.id.as_str(), clip.text.as_str(), None);
+            let _ = claim_waiting_room_audio(clip, env.job.speech_gen);
+            let raw = format!("PRIVATE {to}: {text}");
+            publish_private_member_note(
+                env.job,
+                member,
+                env.roster,
+                &raw,
+                env.peers,
+                env.replied,
+                env.skipped,
+                env.oneshot,
+            );
+            PlayChoice::Silent
         }
     }
-    revise_fanout_say(job, member.id.as_str(), draft, revised);
-    RecheckCommit::Applied
 }
 
 #[cfg(not(test))]
@@ -1886,128 +1931,10 @@ fn request_recheck_for(
 }
 
 #[cfg(not(test))]
-enum PlayChoice {
-    Speak(String),
-    Silent,
-    Stop,
-}
-
-#[cfg(not(test))]
 enum WaitedRecheck {
     Draft,
     Ready(RecheckDecision),
     Stop,
-}
-
-#[cfg(not(test))]
-fn apply_recheck_decision<F>(
-    env: &RecheckEnv<'_, F>,
-    member: &LoadedRoomMember,
-    clip: &RoomSpeechClip,
-    decision: RecheckDecision,
-) -> PlayChoice
-where
-    F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
-{
-    if !room_speech_allows(env.job.speech_gen) {
-        return PlayChoice::Stop;
-    }
-    match decision {
-        RecheckDecision::Keep => PlayChoice::Speak(clip.text.clone()),
-        RecheckDecision::Revise(text) => apply_revision(env, member, clip, text.trim()),
-        RecheckDecision::Drop => match commit_recheck_text(
-            env.job,
-            member,
-            env.roster,
-            env.peers,
-            clip.text.as_str(),
-            None,
-        ) {
-            RecheckCommit::Failed => PlayChoice::Speak(clip.text.clone()),
-            RecheckCommit::Applied | RecheckCommit::Missing => {
-                let _ = claim_waiting_room_audio(clip, env.job.speech_gen);
-                PlayChoice::Silent
-            }
-        },
-        RecheckDecision::Private { to, text } => {
-            apply_private_revision(env, member, clip, &to, &text)
-        }
-    }
-}
-
-#[cfg(not(test))]
-fn apply_revision<F>(
-    env: &RecheckEnv<'_, F>,
-    member: &LoadedRoomMember,
-    clip: &RoomSpeechClip,
-    revised: &str,
-) -> PlayChoice
-where
-    F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
-{
-    if revised.is_empty() || revised == clip.text {
-        return PlayChoice::Speak(clip.text.clone());
-    }
-    match commit_recheck_text(
-        env.job,
-        member,
-        env.roster,
-        env.peers,
-        clip.text.as_str(),
-        Some(revised),
-    ) {
-        RecheckCommit::Failed => return PlayChoice::Speak(clip.text.clone()),
-        RecheckCommit::Missing => {
-            let _ = claim_waiting_room_audio(clip, env.job.speech_gen);
-            return PlayChoice::Silent;
-        }
-        RecheckCommit::Applied => {}
-    }
-    if !rename_waiting_room_audio(clip, revised, env.job.speech_gen) {
-        return PlayChoice::Stop;
-    }
-    PlayChoice::Speak(revised.to_owned())
-}
-
-#[cfg(not(test))]
-fn apply_private_revision<F>(
-    env: &RecheckEnv<'_, F>,
-    member: &LoadedRoomMember,
-    clip: &RoomSpeechClip,
-    to: &str,
-    text: &str,
-) -> PlayChoice
-where
-    F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
-{
-    match commit_recheck_text(
-        env.job,
-        member,
-        env.roster,
-        env.peers,
-        clip.text.as_str(),
-        None,
-    ) {
-        RecheckCommit::Failed => return PlayChoice::Speak(clip.text.clone()),
-        RecheckCommit::Missing => {
-            let _ = claim_waiting_room_audio(clip, env.job.speech_gen);
-            return PlayChoice::Silent;
-        }
-        RecheckCommit::Applied => {}
-    }
-    let _ = claim_waiting_room_audio(clip, env.job.speech_gen);
-    let raw = format!("PRIVATE {to}: {text}");
-    publish_private_member_note(
-        env.job,
-        member,
-        env.roster,
-        &raw,
-        env.peers,
-        env.replied,
-        env.skipped,
-        env.oneshot,
-    );
-    PlayChoice::Silent
 }
 
 #[cfg(not(test))]
@@ -2029,12 +1956,13 @@ fn wait_recheck(clip: &RoomSpeechClip, speech_gen: u64) -> WaitedRecheck {
     }
 }
 
-/// Wait until this clip is next, apply one re-check, then play or drop it.
+/// Wait until this clip is next, apply one re-check, log the final line, then play or drop it.
 ///
 /// The re-check starts here, when the clip becomes the oldest waiting line.
 /// That is the moment the previous clip has been claimed and is playing, so
 /// the model call overlaps that playback. A clip with nothing ahead skips the
-/// call. The 1500 ms budget is measured from the start, then the draft plays.
+/// call. The 1500 ms budget is measured from the start, then the draft is
+/// logged and played. This clip stays out of the room log until that decision.
 #[cfg(not(test))]
 fn drive_queued_room_line<F>(
     env: &RecheckEnv<'_, F>,
@@ -2071,7 +1999,15 @@ fn drive_queued_room_line<F>(
             WaitedRecheck::Draft => RecheckDecision::Keep,
             WaitedRecheck::Ready(decision) => decision,
         };
-        match apply_recheck_decision(env, member, clip, decision) {
+        let play = PlayEnv {
+            job: env.job,
+            roster: env.roster,
+            peers: env.peers,
+            replied: env.replied,
+            skipped: env.skipped,
+            oneshot: env.oneshot,
+        };
+        match apply_play_decision(&play, member, clip, decision) {
             PlayChoice::Speak(text) => {
                 crate::talk::speak_room_member_line(&member.voice, &text, env.job.speech_gen);
             }
@@ -2411,9 +2347,32 @@ mod tests {
             assert!(stimulus.contains("Do not wait for them."));
             assert!(stimulus.contains("Sarah: what do you think?"));
         }
-        let log = std::fs::read_to_string(dir.join("parallel").join("log.jsonl")).expect("log");
-        assert!(log.contains(sara_text));
-        assert!(log.contains(spencer_text));
+        let path = dir.join("parallel").join("log.jsonl");
+        if path.is_file() {
+            let log = std::fs::read_to_string(&path).expect("log");
+            assert!(!log.contains(sara_text), "{log}");
+            assert!(!log.contains(spencer_text), "{log}");
+        }
+        assert!(room_speech_waiting_has(&RoomSpeechClip {
+            text: sara_text.to_owned(),
+            voice: "ara".to_owned(),
+        }));
+        assert!(room_speech_waiting_has(&RoomSpeechClip {
+            text: spencer_text.to_owned(),
+            voice: "rex".to_owned(),
+        }));
+        let says = job
+            .fanout_says
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(
+            says.iter()
+                .any(|say| say.profile_id == "sara" && say.text == sara_text)
+        );
+        assert!(
+            says.iter()
+                .any(|say| say.profile_id == "spencer" && say.text == spencer_text)
+        );
     }
 
     #[test]
@@ -2527,7 +2486,8 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line.kind == RoomLogKind::Say && line.text == say)
+                .all(|line| !(line.kind == RoomLogKind::Say && line.text == say)),
+            "public say waits until play: {raw}"
         );
         assert!(!raw.contains("PRIVATE Spencer"));
         let clip = RoomSpeechClip {
@@ -2706,99 +2666,365 @@ mod tests {
         );
     }
 
-    #[test]
-    fn recheck_revision_replaces_the_draft_without_a_second_row() {
-        let _hold = crate::hud_chat_write::hold_history_override_tests();
-        let dir = parallel_temp("revise");
+    fn arm_history_override(dir: &std::path::Path) -> std::path::PathBuf {
         let cfg = dir.join("cfg");
         std::fs::create_dir_all(&cfg).expect("cfg");
-        let _reset = ResetHistoryOverride;
         *crate::hud_chat_write::HISTORY_CONFIG_OVERRIDE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(cfg.clone());
+        cfg
+    }
 
-        let job = parallel_job(&dir, 0);
-        let roster = vec![
-            loaded_member("sally", "Sally", "ara"),
-            loaded_member("joi", "Joi", "rex"),
-        ];
-        let peers = Mutex::new(String::new());
+    fn queue_draft(job: &RoomFanoutJob, member: &LoadedRoomMember, text: &str) -> RoomSpeechClip {
+        let clip = RoomSpeechClip {
+            text: text.to_owned(),
+            voice: member.voice.clone(),
+        };
+        record_fanout_say(job, member, text);
+        assert!(enqueue_waiting_room_audio(clip.clone(), job.speech_gen));
+        clip
+    }
+
+    fn read_room_log(dir: &std::path::Path) -> String {
+        let path = dir.join("parallel").join("log.jsonl");
+        if path.is_file() {
+            std::fs::read_to_string(&path).expect("log")
+        } else {
+            String::new()
+        }
+    }
+
+    struct PlayFixture {
+        dir: std::path::PathBuf,
+        job: RoomFanoutJob,
+        roster: Vec<LoadedRoomMember>,
+        peers: Mutex<String>,
+        replied: Mutex<Vec<String>>,
+        skipped: Mutex<Vec<String>>,
+    }
+
+    fn play_fixture(label: &str) -> PlayFixture {
+        let dir = parallel_temp(label);
+        let job = parallel_job(&dir, room_speech_generation());
+        PlayFixture {
+            dir,
+            job,
+            roster: vec![
+                loaded_member("sally", "Sally", "ara"),
+                loaded_member("joi", "Joi", "rex"),
+            ],
+            peers: Mutex::new(String::new()),
+            replied: Mutex::new(Vec::new()),
+            skipped: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn apply_on<'a, F>(
+        fixture: &'a PlayFixture,
+        member_index: usize,
+        clip: &RoomSpeechClip,
+        decision: RecheckDecision,
+        oneshot: &'a F,
+    ) -> PlayChoice
+    where
+        F: Fn(&str, &str, bool, &str) -> Result<String, String> + Sync,
+    {
+        let env = PlayEnv {
+            job: &fixture.job,
+            roster: &fixture.roster,
+            peers: &fixture.peers,
+            replied: &fixture.replied,
+            skipped: &fixture.skipped,
+            oneshot,
+        };
+        apply_play_decision(&env, &fixture.roster[member_index], clip, decision)
+    }
+
+    fn assert_mirror_has(cfg: &std::path::Path, profile: &str, text: &str, absent: &str) {
+        let body = std::fs::read_to_string(cfg.join(format!("profiles/{profile}/hud-chat.json")))
+            .unwrap_or_else(|_| format!("missing {profile}"));
+        assert!(body.contains(text), "{body}");
+        assert!(!body.contains(absent), "{body}");
+    }
+
+    #[test]
+    fn play_time_keep_appends_the_draft_once() {
+        let _queue = hold_speech_queue_tests();
+        let _history = crate::hud_chat_write::hold_history_override_tests();
+        let fixture = play_fixture("keep");
+        let cfg = arm_history_override(&fixture.dir);
+        let _reset = ResetHistoryOverride;
+        let draft = "Joi, the build is green";
+        let _drain = DrainWaiting {
+            texts: vec![draft.to_owned()],
+        };
+        let clip = queue_draft(&fixture.job, &fixture.roster[0], draft);
+        let oneshot = |_id: &str, _instructions: &str, _allow_all: bool, _stimulus: &str| {
+            Ok("unused".to_owned())
+        };
+        assert!(matches!(
+            apply_on(&fixture, 0, &clip, RecheckDecision::Keep, &oneshot),
+            PlayChoice::Speak(text) if text == draft
+        ));
+        let raw = read_room_log(&fixture.dir);
+        let lines: Vec<softwake_tools::RoomLogLine> = raw
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("row"))
+            .collect();
+        assert_eq!(lines.len(), 1, "{raw}");
+        assert_eq!(lines[0].kind, RoomLogKind::Say);
+        assert_eq!(lines[0].profile_id, "sally");
+        assert_eq!(lines[0].text, draft);
+        assert_mirror_has(&cfg, "sally", draft, "slipped");
+        assert_mirror_has(&cfg, "joi", draft, "slipped");
+        let history = fixture
+            .job
+            .history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(history.len(), 2);
+        assert!(history.iter().all(|turn| turn.text.contains(draft)));
+        drop(history);
+        let peers = fixture
+            .peers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(peers.contains(draft), "{peers}");
+        let _ = std::fs::remove_dir_all(&fixture.dir);
+    }
+
+    #[test]
+    fn play_time_revise_appends_only_the_final_line() {
+        let _queue = hold_speech_queue_tests();
+        let _history = crate::hud_chat_write::hold_history_override_tests();
+        let fixture = play_fixture("revise");
+        let cfg = arm_history_override(&fixture.dir);
+        let _reset = ResetHistoryOverride;
         let draft = "Joi, the build is green";
         let revised = "Joi, the build slipped";
-        append_room_log(
-            &dir,
-            "parallel",
-            &RoomLogLine {
-                ts_ms: 10,
-                profile_id: "sally".to_owned(),
-                name: "Sally".to_owned(),
-                kind: RoomLogKind::Say,
-                text: draft.to_owned(),
-                iteration: None,
-                phase: None,
-                to_profile_id: None,
-                to_name: None,
-                reply: None,
-            },
-        )
-        .expect("log");
-        record_fanout_say(&job, &roster[0], draft);
-        peers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push_str(&room_peer_said_line("Sally", draft));
-        let turns = profile_history_for_public_line(
-            "parallel",
-            "sally",
-            "Sally",
-            draft,
-            &[("sally", "Sally"), ("joi", "Joi")],
-            false,
-        );
-        remember_room_history(&job, turns);
-        assert_eq!(
-            commit_recheck_text(&job, &roster[0], &roster, &peers, draft, Some(revised)),
-            RecheckCommit::Applied
-        );
-        let raw = std::fs::read_to_string(dir.join("parallel/log.jsonl")).expect("log");
+        let _drain = DrainWaiting {
+            texts: vec![draft.to_owned(), revised.to_owned()],
+        };
+        let clip = queue_draft(&fixture.job, &fixture.roster[0], draft);
+        let oneshot = |_id: &str, _instructions: &str, _allow_all: bool, _stimulus: &str| {
+            Ok("unused".to_owned())
+        };
+        assert!(matches!(
+            apply_on(
+                &fixture,
+                0,
+                &clip,
+                RecheckDecision::Revise(revised.to_owned()),
+                &oneshot
+            ),
+            PlayChoice::Speak(text) if text == revised
+        ));
+        let raw = read_room_log(&fixture.dir);
         assert_eq!(raw.lines().count(), 1, "{raw}");
         assert!(raw.contains(revised), "{raw}");
         assert!(!raw.contains("is green"), "{raw}");
-        let sally =
-            std::fs::read_to_string(cfg.join("profiles/sally/hud-chat.json")).expect("sally");
-        let joi = std::fs::read_to_string(cfg.join("profiles/joi/hud-chat.json")).expect("joi");
-        assert!(sally.contains(revised), "{sally}");
-        assert!(!sally.contains("is green"), "{sally}");
-        assert!(joi.contains(revised), "{joi}");
-        assert!(!joi.contains("is green"), "{joi}");
-        let said = job
+        assert_mirror_has(&cfg, "sally", revised, "is green");
+        assert_mirror_has(&cfg, "joi", revised, "is green");
+        let said = fixture
+            .job
             .fanout_says
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(said.len(), 1);
         assert_eq!(said[0].text, revised);
         drop(said);
-        let peer_text = peers
+        let peers = fixture
+            .peers
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        assert!(peer_text.contains(revised), "{peer_text}");
-        assert!(!peer_text.contains("is green"), "{peer_text}");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(peers.contains(revised), "{peers}");
+        assert!(!peers.contains("is green"), "{peers}");
+        let history = fixture
+            .job
+            .history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(history.iter().all(|turn| turn.text.contains(revised)));
+        assert!(history.iter().all(|turn| !turn.text.contains("is green")));
+        assert!(room_speech_waiting_has(&RoomSpeechClip {
+            text: revised.to_owned(),
+            voice: "ara".to_owned(),
+        }));
+        assert!(!room_speech_waiting_has(&clip));
+        let _ = std::fs::remove_dir_all(&fixture.dir);
+    }
 
-        assert_eq!(
-            commit_recheck_text(&job, &roster[0], &roster, &peers, revised, None),
-            RecheckCommit::Applied
-        );
-        let raw = std::fs::read_to_string(dir.join("parallel/log.jsonl")).expect("log");
-        assert!(!raw.contains(revised), "{raw}");
+    #[test]
+    fn play_time_no_reply_logs_nothing() {
+        let _queue = hold_speech_queue_tests();
+        let fixture = play_fixture("drop");
+        let draft = "Joi, the build is green";
+        let clip = queue_draft(&fixture.job, &fixture.roster[0], draft);
+        let oneshot = |_id: &str, _instructions: &str, _allow_all: bool, _stimulus: &str| {
+            Ok("unused".to_owned())
+        };
+        assert!(matches!(
+            apply_on(&fixture, 0, &clip, RecheckDecision::Drop, &oneshot),
+            PlayChoice::Silent
+        ));
+        let raw = read_room_log(&fixture.dir);
+        assert!(!raw.contains(draft), "{raw}");
         assert!(
-            job.fanout_says
+            !raw.contains("\"kind\":\"say\"") && !raw.contains("\"kind\": \"say\""),
+            "{raw}"
+        );
+        assert!(
+            fixture
+                .job
+                .fanout_says
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .is_empty()
         );
-        let sally =
-            std::fs::read_to_string(cfg.join("profiles/sally/hud-chat.json")).expect("sally");
-        assert!(!sally.contains(revised), "{sally}");
+        assert!(
+            fixture
+                .job
+                .history
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty()
+        );
+        assert!(!room_speech_waiting_has(&clip));
+        let skipped = fixture
+            .skipped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(skipped.iter().any(|line| line.contains("NO_REPLY")));
+        let _ = std::fs::remove_dir_all(&fixture.dir);
+    }
+
+    #[test]
+    fn play_time_private_logs_the_note_and_not_a_say() {
+        let _queue = hold_speech_queue_tests();
+        let fixture = play_fixture("play-dm");
+        let draft = "hello room";
+        let clip = queue_draft(&fixture.job, &fixture.roster[0], draft);
+        let oneshot = |id: &str, _instructions: &str, _allow_all: bool, stimulus: &str| {
+            assert_eq!(id, "joi");
+            assert!(stimulus.contains("ping the notes"));
+            assert!(stimulus.contains("not spoken"));
+            Ok("got it".to_owned())
+        };
+        assert!(matches!(
+            apply_on(
+                &fixture,
+                0,
+                &clip,
+                RecheckDecision::Private {
+                    to: "Joi".to_owned(),
+                    text: "ping the notes".to_owned(),
+                },
+                &oneshot
+            ),
+            PlayChoice::Silent
+        ));
+        let raw = read_room_log(&fixture.dir);
+        let lines: Vec<softwake_tools::RoomLogLine> = raw
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("row"))
+            .collect();
+        assert!(
+            lines.iter().all(|line| line.kind != RoomLogKind::Say),
+            "{raw}"
+        );
+        let dm = lines
+            .iter()
+            .find(|line| line.kind == RoomLogKind::Dm)
+            .expect("dm");
+        assert_eq!(dm.text, "ping the notes");
+        assert_eq!(dm.profile_id, "sally");
+        assert_eq!(dm.to_profile_id.as_deref(), Some("joi"));
+        assert_eq!(dm.reply.as_deref(), Some("got it"));
+        assert!(!room_speech_waiting_has(&clip));
+        assert!(
+            fixture
+                .job
+                .fanout_says
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty()
+        );
+        let _ = std::fs::remove_dir_all(&fixture.dir);
+    }
+
+    #[test]
+    fn interrupt_before_play_leaves_no_orphan_draft() {
+        let _queue = hold_speech_queue_tests();
+        let dir = parallel_temp("orphan");
+        let job = parallel_job(&dir, room_speech_generation());
+        let members = vec![loaded_member("sara", "Sara", "ara")];
+        let draft = "draft line";
+        let oneshot = |_id: &str, _instructions: &str, _allow_all: bool, _stimulus: &str| {
+            Ok(draft.to_owned())
+        };
+        run_loaded_room_fanout(&job, &members, "", &[], &oneshot, true);
+        let raw = read_room_log(&dir);
+        assert!(!raw.contains(draft), "{raw}");
+        let clip = RoomSpeechClip {
+            text: draft.to_owned(),
+            voice: "ara".to_owned(),
+        };
+        assert!(room_speech_waiting_has(&clip));
+        clear_room_speech_queue();
+        let fixture = PlayFixture {
+            dir: dir.clone(),
+            job,
+            roster: members,
+            peers: Mutex::new(String::new()),
+            replied: Mutex::new(Vec::new()),
+            skipped: Mutex::new(Vec::new()),
+        };
+        assert!(matches!(
+            apply_on(&fixture, 0, &clip, RecheckDecision::Keep, &oneshot),
+            PlayChoice::Stop
+        ));
+        let raw = read_room_log(&dir);
+        assert!(!raw.contains(draft), "{raw}");
+        assert!(!room_speech_waiting_has(&clip));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn recheck_off_still_logs_at_play_time() {
+        let _queue = hold_speech_queue_tests();
+        let _history = crate::hud_chat_write::hold_history_override_tests();
+        let fixture = play_fixture("recheck-off");
+        let cfg = arm_history_override(&fixture.dir);
+        let _reset = ResetHistoryOverride;
+        let draft = "Joi, the build is green";
+        let _drain = DrainWaiting {
+            texts: vec![draft.to_owned()],
+        };
+        let oneshot = |_id: &str, _instructions: &str, _allow_all: bool, _stimulus: &str| {
+            Ok(draft.to_owned())
+        };
+        run_loaded_room_fanout(&fixture.job, &fixture.roster[..1], "", &[], &oneshot, false);
+        let raw = read_room_log(&fixture.dir);
+        assert!(!raw.contains(draft), "{raw}");
+        let clip = RoomSpeechClip {
+            text: draft.to_owned(),
+            voice: "ara".to_owned(),
+        };
+        assert!(room_speech_waiting_has(&clip));
+        assert!(matches!(
+            apply_on(&fixture, 0, &clip, RecheckDecision::Keep, &oneshot),
+            PlayChoice::Speak(text) if text == draft
+        ));
+        let raw = read_room_log(&fixture.dir);
+        assert_eq!(raw.lines().count(), 1, "{raw}");
+        assert!(raw.contains(draft), "{raw}");
+        assert_mirror_has(&cfg, "sally", draft, "NO_REPLY");
+        let history = fixture
+            .job
+            .history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(history.iter().any(|turn| turn.text.contains(draft)));
+        let _ = std::fs::remove_dir_all(&fixture.dir);
     }
 }

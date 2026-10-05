@@ -109,7 +109,7 @@ let selectedRoomId = "";
 let roomViewOpen = false;
 let roomSendBusy = false;
 let roomFanoutPollTimer = null;
-let roomFanoutPollTicks = 0;
+
 /** Last profile-chat operator utterance generation painted as a user bubble. */
 let operatorSaidSeq = 0;
 const roomHiddenIds = ["chat-toolbar", "log", "ask-form", "context-meter", "live"];
@@ -1485,24 +1485,19 @@ function stopRoomFanoutPoll() {
     clearInterval(roomFanoutPollTimer);
     roomFanoutPollTimer = null;
   }
-  roomFanoutPollTicks = 0;
 }
 
 function startRoomFanoutPoll() {
   stopRoomFanoutPoll();
-  roomFanoutPollTicks = 0;
+  let first = true;
   roomFanoutPollTimer = setInterval(() => {
-    roomFanoutPollTicks += 1;
-    if (!roomViewOpen || roomFanoutPollTicks > 45) {
+    if (!roomViewOpen) {
       stopRoomFanoutPoll();
-      if (roomPanelStatus && roomViewOpen) {
-        roomPanelStatus.textContent = "Members finished (or timed out).";
-      }
       return;
     }
-    void refreshRoomsRail(
-      roomFanoutPollTicks === 1 ? "Members waking…" : undefined
-    );
+    const statusText = first ? "Members waking…" : undefined;
+    first = false;
+    void refreshRoomsRail(statusText);
   }, 1200);
 }
 

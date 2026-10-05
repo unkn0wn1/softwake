@@ -40,7 +40,6 @@ mod pcm;
 mod playback_timeout;
 mod remote_agent;
 mod reply_latch;
-mod room_log_edit;
 mod room_recheck;
 mod runtime;
 mod schedule_intent;
